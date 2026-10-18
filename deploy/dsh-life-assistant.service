@@ -1,0 +1,32 @@
+[Unit]
+Description=DSH WeChat personal affairs assistant
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=dsh-life
+Group=dsh-life
+WorkingDirectory=/opt/dsh-life-assistant
+Environment=DSH_HOME=/var/lib/dsh-life/dsh
+Environment=DSH_LIFE_DATA=/var/lib/dsh-life/data
+Environment=DSH_TELEMETRY_DISABLED=1
+Environment=NODE_OPTIONS=--max-old-space-size=256
+Environment=PATH=/opt/dsh-life-runtime/node/bin:/usr/bin:/bin
+ExecStart=/opt/dsh-life-runtime/node/bin/node /opt/dsh-life-runtime/node_modules/@deepseek-ai/dsh/lib/bin.js --profile assistant
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dsh-life
+MemoryMax=512M
+CPUQuota=70%
+
+[Install]
+WantedBy=multi-user.target

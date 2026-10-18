@@ -1,0 +1,15 @@
+{
+  "name": "dsh-life-assistant",
+  "version": "0.1.0",
+  "description": "A persistent WeChat inbox, personal task assistant and bounded memory system for DeepSeek Harness",
+  "type": "module",
+  "main": "src/index.mjs",
+  "exports": { ".": "./src/index.mjs", "./package.json": "./package.json" },
+  "files": ["src", "public", "licenses", "deploy", "cordis.patch.yml", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "engines": { "node": ">=24.0.0" },
+  "dependencies": { "qrcode-generator": "2.0.4" },
+  "scripts": { "test": "node --test test/*.test.mjs", "check": "node --check src/index.mjs && node --check src/runtime.mjs && node --check src/store.mjs" },
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/bili-fule/dsh-life-assistant.git" }
+}

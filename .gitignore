@@ -1,0 +1,16 @@
+node_modules/
+vendor/
+.research/
+.ops/
+.local/
+data/
+*.sqlite*
+*.db*
+.env*
+!.env.example
+*.log
+*.tgz
+*.png
+*.pem
+*.key
+credentials*

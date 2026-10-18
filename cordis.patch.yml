@@ -1,0 +1,8 @@
+- insert:
+    - id: life-assistant
+      name: dsh-life-assistant
+      config:
+        host: 127.0.0.1
+        port: 3180
+        provider: xuanluo
+        model: cn:deepseek-v4.1-flash

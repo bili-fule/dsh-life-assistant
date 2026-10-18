@@ -1,0 +1,26 @@
+# Use a separate DSH_HOME for this assistant. Credentials belong in that home's
+# .credentials.yaml or the process environment, never in this file.
+- insert:
+    - id: life-llm
+      name: '@deepseek-ai/dsh-llm'
+    - id: life-credentials
+      name: '@deepseek-ai/dsh-credentials-local'
+    - id: life-pi-ai
+      name: '@deepseek-ai/dsh-llm-pi-ai'
+      config:
+        providers:
+          my-provider:
+            apiKeyEnv: MY_MODEL_API_KEY
+            api: openai-completions
+            baseURL: https://api.example.com/v1
+            models:
+              - id: my-model
+                name: My model
+                contextWindow: 128000
+                maxTokens: 8192
+- id: life-assistant
+  config:
+    host: 127.0.0.1
+    port: 3180
+    provider: my-provider
+    model: my-model
