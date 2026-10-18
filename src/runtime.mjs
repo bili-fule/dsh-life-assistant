@@ -7,7 +7,8 @@ import { setTimeout as delay } from 'node:timers/promises'
 import qrcode from 'qrcode-generator'
 import { Store,messageKey } from './store.mjs'
 import { Model } from './model.mjs'
-import { command,applyAnalysis,schedule,deliverOne,coalesceMediaReplies } from './assistant.mjs'
+import { command,applyAnalysis,schedule,deliverOne } from './assistant.mjs'
+import { Batcher } from './batching.mjs'
 import { localParts,parseTime } from './time.mjs'
 import * as ilink from './ilink.mjs'
 import { Media,inboundLabel,safeFilename } from './media.mjs'
@@ -29,6 +30,7 @@ export class Runtime {
     this.stateDir=resolve(config.stateDir??process.env.DSH_LIFE_DATA??join(process.env.DSH_HOME??join(homedir(),'.dsh'),'life-assistant'))
     mkdirSync(this.stateDir,{recursive:true,mode:0o700})
     this.store=new Store(join(this.stateDir,'assistant.sqlite'))
+    this.batcher=new Batcher(this.store,config)
     this.abort=new AbortController()
     this.model=new Model(config.llm,{...this.config,stopSignal:this.abort.signal})
     this.workspace=resolve(config.workspace??join(this.stateDir,'workspace'))
@@ -59,6 +61,7 @@ export class Runtime {
     const c=this.store.get('wechat')
     return {bound:!!c?.token,ownerBound:!!this.store.get('owner'),login:this.login?{status:this.login.status,message:this.login.message}:null,
       provider:this.config.provider,model:this.config.model,timezone:'Asia/Shanghai',
+      batching:{quietSeconds:this.batcher.quietMs/1000,maxWaitSeconds:this.batcher.maxWaitMs/1000,maxMessages:this.batcher.maxMessages},
       capabilities:{shell:true,links:true,browser:true,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true},workspaceFiles:this.workspaceFiles(),
       persona:this.store.get('persona','你是一位贴心但不啰嗦的中文事务助理，说话自然，判断谨慎，帮用户把事情理清楚。'),
       styleLearning:this.store.get('style_learning',true),learnedStyle:this.store.get('learned_style',{}),styleCounts:this.store.get('style_counts',{}),
@@ -109,7 +112,7 @@ export class Runtime {
     }
     if(url.pathname==='/api/task') {const patch={};if(['open','confirm','waiting','done','cancelled'].includes(data.status))patch.status=data.status;if(Object.hasOwn(data,'remindAt'))patch.remind_at=parseTime(data.remindAt);if(Object.hasOwn(data,'dueAt'))patch.due_at=parseTime(data.dueAt);if(!Number.isInteger(data.id))throw Error('编号无效');return json(res,this.store.updateTask(data.id,patch))}
     if(url.pathname==='/api/forget') {if(!Number.isInteger(data.id))throw Error('编号无效');this.store.forget(data.id);return json(res,{ok:true})}
-    if(url.pathname==='/api/retry') {if(!Number.isInteger(data.id))throw Error('编号无效');this.store.db.prepare("UPDATE inbox SET state='pending',attempts=0,next_at=0,error=NULL WHERE id=? AND state='failed'").run(data.id);return json(res,{ok:true})}
+    if(url.pathname==='/api/retry') {if(!Number.isInteger(data.id))throw Error('编号无效');this.batcher.retry(data.id);return json(res,{ok:true})}
     if(url.pathname==='/api/compact') {if(this.working)return json(res,{error:'正在处理消息，请稍后再试'},409);this.working=this.model.compact(this.store,{force:true}).finally(()=>{this.working=null});return json(res,{ok:await this.working})}
     if(url.pathname==='/api/backup') {this.backup();return json(res,{ok:true})}
     return json(res,{error:'没有这个操作'},404)
@@ -180,34 +183,28 @@ export class Runtime {
   }
   async tick() {
     if(!this.running)return
-    const row=this.store.nextMessage()
+    const batch=this.batcher.ready(),row=batch?.[0]
     if(row) {
-      this.store.db.prepare("UPDATE inbox SET state='processing' WHERE id=?").run(row.id)
+      this.batcher.claim(batch)
       try {
         if(/^(?:\/status|状态)$/u.test(row.text.trim())) this.finishCommand(row,JSON.stringify(this.status(),null,2))
         else {
           const result=this.store.transaction(()=>{
-            const reply=command(row.text,this.store,row.id)
+            const reply=batch.length===1?command(row.text,this.store,row.id):null
             if(reply!==null)this.finishCommand(row,reply)
             return reply
           })
           if(result===null) {
-            const prepared=await this.media.prepare(row)
-            const analysis=await this.model.analyze(prepared.text,this.store,Date.now(),{runner:this.tools,rowId:row.id,assets:prepared.assets,hasMedia:prepared.hasMedia,workspace:this.workspace})
-            applyAnalysis(this.store,row,analysis);this.store.set('model_health',{ok:true,at:Date.now()})
+            const prepared=await this.batcher.prepare(batch,this.media,this.workspace)
+            const analysis=await this.model.analyze(prepared.text,this.store,Date.now(),{runner:this.tools,rowId:row.id,assets:prepared.assets,hasMedia:prepared.hasMedia,workspace:this.workspace,batchIds:batch.map(r=>r.id),directTexts:batch.map(r=>r.text)})
+            applyAnalysis(this.store,row,analysis,{batchIds:batch.map(r=>r.id)});this.store.set('model_health',{ok:true,at:Date.now()})
           }
         }
       } catch(e) {
-        const attempts=row.attempts+1,failed=attempts>=3
-        this.store.transaction(()=>{
-          this.store.db.prepare('UPDATE inbox SET state=?,attempts=?,next_at=?,error=? WHERE id=?').run(failed?'failed':'pending',attempts,Date.now()+30000*attempts,String(e.message).slice(0,300),row.id)
-          this.store.set('model_health',{ok:false,at:Date.now(),message:'消息分析未完成，原文已保留。'})
-          if(failed)this.store.enqueue('failed:'+row.id,'reply',`原文 #${row.id} 已保存，但本次处理未完整完成。已执行的工具操作会保留记录，可在管理页查看并重试。`)
-        })
+        this.batcher.fail(batch,e)
       }
     }
     schedule(this.store)
-    coalesceMediaReplies(this.store)
     if(this.store.get('wechat')?.token&&this.store.get('context_token'))await deliverOne(this.store,(text,key,kind)=>this.send(text,key,kind))
     const date=localParts().date
     if(this.store.get('backup_date')!==date){this.backup();this.store.set('backup_date',date)}

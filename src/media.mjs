@@ -95,7 +95,7 @@ export class Media {
       const context={...existing,prepared:true,text:texts.join('\n\n'),assets,hasMedia:true,preparedAt:Date.now()};this.store.setInputContext(row.id,context);return context
     }
     const wire=this.store.db.prepare('SELECT payload FROM wire_messages WHERE external_id=?').get(row.external_id)
-    if(!wire)return {prepared:true,text:forwardedText(row.text),assets:[]}
+    if(!wire) {const context={prepared:true,text:forwardedText(row.text),assets:[],hasMedia:false};this.store.setInputContext(row.id,context);return context}
     const raw=JSON.parse(wire.payload),texts=[],assets=[]
     const dir=join(this.workspace,'inbox',createHash('sha256').update(row.external_id).digest('hex').slice(0,16));mkdirSync(dir,{recursive:true,mode:0o700})
     let index=0,hasMedia=false

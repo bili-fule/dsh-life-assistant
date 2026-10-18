@@ -50,7 +50,7 @@ export function command(text,store,sourceId) {
   return null
 }
 
-export function applyAnalysis(store,row,analysis) {
+export function applyAnalysis(store,row,analysis,{batchIds=[row.id]}={}) {
   return store.transaction(()=>{
     const created=[],duplicates=[]
     for(const t of analysis.tasks) {const r=store.createTask(t,row.id);(r.duplicate?duplicates:created).push(store.task(r.id))}
@@ -67,8 +67,9 @@ export function applyAnalysis(store,row,analysis) {
     if(!parts.length)parts.push('这条消息已保存，暂时没有识别出需要你处理的事项。')
     const reply=parts.join('\n\n')
     store.db.prepare("UPDATE inbox SET state='done',result=?,error=NULL WHERE id=?").run(JSON.stringify(analysis),row.id)
+    for(const id of batchIds)if(id!==row.id)store.db.prepare("UPDATE inbox SET state='done',result=?,error=NULL WHERE id=?").run(JSON.stringify({batch_id:row.id,reply:`已与原文 #${row.id} 合并分析，详见该批判断记录。`}),id)
     store.enqueue('reply:'+row.id,'reply',reply)
-    store.audit('inbox.processed',{id:row.id,created:created.map(t=>t.id),updated:updated.map(t=>t.id)})
+    store.audit('inbox.processed',{id:row.id,messageIds:batchIds,created:created.map(t=>t.id),updated:updated.map(t=>t.id)})
     return reply
   })
 }
@@ -107,17 +108,4 @@ export async function deliverOne(store,send,now=Date.now()) {
     store.set('delivery_error',{at:now,message:'微信消息未送达，已保留待重试；可向机器人发一条消息刷新会话。'})
     return false
   }
-}
-
-export function coalesceMediaReplies(store) {
-  if(store.db.prepare("SELECT count(*) n FROM inbox WHERE state IN ('pending','processing')").get().n)return
-  const rows=store.db.prepare("SELECT o.id,o.unique_key FROM outbox o JOIN inbox_context c ON o.unique_key='reply:'||c.inbox_id WHERE o.state='pending' AND o.kind='reply' AND json_extract(c.context,'$.hasMedia')=1 ORDER BY o.id").all()
-  if(rows.length<2)return
-  const tasks=store.tasks().filter(t=>t.status!=='waiting').slice(0,7)
-  const body=`已整理这批 ${rows.length} 条图片/文件资料，原文、可读取的正文和判断依据都已保存。\n\n${tasks.length?'当前较近的事务：\n'+tasks.map(taskLine).join('\n'):'暂未新增需要办理的事项。'}\n\n发 /todo 查看完整清单。需要详细解释哪份文件，直接告诉我文件名即可。`
-  store.transaction(()=>{
-    for(const r of rows)store.db.prepare("UPDATE outbox SET state='superseded' WHERE id=? AND state='pending'").run(r.id)
-    store.enqueue('media-batch:'+rows.map(r=>r.id).join('-'),'reply',body)
-    store.audit('outbox.media_batch',{sourceIds:rows.map(r=>r.id)})
-  })
 }

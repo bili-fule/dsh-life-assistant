@@ -21,6 +21,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,action TEXT NOT NULL,detail TEXT NOT NULL,created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS wire_messages(external_id TEXT PRIMARY KEY,payload TEXT NOT NULL,received_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS inbox_context(inbox_id INTEGER PRIMARY KEY REFERENCES inbox(id),context TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS inbox_batch_members(inbox_id INTEGER PRIMARY KEY REFERENCES inbox(id),batch_id INTEGER NOT NULL REFERENCES inbox(id));
+      CREATE INDEX IF NOT EXISTS inbox_batch_id ON inbox_batch_members(batch_id);
       CREATE TABLE IF NOT EXISTS tool_runs(run_key TEXT PRIMARY KEY,inbox_id INTEGER,name TEXT NOT NULL,args TEXT NOT NULL,state TEXT NOT NULL,result TEXT,created_at INTEGER NOT NULL,finished_at INTEGER);
       CREATE INDEX IF NOT EXISTS inbox_pending ON inbox(state,next_at);
       CREATE INDEX IF NOT EXISTS outbox_pending ON outbox(state,next_at);
@@ -69,7 +71,7 @@ export class Store {
   search(q) { return this.db.prepare('SELECT id,text,result,received_at FROM inbox WHERE instr(lower(text),lower(?))>0 ORDER BY id DESC LIMIT 10').all(q) }
   snapshot() {
     return { tasks:this.tasks(true),memories:this.memories(),checkpoint:this.checkpoint() ?? null,
-      inbox:this.db.prepare('SELECT id,text,state,received_at,error,result FROM inbox ORDER BY id DESC LIMIT 30').all().map(row=>{const c=this.inputContext(row.id);return {...row,readable_text:c?.text,assets:c?.assets??[]}}),
+      inbox:this.db.prepare('SELECT i.id,i.text,i.state,i.received_at,i.error,i.result,b.batch_id FROM inbox i LEFT JOIN inbox_batch_members b ON b.inbox_id=i.id ORDER BY i.id DESC LIMIT 30').all().map(row=>{const c=this.inputContext(row.id);return {...row,readable_text:c?.text,assets:c?.assets??[]}}),
       toolRuns:this.db.prepare('SELECT inbox_id,name,args,state,result,created_at,finished_at FROM tool_runs ORDER BY created_at DESC LIMIT 20').all(),
       outbox:this.db.prepare('SELECT id,kind,state,attempts,error,created_at,sent_at FROM outbox ORDER BY id DESC LIMIT 30').all(),
       audit:this.db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 20').all() }
