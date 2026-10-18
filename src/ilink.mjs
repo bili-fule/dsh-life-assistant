@@ -4,7 +4,7 @@
  * 协议细节对齐腾讯官方 @tencent-weixin/openclaw-weixin 开源包。
  */
 
-import { createDecipheriv, randomBytes, randomUUID } from 'node:crypto'
+import { createDecipheriv, createCipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
 
 export const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com'
 
@@ -238,6 +238,28 @@ export async function notifyStop({ baseUrl, token, botAgent }) {
 
 /** 微信 CDN 域名（图片/语音/文件下载、上传），与 ilink 主站分离。 */
 export const CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c'
+
+/** Upload generated media, using Tencent's documented encrypted CDN flow. */
+export async function uploadMedia({baseUrl,token,to,data,name,image=false,post=apiPost,fetchImpl=fetch}) {
+  const key=randomBytes(16),filekey=randomUUID(),cipher=createCipheriv('aes-128-ecb',key,null)
+  const encrypted=Buffer.concat([cipher.update(data),cipher.final()])
+  const md5=createHash('md5').update(data).digest('hex')
+  const ticket=await post({baseUrl,endpoint:'ilink/bot/getuploadurl',token,timeoutMs:API_TIMEOUT_MS,body:{filekey,media_type:image?1:3,to_user_id:to,rawsize:data.length,rawfilemd5:md5,filesize:encrypted.length,no_need_thumb:true,aeskey:key.toString('hex'),base_info:buildBaseInfo('DSH Life Assistant')}})
+  if(!ticket.upload_full_url&&!ticket.upload_param)throw Error('微信没有返回文件上传地址')
+  const url=new URL(ticket.upload_full_url??`${CDN_BASE_URL}/upload?encrypted_query_param=${encodeURIComponent(ticket.upload_param)}&filekey=${encodeURIComponent(filekey)}`)
+  if(url.protocol!=='https:'||!url.hostname.endsWith('.weixin.qq.com'))throw Error('微信返回了不允许的文件上传地址')
+  const response=await fetchImpl(url,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:encrypted,signal:AbortSignal.timeout(60000),redirect:'error'})
+  const param=response.headers.get('x-encrypted-param')
+  if(!response.ok||!param)throw Error('微信 CDN 文件上传失败 HTTP '+response.status)
+  const media={encrypt_query_param:param,aes_key:Buffer.from(key.toString('hex')).toString('base64'),encrypt_type:1}
+  return image?{type:2,image_item:{media,mid_size:encrypted.length,aeskey:key.toString('hex')}}:{type:4,file_item:{media,file_name:name,md5,len:String(data.length)}}
+}
+
+export async function sendMedia({baseUrl,token,to,contextToken,item,clientId,post=apiPost}) {
+  const response=await post({baseUrl,endpoint:'ilink/bot/sendmessage',token,timeoutMs:API_TIMEOUT_MS,body:{msg:{from_user_id:'',to_user_id:to,client_id:clientId??randomUUID(),message_type:2,message_state:2,context_token:contextToken,item_list:[item]},base_info:buildBaseInfo('DSH Life Assistant')}})
+  if((response.ret??response.errcode??0)!==0)throw Error('微信文件发送失败 ('+(response.ret??response.errcode)+')')
+  return response
+}
 
 /** attachment 服务只收这 4 种栅格图。 */
 const VALID_IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']

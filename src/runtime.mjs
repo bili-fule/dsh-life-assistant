@@ -1,15 +1,17 @@
 import { createServer } from 'node:http'
-import { readFileSync,mkdirSync,writeFileSync,existsSync,readdirSync,unlinkSync,chmodSync } from 'node:fs'
-import { join,resolve } from 'node:path'
+import { readFileSync,createReadStream,statSync,mkdirSync,writeFileSync,existsSync,readdirSync,unlinkSync,chmodSync } from 'node:fs'
+import { join,resolve,relative,basename } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash,timingSafeEqual,randomBytes } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import qrcode from 'qrcode-generator'
 import { Store,messageKey } from './store.mjs'
 import { Model } from './model.mjs'
-import { command,applyAnalysis,schedule,deliverOne } from './assistant.mjs'
+import { command,applyAnalysis,schedule,deliverOne,coalesceMediaReplies } from './assistant.mjs'
 import { localParts,parseTime } from './time.mjs'
 import * as ilink from './ilink.mjs'
+import { Media,inboundLabel,safeFilename } from './media.mjs'
+import { ToolRunner,workspacePath } from './tools.mjs'
 
 export function safeBase(value) {
   const u=new URL(value)
@@ -18,7 +20,7 @@ export function safeBase(value) {
 }
 function digest(v) { return createHash('sha256').update(v).digest() }
 function json(res,data,status=200) {res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(data))}
-async function body(req) {let bytes=0,parts=[];for await(const chunk of req){bytes+=chunk.length;if(bytes>100000)throw Error('输入过长');parts.push(chunk)}return JSON.parse(Buffer.concat(parts).toString()||'{}')}
+async function body(req,maxBytes=100000) {let bytes=0,parts=[];for await(const chunk of req){bytes+=chunk.length;if(bytes>maxBytes)throw Error('输入过长');parts.push(chunk)}return JSON.parse(Buffer.concat(parts).toString()||'{}')}
 function svg(text) {const q=qrcode(0,'M');q.addData(text);q.make();return q.createSvgTag({cellSize:6,margin:24,scalable:true})}
 
 export class Runtime {
@@ -29,6 +31,9 @@ export class Runtime {
     this.store=new Store(join(this.stateDir,'assistant.sqlite'))
     this.abort=new AbortController()
     this.model=new Model(config.llm,{...this.config,stopSignal:this.abort.signal})
+    this.workspace=resolve(config.workspace??join(this.stateDir,'workspace'))
+    this.media=new Media({store:this.store,workspace:this.workspace,attachments:config.attachments,model:this.model,signal:this.abort.signal,config})
+    this.tools=new ToolRunner({store:this.store,workspace:this.workspace,signal:this.abort.signal,readFile:(path,options)=>this.media.read(path,options),enqueueFile:(path,key)=>this.enqueueFile(path,key),config})
     this.running=false;this.working=null;this.polling=null;this.login=null;this.pollGeneration=0
     const tokenPath=join(this.stateDir,'admin-token')
     if(!existsSync(tokenPath))writeFileSync(tokenPath,randomBytes(32).toString('hex'),{mode:0o600})
@@ -37,6 +42,11 @@ export class Runtime {
   }
   async start() {
     this.running=true
+    this.store.db.prepare("UPDATE outbox SET state='superseded' WHERE state='pending' AND unique_key LIKE 'unsupported:%'").run()
+    for(const wire of this.store.db.prepare('SELECT external_id,payload FROM wire_messages ORDER BY received_at').all()) {
+      const raw=JSON.parse(wire.payload)
+      if(raw.from_user_id===this.store.get('owner'))this.store.ingest(wire.external_id,raw.from_user_id,inboundLabel(raw),raw.create_time_ms??Date.now())
+    }
     this.server=createServer((req,res)=>this.http(req,res).catch(()=>{if(!res.headersSent)json(res,{error:'操作未完成，请检查输入或查看状态'},400);else res.end()}))
     await new Promise((yes,no)=>{this.server.once('error',no);this.server.listen(this.config.port,this.config.host,yes)})
     this.timer=setInterval(()=>{if(!this.working)this.working=this.tick().catch(e=>this.log('worker.error',e)).finally(()=>{this.working=null})},2000)
@@ -49,6 +59,7 @@ export class Runtime {
     const c=this.store.get('wechat')
     return {bound:!!c?.token,ownerBound:!!this.store.get('owner'),login:this.login?{status:this.login.status,message:this.login.message}:null,
       provider:this.config.provider,model:this.config.model,timezone:'Asia/Shanghai',
+      capabilities:{shell:true,links:true,browser:true,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true},workspaceFiles:this.workspaceFiles(),
       persona:this.store.get('persona','你是一位贴心但不啰嗦的中文事务助理，说话自然，判断谨慎，帮用户把事情理清楚。'),
       styleLearning:this.store.get('style_learning',true),learnedStyle:this.store.get('learned_style',{}),styleCounts:this.store.get('style_counts',{}),
       quiet:this.store.get('quiet',{start:22,end:8}),digestHour:this.store.get('digest_hour',9),deliveryError:this.store.get('delivery_error'),pollError:this.store.get('poll_error'),lastInbound:this.store.get('last_inbound'),modelHealth:this.store.get('model_health')}
@@ -65,8 +76,18 @@ export class Runtime {
     if(req.method==='GET' && url.pathname==='/api/state')return json(res,{...this.status(),...this.store.snapshot()})
     if(req.method==='GET' && url.pathname==='/api/qr.svg') {if(!this.login?.qrUrl)return json(res,{error:'请先发起绑定'},404);res.writeHead(200,{'content-type':'image/svg+xml','cache-control':'no-store'});return res.end(svg(this.login.qrUrl))}
     if(req.method==='GET' && url.pathname==='/api/export') {res.setHeader('content-disposition','attachment; filename="life-assistant-export.json"');return json(res,{exportedAt:new Date().toISOString(),...this.store.snapshot(),settings:{persona:this.store.get('persona'),learnedStyle:this.store.get('learned_style',{})}})}
+    if(req.method==='GET' && url.pathname==='/api/asset') {const file=workspacePath(this.workspace,url.searchParams.get('path')??'');if(!statSync(file).isFile())throw Error('路径不是文件');res.writeHead(200,{'content-type':'application/octet-stream','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(safeFilename(file))});return createReadStream(file).on('error',()=>res.destroy()).pipe(res)}
     if(req.method!=='POST')return json(res,{error:'没有这个操作'},404)
-    const data=await body(req)
+    const data=await body(req,url.pathname==='/api/upload'?44*1024*1024:100000)
+    if(url.pathname==='/api/upload') {
+      if(typeof data.data!=='string'||data.data.length>43*1024*1024)throw Error('文件过大')
+      const bytes=Buffer.from(data.data,'base64');if(!bytes.length||bytes.length>32*1024*1024)throw Error('文件大小无效')
+      const name=safeFilename(data.name),dir=join(this.workspace,'uploads');mkdirSync(dir,{recursive:true,mode:0o700})
+      const path=join(dir,createHash('sha256').update(bytes).digest('hex').slice(0,12)+'-'+name);writeFileSync(path,bytes,{mode:0o600})
+      const id='upload:'+randomBytes(16).toString('hex');this.store.ingest(id,this.store.get('owner')??'admin','[上传文件] '+name)
+      const row=this.store.db.prepare('SELECT id FROM inbox WHERE external_id=?').get(id);this.store.setInputContext(row.id,{prepared:false,localFiles:[path]})
+      return json(res,{ok:true,id:row.id})
+    }
     if(url.pathname==='/api/login') {await this.beginLogin();return json(res,{ok:true})}
     if(url.pathname==='/api/verify') {if(!this.login||this.login.status!=='need_verifycode')throw Error('当前不需要验证码');if(!/^\d{4,12}$/.test(String(data.code)))throw Error('验证码应为数字');this.login.verifyCode=String(data.code);this.login.status='wait';this.runLogin(this.login);return json(res,{ok:true})}
     if(url.pathname==='/api/unbind') {this.pollGeneration++;this.store.set('wechat',null);this.store.set('owner',null);this.store.set('context_token',null);this.login=null;this.store.audit('wechat.unbind',{});return json(res,{ok:true})}
@@ -139,10 +160,10 @@ export class Runtime {
         this.store.transaction(()=>{
           for(const raw of result.msgs??[]) {
             if(raw.from_user_id!==owner || (raw.message_type!=null&&raw.message_type!==1))continue
-            const text=(raw.item_list??[]).map(i=>i.type===1?i.text_item?.text:i.type===3?i.voice_item?.text:'').filter(Boolean).join('\n')
+            this.store.captureMessage(raw)
+            const text=inboundLabel(raw)
             if(raw.context_token){this.store.set('context_token',raw.context_token);this.store.set('last_inbound',Date.now());this.store.db.prepare("UPDATE outbox SET next_at=0 WHERE state='pending'").run()}
-            if(text.trim())this.store.ingest(messageKey(raw),owner,text.slice(0,20000))
-            else this.store.enqueue('unsupported:'+messageKey(raw),'reply','这条内容没有可读取的文字。目前支持文字和微信已转写的语音；图片、文件和合并转发请复制文字后再发，我不会假装已经读懂。')
+            this.store.ingest(messageKey(raw),owner,text.slice(0,30000))
           }
           if(result.get_updates_buf!=null)this.store.set('cursor',result.get_updates_buf)
           this.store.set('poll_error',null)
@@ -170,19 +191,24 @@ export class Runtime {
             if(reply!==null)this.finishCommand(row,reply)
             return reply
           })
-          if(result===null) {const analysis=await this.model.analyze(row.text,this.store);applyAnalysis(this.store,row,analysis);this.store.set('model_health',{ok:true,at:Date.now()})}
+          if(result===null) {
+            const prepared=await this.media.prepare(row)
+            const analysis=await this.model.analyze(prepared.text,this.store,Date.now(),{runner:this.tools,rowId:row.id,assets:prepared.assets,hasMedia:prepared.hasMedia,workspace:this.workspace})
+            applyAnalysis(this.store,row,analysis);this.store.set('model_health',{ok:true,at:Date.now()})
+          }
         }
       } catch(e) {
         const attempts=row.attempts+1,failed=attempts>=3
         this.store.transaction(()=>{
           this.store.db.prepare('UPDATE inbox SET state=?,attempts=?,next_at=?,error=? WHERE id=?').run(failed?'failed':'pending',attempts,Date.now()+30000*attempts,String(e.message).slice(0,300),row.id)
           this.store.set('model_health',{ok:false,at:Date.now(),message:'消息分析未完成，原文已保留。'})
-          if(failed)this.store.enqueue('failed:'+row.id,'reply',`原文 #${row.id} 已保存，但暂时没能完成分析；没有据此新增待办。可在管理页重试。`)
+          if(failed)this.store.enqueue('failed:'+row.id,'reply',`原文 #${row.id} 已保存，但本次处理未完整完成。已执行的工具操作会保留记录，可在管理页查看并重试。`)
         })
       }
     }
     schedule(this.store)
-    if(this.store.get('wechat')?.token&&this.store.get('context_token'))await deliverOne(this.store,(text,key)=>this.send(text,key))
+    coalesceMediaReplies(this.store)
+    if(this.store.get('wechat')?.token&&this.store.get('context_token'))await deliverOne(this.store,(text,key,kind)=>this.send(text,key,kind))
     const date=localParts().date
     if(this.store.get('backup_date')!==date){this.backup();this.store.set('backup_date',date)}
     if(!this.store.nextMessage() && Date.now()-(this.store.get('last_compaction_attempt',0))>60000) {
@@ -191,9 +217,29 @@ export class Runtime {
     }
   }
   finishCommand(row,reply) {this.store.db.prepare("UPDATE inbox SET state='done',result=?,error=NULL WHERE id=?").run(JSON.stringify({reply}),row.id);this.store.enqueue('reply:'+row.id,'reply',reply)}
-  async send(text,key) {
+  workspaceFiles() {
+    const files=[]
+    const walk=(dir,depth=0)=>{if(depth>5||files.length>=150)return;for(const e of readdirSync(dir,{withFileTypes:true})){if(files.length>=150)break;const path=join(dir,e.name);if(e.isSymbolicLink())continue;if(e.isDirectory())walk(path,depth+1);else if(e.isFile()){const s=statSync(path);files.push({name:e.name,path:relative(this.workspace,path),bytes:s.size,updatedAt:s.mtimeMs})}}}
+    try{walk(this.workspace)}catch{}
+    return files.sort((a,b)=>b.updatedAt-a.updatedAt)
+  }
+  enqueueFile(path,key) {
+    if(statSync(path).size>20*1024*1024)throw Error('微信回传文件最大 20MiB')
+    const hash=createHash('sha256').update(readFileSync(path)).digest('hex')
+    this.store.enqueue('file:'+key,'file',JSON.stringify({path:relative(this.workspace,path),name:basename(path),hash}))
+    return {queued:true,path:relative(this.workspace,path),message:'文件已加入微信发送队列，发送状态可在管理页查看。'}
+  }
+  async send(text,key,kind='reply') {
     const c=this.store.get('wechat'),to=this.store.get('owner'),contextToken=this.store.get('context_token')
     if(!c?.token||!to||!contextToken)throw Error('微信尚未建立可用会话')
+    if(kind==='file') {
+      const file=JSON.parse(text),path=workspacePath(this.workspace,file.path),data=readFileSync(path)
+      if(createHash('sha256').update(data).digest('hex')!==file.hash)throw Error('待发送文件已变更，需要重新发送')
+      let item=this.store.get('uploaded:'+key)
+      if(!item){item=await ilink.uploadMedia({baseUrl:safeBase(c.base),token:c.token,to,data,name:file.name,image:/\.(png|jpe?g|webp|gif)$/i.test(file.name)});this.store.set('uploaded:'+key,item)}
+      await ilink.sendMedia({baseUrl:safeBase(c.base),token:c.token,to,contextToken,item,clientId:'life-'+createHash('sha256').update(key).digest('hex').slice(0,32)})
+      return
+    }
     const parts=[];for(let i=0;i<text.length;i+=1400)parts.push(text.slice(i,i+1400))
     for(let i=0;i<parts.length;i++) {
       const chunkKey=`sent-chunk:${key}:${i}`
@@ -215,6 +261,7 @@ export class Runtime {
     this.running=false;this.abort.abort();clearInterval(this.timer);this.pollGeneration++
     if(this.server)await new Promise(r=>this.server.close(r))
     await this.working?.catch(()=>{});await this.polling?.catch(()=>{})
+    await this.tools.stop()
     // Login polling is bounded and never mutates the store after running=false.
     this.store.close()
   }

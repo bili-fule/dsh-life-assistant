@@ -14,3 +14,5 @@ data/
 *.pem
 *.key
 credentials*
+__pycache__/
+*.pyc

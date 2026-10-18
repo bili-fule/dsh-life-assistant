@@ -5,6 +5,10 @@
       name: '@deepseek-ai/dsh-llm'
     - id: life-credentials
       name: '@deepseek-ai/dsh-credentials-local'
+    - id: life-attachments
+      name: '@deepseek-ai/dsh-attachment-local'
+      config:
+        imageCompressionConcurrency: 1
     - id: life-pi-ai
       name: '@deepseek-ai/dsh-llm-pi-ai'
       config:

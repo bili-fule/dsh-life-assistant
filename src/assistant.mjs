@@ -90,13 +90,13 @@ export function schedule(store,now=Date.now()) {
 
 export async function deliverOne(store,send,now=Date.now()) {
   const quiet=store.get('quiet',{start:22,end:8})
-  const row=store.db.prepare("SELECT * FROM outbox WHERE state='pending' AND next_at<=? ORDER BY CASE kind WHEN 'reply' THEN 0 ELSE 1 END,id LIMIT 1").get(now)
+  const row=store.db.prepare("SELECT * FROM outbox WHERE state='pending' AND next_at<=? ORDER BY CASE kind WHEN 'file' THEN 0 WHEN 'reply' THEN 1 ELSE 2 END,CASE WHEN kind='reply' THEN -id ELSE id END LIMIT 1").get(now)
   if(!row)return false
-  if(row.kind!=='reply' && inQuietHours(now,quiet.start,quiet.end)) {store.db.prepare('UPDATE outbox SET next_at=? WHERE id=?').run(nextQuietEnd(now,quiet.end),row.id);return false}
+  if(!['reply','file'].includes(row.kind) && inQuietHours(now,quiet.start,quiet.end)) {store.db.prepare('UPDATE outbox SET next_at=? WHERE id=?').run(nextQuietEnd(now,quiet.end),row.id);return false}
   if(row.task_id) {const t=store.task(row.task_id);if(!t || t.status!=='open'|| t.revision!==row.revision) {store.db.prepare("UPDATE outbox SET state='superseded' WHERE id=?").run(row.id);return false}}
   store.db.prepare("UPDATE outbox SET state='sending' WHERE id=?").run(row.id)
   try {
-    await send(row.body,row.unique_key)
+    await send(row.body,row.unique_key,row.kind)
     store.db.prepare("UPDATE outbox SET state='sent',sent_at=?,error=NULL WHERE id=? AND state='sending'").run(now,row.id)
     store.set('delivery_error',null)
     return true
@@ -107,4 +107,17 @@ export async function deliverOne(store,send,now=Date.now()) {
     store.set('delivery_error',{at:now,message:'微信消息未送达，已保留待重试；可向机器人发一条消息刷新会话。'})
     return false
   }
+}
+
+export function coalesceMediaReplies(store) {
+  if(store.db.prepare("SELECT count(*) n FROM inbox WHERE state IN ('pending','processing')").get().n)return
+  const rows=store.db.prepare("SELECT o.id,o.unique_key FROM outbox o JOIN inbox_context c ON o.unique_key='reply:'||c.inbox_id WHERE o.state='pending' AND o.kind='reply' AND json_extract(c.context,'$.hasMedia')=1 ORDER BY o.id").all()
+  if(rows.length<2)return
+  const tasks=store.tasks().filter(t=>t.status!=='waiting').slice(0,7)
+  const body=`已整理这批 ${rows.length} 条图片/文件资料，原文、可读取的正文和判断依据都已保存。\n\n${tasks.length?'当前较近的事务：\n'+tasks.map(taskLine).join('\n'):'暂未新增需要办理的事项。'}\n\n发 /todo 查看完整清单。需要详细解释哪份文件，直接告诉我文件名即可。`
+  store.transaction(()=>{
+    for(const r of rows)store.db.prepare("UPDATE outbox SET state='superseded' WHERE id=? AND state='pending'").run(r.id)
+    store.enqueue('media-batch:'+rows.map(r=>r.id).join('-'),'reply',body)
+    store.audit('outbox.media_batch',{sourceIds:rows.map(r=>r.id)})
+  })
 }

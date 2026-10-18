@@ -15,6 +15,7 @@ Environment=DSH_LIFE_DATA=/var/lib/dsh-life/data
 Environment=DSH_TELEMETRY_DISABLED=1
 Environment=NODE_OPTIONS=--max-old-space-size=256
 Environment=PATH=/opt/dsh-life-runtime/node/bin:/usr/bin:/bin
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/dsh-life-runtime/browsers
 ExecStart=/opt/dsh-life-runtime/node/bin/node /opt/dsh-life-runtime/node_modules/@deepseek-ai/dsh/lib/bin.js --profile assistant
 Restart=on-failure
 RestartSec=10
@@ -27,6 +28,7 @@ ProtectHome=true
 ReadWritePaths=/var/lib/dsh-life
 MemoryMax=512M
 CPUQuota=70%
+TasksMax=256
 
 [Install]
 WantedBy=multi-user.target
