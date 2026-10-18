@@ -43,7 +43,7 @@ export function inboundLabel(raw) {
 }
 
 export class Media {
-  constructor({store,workspace,attachments,model,signal,config={}}) {this.store=store;this.workspace=workspace;this.attachments=attachments;this.model=model;this.signal=signal;this.config=config;mkdirSync(workspace,{recursive:true,mode:0o700})}
+  constructor({store,workspace,attachments,signal,config={}}) {this.store=store;this.workspace=workspace;this.attachments=attachments;this.signal=signal;this.config=config;mkdirSync(workspace,{recursive:true,mode:0o700})}
   async download(item,directory,index) {
     const data=item.image_item??item.file_item??item.voice_item??item.video_item
     const m=data?.media
@@ -60,18 +60,19 @@ export class Media {
     writeFileSync(path,bytes,{mode:0o600})
     return {name,path,bytes:bytes.length}
   }
-  async read(path,{depth=0,budget={count:0},assets=[],question}={}) {
+  async read(path,{depth=0,budget={count:0},assets=[],question,signal=this.signal}={}) {
+    signal?.throwIfAborted()
     path=workspacePath(this.workspace,path)
     if(depth>3||++budget.count>24)return {text:'附件数量或层级超过本次读取预算；文件已保存，可继续用工具逐个读取。',assets}
     const name=basename(path)
     if(IMAGE.test(name)) {
       if(!this.attachments)throw Error('DSH 图片附件服务尚未启用')
       const bytes=readFileSync(path),ref=await this.attachments.saveImage({data:bytes,mediaType:sniffImageMime(bytes),name})
-      const text=await this.model.describeImage(ref,question)
+      const text='图片已作为 DSH 原生视觉附件载入，由当前原生 Agent 识别。'
       assets.push({name,path:relative(this.workspace,path),kind:'image',attachment:ref})
       return {text:`[图片 ${name} 的识别结果]\n${text}`,assets}
     }
-    const result=await processRun(this.config.python??'python3',[fileURLToPath(new URL('./extract.py',import.meta.url)),path],{cwd:this.workspace,signal:this.signal,timeout:90000,maxOutput:180000})
+    const result=await processRun(this.config.python??'python3',[fileURLToPath(new URL('./extract.py',import.meta.url)),path],{cwd:this.workspace,signal,timeout:90000,maxOutput:180000})
     if(result.exitCode!==0)throw Error('文件解析进程未完成：'+result.stderr.slice(0,200))
     let parsed
     try{parsed=JSON.parse(result.stdout)}catch{throw Error('文件解析结果无效')}
@@ -80,7 +81,7 @@ export class Media {
     if(parsed.truncated)text+='\n[正文超过本次预算，文件已完整保存，可以继续用工具读取。]'
     for(const child of parsed.children??[]) {
       if(budget.count>=24){text+='\n[其余附件已保存，需继续读取。]';break}
-      try {const nested=await this.read(child,{depth:depth+1,budget,assets,question});text+='\n\n'+nested.text}
+      try {const nested=await this.read(child,{depth:depth+1,budget,assets,question,signal});text+='\n\n'+nested.text}
       catch(e){text+=`\n[附件 ${basename(child)} 读取未完成：${e.message}]`;assets.push({name:basename(child),path:relative(this.workspace,child),kind:'unread'})}
       if(text.length>48000){text=text.slice(0,48000)+'\n[本次正文达到预算，其余内容可通过 read_file 或 shell 继续读取。]';break}
     }

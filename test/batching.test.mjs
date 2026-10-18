@@ -63,19 +63,6 @@ test('a failed batch retries as a unit even when retry is requested on a child',
   assert.ok(store.snapshot().inbox.every(r=>r.state==='failed'));assert.equal(store.snapshot().outbox.length,1)
   batcher.retry(2);assert.deepEqual(batcher.ready(start+20000).map(r=>r.id),[1,2]);assert.equal(store.snapshot().outbox[0].state,'superseded')
 })
-test('mixed media and identity followup reach the model together in one analysis and one reply',async t=>{
-  const dir=mkdtempSync(join(tmpdir(),'life-batch-runtime-'));let calls=0
-  const llm={async *stream(options){calls++;const context=JSON.parse(options.messages[0].content[0].text);assert.deepEqual(context.batch_message_ids,[1,2,3]);assert.match(context.current_message,/报名截止/);assert.match(context.current_message,/图片识别：地址/);assert.match(context.current_message,/我是三班学生/);yield {type:'text-delta',text:JSON.stringify({...analysis,explicit_memories:['我是三班学生']})}}}
-  const runtime=new Runtime({stateDir:dir,llm});t.after(async()=>{await runtime.stop();rmSync(dir,{recursive:true,force:true})});runtime.running=true
-  add(runtime.store,'[文件] 通知.docx',Date.now()-19000);add(runtime.store,'[图片]',Date.now()-18000);add(runtime.store,'我是三班学生',Date.now()-17000)
-  runtime.store.setInputContext(1,{prepared:true,text:'报名截止10月20日',hasMedia:true,assets:[{path:'notice.docx',name:'通知.docx',kind:'file'}]})
-  runtime.store.setInputContext(2,{prepared:true,text:'图片识别：地址在体育馆',hasMedia:true,assets:[]})
-  runtime.store.set('last_compaction_attempt',Date.now())
-  await runtime.tick();await runtime.tick()
-  assert.equal(calls,1);assert.equal(runtime.store.snapshot().outbox.length,1);assert.ok(runtime.store.snapshot().inbox.every(r=>r.state==='done'))
-  assert.equal(runtime.store.memories()[0].body,'我是三班学生')
-  const archive=JSON.parse(readFileSync(join(runtime.workspace,'batches','batch-1.json'),'utf8'));assert.equal(archive.length,3)
-})
 test('large combined inputs retain the full original texts in a readable archive',async t=>{
   const {store,batcher,dir}=fixture(t);add(store,'a'.repeat(30000),start);add(store,'b'.repeat(30000),start+1000)
   const rows=batcher.ready(start+16000);const prepared=await batcher.prepare(rows,{async prepare(row){return {text:row.text,assets:[]}}},dir)

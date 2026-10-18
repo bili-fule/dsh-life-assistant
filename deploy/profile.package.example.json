@@ -1,0 +1,16 @@
+{
+  "name": "dsh-profile-assistant",
+  "private": true,
+  "dependencies": {
+    "dsh-life-assistant": "github:bili-fule/dsh-life-assistant"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-life-assistant"
+      ]
+    }
+  }
+}

@@ -51,6 +51,7 @@ export class Batcher {
   }
   retry(id) {
     const rows=this.members(id)
+    if(rows.some(r=>r.state==='failed')){const anchor=rows[0].id,c=this.store.inputContext(anchor)??{};this.store.setInputContext(anchor,{...c,nativeRetryGeneration:(c.nativeRetryGeneration??0)+1})}
     this.store.transaction(()=>{
       for(const row of rows)this.store.db.prepare("UPDATE inbox SET state='pending',attempts=0,next_at=0,error=NULL WHERE id=? AND state='failed'").run(row.id)
       if(rows.length)this.store.db.prepare("UPDATE outbox SET state='superseded' WHERE unique_key=? AND state='pending'").run('failed:'+rows[0].id)

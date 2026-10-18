@@ -6,13 +6,13 @@ import { createHash,timingSafeEqual,randomBytes } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import qrcode from 'qrcode-generator'
 import { Store,messageKey } from './store.mjs'
-import { Model } from './model.mjs'
+import { NativeAgent } from './native-agent.mjs'
 import { command,applyAnalysis,schedule,deliverOne } from './assistant.mjs'
 import { Batcher } from './batching.mjs'
 import { localParts,parseTime } from './time.mjs'
 import * as ilink from './ilink.mjs'
 import { Media,inboundLabel,safeFilename } from './media.mjs'
-import { ToolRunner,workspacePath } from './tools.mjs'
+import { BrowserTools,workspacePath } from './tools.mjs'
 
 export function safeBase(value) {
   const u=new URL(value)
@@ -32,10 +32,10 @@ export class Runtime {
     this.store=new Store(join(this.stateDir,'assistant.sqlite'))
     this.batcher=new Batcher(this.store,config)
     this.abort=new AbortController()
-    this.model=new Model(config.llm,{...this.config,stopSignal:this.abort.signal})
     this.workspace=resolve(config.workspace??join(this.stateDir,'workspace'))
-    this.media=new Media({store:this.store,workspace:this.workspace,attachments:config.attachments,model:this.model,signal:this.abort.signal,config})
-    this.tools=new ToolRunner({store:this.store,workspace:this.workspace,signal:this.abort.signal,readFile:(path,options)=>this.media.read(path,options),enqueueFile:(path,key)=>this.enqueueFile(path,key),config})
+    this.media=new Media({store:this.store,workspace:this.workspace,attachments:config.attachments,signal:this.abort.signal,config})
+    this.tools=new BrowserTools({workspace:this.workspace,signal:this.abort.signal,config})
+    this.model=config.agentDriver??new NativeAgent(config.nativeContext,this,this.config)
     this.running=false;this.working=null;this.polling=null;this.login=null;this.pollGeneration=0
     const tokenPath=join(this.stateDir,'admin-token')
     if(!existsSync(tokenPath))writeFileSync(tokenPath,randomBytes(32).toString('hex'),{mode:0o600})
@@ -60,7 +60,7 @@ export class Runtime {
   status() {
     const c=this.store.get('wechat')
     return {bound:!!c?.token,ownerBound:!!this.store.get('owner'),login:this.login?{status:this.login.status,message:this.login.message}:null,
-      provider:this.config.provider,model:this.config.model,timezone:'Asia/Shanghai',
+      provider:this.config.provider,model:this.config.model,timezone:'Asia/Shanghai',engine:'DSH native Agent',nativeSessionId:this.store.get('native_session_id'),
       batching:{quietSeconds:this.batcher.quietMs/1000,maxWaitSeconds:this.batcher.maxWaitMs/1000,maxMessages:this.batcher.maxMessages},
       capabilities:{shell:true,links:true,browser:true,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true},workspaceFiles:this.workspaceFiles(),
       persona:this.store.get('persona','你是一位贴心但不啰嗦的中文事务助理，说话自然，判断谨慎，帮用户把事情理清楚。'),
@@ -113,7 +113,7 @@ export class Runtime {
     if(url.pathname==='/api/task') {const patch={};if(['open','confirm','waiting','done','cancelled'].includes(data.status))patch.status=data.status;if(Object.hasOwn(data,'remindAt'))patch.remind_at=parseTime(data.remindAt);if(Object.hasOwn(data,'dueAt'))patch.due_at=parseTime(data.dueAt);if(!Number.isInteger(data.id))throw Error('编号无效');return json(res,this.store.updateTask(data.id,patch))}
     if(url.pathname==='/api/forget') {if(!Number.isInteger(data.id))throw Error('编号无效');this.store.forget(data.id);return json(res,{ok:true})}
     if(url.pathname==='/api/retry') {if(!Number.isInteger(data.id))throw Error('编号无效');this.batcher.retry(data.id);return json(res,{ok:true})}
-    if(url.pathname==='/api/compact') {if(this.working)return json(res,{error:'正在处理消息，请稍后再试'},409);this.working=this.model.compact(this.store,{force:true}).finally(()=>{this.working=null});return json(res,{ok:await this.working})}
+    if(url.pathname==='/api/compact') {if(this.working)return json(res,{error:'正在处理消息，请稍后再试'},409);this.working=this.model.compact().finally(()=>{this.working=null});return json(res,{ok:await this.working})}
     if(url.pathname==='/api/backup') {this.backup();return json(res,{ok:true})}
     return json(res,{error:'没有这个操作'},404)
   }
@@ -208,11 +208,9 @@ export class Runtime {
     if(this.store.get('wechat')?.token&&this.store.get('context_token'))await deliverOne(this.store,(text,key,kind)=>this.send(text,key,kind))
     const date=localParts().date
     if(this.store.get('backup_date')!==date){this.backup();this.store.set('backup_date',date)}
-    if(!this.store.nextMessage() && Date.now()-(this.store.get('last_compaction_attempt',0))>60000) {
-      this.store.set('last_compaction_attempt',Date.now())
-      try {await this.model.compact(this.store)} catch(e){this.log('context.compact.retry',e)}
-    }
+    // Automatic context pressure and transcript compaction belong to DSH's native preset.
   }
+
   finishCommand(row,reply) {this.store.db.prepare("UPDATE inbox SET state='done',result=?,error=NULL WHERE id=?").run(JSON.stringify({reply}),row.id);this.store.enqueue('reply:'+row.id,'reply',reply)}
   workspaceFiles() {
     const files=[]
@@ -258,6 +256,7 @@ export class Runtime {
     this.running=false;this.abort.abort();clearInterval(this.timer);this.pollGeneration++
     if(this.server)await new Promise(r=>this.server.close(r))
     await this.working?.catch(()=>{});await this.polling?.catch(()=>{})
+    this.model.stop?.()
     await this.tools.stop()
     // Login polling is bounded and never mutates the store after running=false.
     this.store.close()

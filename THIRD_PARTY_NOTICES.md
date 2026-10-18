@@ -15,4 +15,4 @@ The wire protocol is documented by [Tencent/openclaw-weixin](https://github.com/
 DeepSeek Harness and its official SDK packages remain separate dependencies;
 no DeepSeek Harness source is modified or redistributed in this repository.
 
-`fast-xml-parser`, `linkedom` and `playwright-core` are separate MIT/ISC/Apache-2.0 dependencies installed through npm. Chromium, Poppler and antiword remain separate server dependencies; their binaries are not included in this repository.
+`fast-xml-parser` and `playwright-core` are separate MIT/Apache-2.0 dependencies installed through npm. Chromium, Poppler and antiword remain separate server dependencies; their binaries are not included in this repository.
