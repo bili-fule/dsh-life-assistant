@@ -35,7 +35,7 @@ export class NativeAgent {
   get sessionId(){return this.store.get('native_session_id')}
   register() {
     const {ctx}=this
-    this.disposers.push(ctx.systemPrompt.section({name:'life-assistant:policy',order:10210,interpolate:false,text:({agent})=>agent?.id===this.sessionId?POLICY:''}))
+    this.disposers.push(ctx.systemPrompt.section({name:'life-assistant:policy',order:10210,interpolate:false,text:({agent})=>agent?.id===this.sessionId&&(!this.runtime.autonomy?.enabled||this.runtime.autonomy.isOwner())?POLICY:''}))
     this.disposers.push(ctx.systemPrompt.variable('life_assistant_state',()=>JSON.stringify(this.state())))
     this.disposers.push(ctx.systemPrompt.context({name:'life-assistant:state',order:900,text:({agent})=>agent?.id===this.sessionId?'{{life_assistant_state}}':''}))
     const define=(name,description,parameters,execute,render)=>this.disposers.push(ctx.tools.register({name,description,parameters,output:{schema:{type:'object',additionalProperties:true},render:render??((args,value)=>[{type:'text',text:JSON.stringify(value)}])},execute:async(args,exec)=>{
@@ -74,8 +74,10 @@ export class NativeAgent {
     })
   }
   state() {
+    if(this.runtime.autonomy?.enabled&&!this.runtime.autonomy.isOwner())return this.runtime.autonomy.state()
     return {engine:'DSH native Agent',timezone:'Asia/Shanghai',persona:this.store.get('persona','贴心、直接、不啰嗦的中文事务助理'),learned_style:this.store.get('learned_style',{}),style_learning:this.store.get('style_learning',true),tasks:this.store.tasks().map(t=>({id:t.id,title:t.title,status:t.status,due_at:t.due_at?new Date(t.due_at).toISOString():null,reason:t.reason.slice(0,600)})),...memoryState(this.store,{query:this.focusQuery??''}),context_policy:this.store.get('context_policy'),maintenance:this.maintenanceJob?{kind:this.maintenanceJob.kind,throughId:this.maintenanceJob.through_id}:null,legacy_summary:this.store.checkpoint()?.summary??'',recent_files:this.store.recentAssets().map(a=>({name:a.name,path:a.path})).slice(0,50)}
   }
+  outcome(events,requestId){return nativeOutcome(events,requestId)}
   async receipt(name,args,exec,body) {
     if(!exec.agent?.id||!exec.callId)throw Error('事务工具必须由 DSH Agent 调用')
     const inspection=await this.ctx.sessionController.inspect(exec.agent.id,exec.signal)
@@ -94,8 +96,10 @@ export class NativeAgent {
     const user=events[index].data,requestId=user.source?.rpcId
     const row=requestId?this.store.db.prepare("SELECT inbox_id,context FROM inbox_context WHERE json_extract(context,'$.nativeRequest.requestId')=?").get(requestId):null
     const input=row?JSON.parse(row.context).nativeRequest:null
-    const directTexts=input?.directTexts??[user.content.filter(b=>b.type==='text').map(b=>b.text).join('\n')]
-    const evidence=[...user.content.filter(b=>b.type==='text').map(b=>b.text),...events.slice(index).filter(e=>e.type==='tool/result').flatMap(e=>(e.data.message?.content??[]).filter(b=>b.type==='text').map(b=>b.text))].join('\n')
+    const autonomy=this.runtime.autonomy
+    const originals=autonomy?.enabled&&autonomy.isOwner()?autonomy.ownerSources.map(id=>this.store.db.prepare('SELECT text FROM inbox WHERE id=?').get(id)?.text).filter(Boolean):[]
+    const directTexts=[...(input?.directTexts??[user.content.filter(b=>b.type==='text').map(b=>b.text).join('\n')]),...originals]
+    const evidence=[...directTexts,...user.content.filter(b=>b.type==='text').map(b=>b.text),...events.slice(index).filter(e=>e.type==='tool/result').flatMap(e=>(e.data.message?.content??[]).filter(b=>b.type==='text').map(b=>b.text))].join('\n')
     const valid=validateAnalysis({...EMPTY,...args},evidence,this.store.tasks(),{directTexts})
     if(directTexts.length===1&&!input?.hasMedia&&eligibleForStyle(directTexts[0]))valid.style_observation=validateAnalysis({...EMPTY,style_observation:args.style_observation},directTexts[0],[]).style_observation
     else valid.style_observation=null

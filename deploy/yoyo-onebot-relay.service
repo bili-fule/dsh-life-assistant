@@ -1,0 +1,21 @@
+[Unit]
+Description=Yoyo authenticated OneBot event-only bridge
+After=docker.service dsh-life-assistant.service
+Requires=docker.service
+
+[Service]
+User=dsh-life
+Group=dsh-life
+EnvironmentFile=/var/lib/dsh-life/snowluma.env
+ExecStart=/opt/dsh-life-runtime/node/bin/node /opt/dsh-life-assistant/deploy/onebot-relay.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+MemoryMax=64M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

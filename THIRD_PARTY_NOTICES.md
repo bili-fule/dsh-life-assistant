@@ -12,7 +12,16 @@ shell execution, session manager, or web panel.
 The wire protocol is documented by [Tencent/openclaw-weixin](https://github.com/Tencent/openclaw-weixin/blob/main/docs/protocol.md).
 
 `qrcode-generator` is a separate MIT-licensed dependency, installed through npm.
-DeepSeek Harness and its official SDK packages remain separate dependencies;
-no DeepSeek Harness source is modified or redistributed in this repository.
+DeepSeek Harness and its official SDK packages remain separate dependencies.
+`deploy/native-request-view.patch` contains an optional source extension against
+DeepSeek Harness 0.2.0-rc.2 (commit pinned in its adjacent JSON manifest),
+Copyright (c) 2026 DeepSeek, MIT. Its license is preserved in
+`licenses/dsh-MIT.txt`; the build script includes that license with each patched
+runtime package. The patch extends native Session projections and Token Meter,
+and retains the native Agent execution loop.
+
+SnowLuma remains a separate, independently installed QQ gateway. This plugin
+implements its OneBot 11 HTTP boundary independently and does not bundle or copy
+SnowLuma implementation code, native binaries, QQ binaries or login data.
 
 `fast-xml-parser` and `playwright-core` are separate MIT/Apache-2.0 dependencies installed through npm. Chromium, Poppler and antiword remain separate server dependencies; their binaries are not included in this repository.

@@ -1,0 +1,1817 @@
+--- a/docs/persistence-catalog.i18n.yaml
++++ b/docs/persistence-catalog.i18n.yaml
+@@ -9,11 +9,11 @@
+   en: e7c80d1de4d328b4
+   zh: d9f368c27fd9f998
+ /session-persistence-event-catalog/persistence-type-fingerprints:
+-  en: 33dd28b1c768cd8b
+-  zh: 7256442baf2faed1
++  en: 95942e26060aae46
++  zh: b8ab182dfd2b3d32
+ /session-persistence-event-catalog/event-envelope:
+-  en: 7ebb1a2e0dd1f916
+-  zh: 8946f415dda5c1b8
++  en: 88dfd755259fbfe8
++  zh: 19c73cdaab2e144a
+ /session-persistence-event-catalog/events:
+   en: f4776ba3d0fd53ce
+   zh: e86769f50a69055a
+@@ -153,8 +153,11 @@
+   en: e1a46fbd7273e666
+   zh: e3390b27a540e353
+ /session-persistence-event-catalog/events/request/request-header-log-only:
+-  en: 897d315d9a0489d2
+-  zh: 98726636aa3c4ae1
++  en: b1e0db2d518b3cbc
++  zh: 1b999088a83f0396
++/session-persistence-event-catalog/events/request/request-view-log-only:
++  en: 8f9d904d40d3d060
++  zh: 69b6477cfe0d0258
+ /session-persistence-event-catalog/events/sandbox:
+   en: ec841ab8439335b0
+   zh: ec841ab8439335b0
+@@ -171,8 +174,8 @@
+   en: a1ac8f2660a4f61e
+   zh: a1ac8f2660a4f61e
+ /session-persistence-event-catalog/events/session/session-end-seed-log-only:
+-  en: 53b95ea8a0fd3bd5
+-  zh: c5a0d2f068637efa
++  en: 0ba9c67eb5a991ed
++  zh: 9500b1e7ef982308
+ /session-persistence-event-catalog/events/session/session-title-log-only:
+   en: 6c6a27578dff5828
+   zh: 9a5add2bc0df2d0a
+@@ -663,8 +666,11 @@
+   en: fe34ed0bde832d9e
+   zh: fe34ed0bde832d9e
+ /session-persistence-event-catalog/resolved-persistence-types/request-header:
+-  en: 334f58ec5e0835a3
+-  zh: 334f58ec5e0835a3
++  en: 8caa03a9e096a241
++  zh: 8caa03a9e096a241
++/session-persistence-event-catalog/resolved-persistence-types/request-view:
++  en: 15d6ed9c13f4d495
++  zh: 15d6ed9c13f4d495
+ /session-persistence-event-catalog/resolved-persistence-types/resource-cost:
+   en: ade80ed58d3b63b2
+   zh: ade80ed58d3b63b2
+@@ -1173,8 +1179,8 @@
+   en: a5e19707264c7449
+   zh: 4c619e931997d3f0
+ /session-persistence-event-catalog/resolved-persistence-types/surfaceop:
+-  en: 4f3349f21317ba18
+-  zh: 508c26670085953a
++  en: 26f3d59c80d9abbe
++  zh: 90a9ba58ff06d197
+ /session-persistence-event-catalog/resolved-persistence-types/systemmessage:
+   en: 94876079d6696df9
+   zh: d25c7ad9f5054eb7
+@@ -1281,11 +1287,11 @@
+   en: 5e7d82a493a1d4d8
+   zh: d2d785891dd766fc
+ /session-persistence-event-catalog/resolved-persistence-types/number~2:
+-  en: 38211d71372021e4
+-  zh: c0305af81a67e285
++  en: d6c2564c3cc3a4ec
++  zh: a5f3cef2ec3754ec
+ /session-persistence-event-catalog/resolved-persistence-types/string:
+-  en: 052f9ce1988e44f2
+-  zh: 5adaad6c9bca43e2
++  en: 3ca99cac4abe246d
++  zh: f3f50ab657ffb366
+ /session-persistence-event-catalog/resolved-persistence-types/string~2:
+   en: 0089620bf4638263
+   zh: 1922bef1713094bb
+@@ -1344,8 +1350,11 @@
+   en: a117573a5d58cb3c
+   zh: d5ad59e17a3a815d
+ /session-persistence-event-catalog/resolved-persistence-types/arguments-callid-name-step:
+-  en: bbb8322870e4695e
+-  zh: dc90a029bf156604
++  en: de12bf584ea83816
++  zh: 58c30026ee71e5e9
++/session-persistence-event-catalog/resolved-persistence-types/authorizationversion-scopes-viewid-visibleseqs:
++  en: 7a1a18770b590e45
++  zh: 619611dd85dabdfe
+ /session-persistence-event-catalog/resolved-persistence-types/callid-files-turn:
+   en: 5f4d3f66ed86a14d
+   zh: 7c729360fa1279e6
+@@ -1413,8 +1422,8 @@
+   en: 4b7a8793663d3fef
+   zh: 249459c825d330c3
+ /session-persistence-event-catalog/resolved-persistence-types/endseq-op-startseq:
+-  en: ba27e6f100b73e81
+-  zh: 82a12774bf5611f8
++  en: 1b7de272fcc24627
++  zh: 1464f7df891db98b
+ /session-persistence-event-catalog/resolved-persistence-types/error-kind-error:
+   en: b24398b25f46a94f
+   zh: 40640447d21ba296
+@@ -1449,8 +1458,8 @@
+   en: 41f73c58a77dfa28
+   zh: af77f4aee3cb4a40
+ /session-persistence-event-catalog/resolved-persistence-types/inherited:
+-  en: 7dcf0c1ade316952
+-  zh: 3c9cd7564659ec3d
++  en: e88be378232e9e19
++  zh: 874a5715d69750e5
+ /session-persistence-event-catalog/resolved-persistence-types/inserted-outcome-removedcount-start:
+   en: f2167c4cf3aa9b4d
+   zh: b4ed04a9a526f49e
+@@ -1947,8 +1956,11 @@
+   en: f8addb1a01da9ca1
+   zh: 4ef11ebddd302c05
+ /session-persistence-event-catalog/resolved-persistence-types/type-request-header:
+-  en: f34ce1d84ad0fb1e
+-  zh: c1c49f37c1e33f8c
++  en: 53751e495b934726
++  zh: f5fd51c94d0cbbbf
++/session-persistence-event-catalog/resolved-persistence-types/type-request-view:
++  en: 9bfa51a36d8a7aea
++  zh: c622e88e731b5422
+ /session-persistence-event-catalog/resolved-persistence-types/type-sandbox-mode:
+   en: 4d2313b10fef1ff0
+   zh: 3a2cd6bf870ac7d3
+--- a/docs/persistence-catalog.md
++++ b/docs/persistence-catalog.md
+@@ -49,6 +49,7 @@
+ | `event:plan/mode` | event | `a7cf43ce7c2a4c038feed1885cd7a00d5c6ee2d90a7e0d56b46f78a3e1ca327f` | [`{ type: "plan/mode" }`](#persistence-type-sha256-a7cf43ce7c2a4c038feed1885cd7a00d5c6ee2d90a7e0d56b46f78a3e1ca327f) |
+ | `event:request/context` | event | `37cbc9cf06d494cfe5c67f078af1605eacb8e4c2c853e9e26455b73de0ee7ccf` | [`{ type: "request/context" }`](#persistence-type-sha256-37cbc9cf06d494cfe5c67f078af1605eacb8e4c2c853e9e26455b73de0ee7ccf) |
+ | `event:request/header` | event | `4208123b50df5006b181481ab45fcf1cde807b88d3fd4d340090bc2e202fac41` | [`{ type: "request/header" }`](#persistence-type-sha256-4208123b50df5006b181481ab45fcf1cde807b88d3fd4d340090bc2e202fac41) |
++| `event:request/view` | event | `5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6` | [`{ type: "request/view" }`](#persistence-type-sha256-5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6) |
+ | `event:sandbox/mode` | event | `516da4cdd6d2f1e5ce488e648578ca51f40e458f707b803e5b24de870e799415` | [`{ type: "sandbox/mode" }`](#persistence-type-sha256-516da4cdd6d2f1e5ce488e648578ca51f40e458f707b803e5b24de870e799415) |
+ | `event:schedule/change` | event | `a0a2e5c42e1c929445ecd1cd70f49be6b66441894ec72c08e8ae332821d4a3cb` | [`{ type: "schedule/change" }`](#persistence-type-sha256-a0a2e5c42e1c929445ecd1cd70f49be6b66441894ec72c08e8ae332821d4a3cb) |
+ | `event:session-log-deepseek/delivery-accepted` | event | `d63b8b8ffad9c02fd80c43a17df4f240c1fe8118ecca9de34f9d5871838ab5b9` | [`{ type: "session-log-deepseek/delivery-accepted" }`](#persistence-type-sha256-d63b8b8ffad9c02fd80c43a17df4f240c1fe8118ecca9de34f9d5871838ab5b9) |
+@@ -155,7 +156,7 @@
+ }[T]
+ ```
+ 
+-Sources: [`packages/core/session/src/types.ts:431`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:439`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:462`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:493`](../packages/core/session/src/types.ts)
++Sources: [`packages/core/session/src/types.ts:443`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:451`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:474`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:505`](../packages/core/session/src/types.ts)
+ 
+ ## Events
+ 
+@@ -736,6 +737,26 @@
+ 
+ Source: [`packages/core/session/src/types.ts:390`](../packages/core/session/src/types.ts)
+ 
++<a id="requestview--log-only"></a>
++
++#### `request/view` — log-only
++
++```ts persistence-catalog
++/**
++ * Host-selected visibility for existing working-history nodes. Nodes added
++ * after this event belong to the selected activity until its next view.
++ * Required on replay: skipping it would expose previously hidden content.
++ */
++'request/view': {
++  viewId: Branded<'SessionRequestViewId'>
++  visibleSeqs: readonly SessionSeq[]
++  scopes: readonly string[]
++  authorizationVersion: number | null
++}
++```
++
++Source: [`packages/core/session/src/types.ts:408`](../packages/core/session/src/types.ts)
++
+ ### `sandbox/*`
+ 
+ <a id="sandboxmode--log-only"></a>
+@@ -811,7 +832,7 @@
+ 'session/end-seed': { inherited?: true }
+ ```
+ 
+-Source: [`packages/core/session/src/types.ts:427`](../packages/core/session/src/types.ts)
++Source: [`packages/core/session/src/types.ts:439`](../packages/core/session/src/types.ts)
+ 
+ <a id="sessiontitle--log-only"></a>
+ 
+@@ -2282,6 +2303,14 @@
+ SHA-256: `3e0eff5946255ff05d88a10839c60305135801f97794ea48d409f8503303317e`
+ 
+ `"request/header"`
++
++<a id="persistence-type-sha256-b40bf1564c622de80579fce3bbd18c471e0f74943ce0940529896c600a76a548"></a>
++
++### `"request/view"`
++
++SHA-256: `b40bf1564c622de80579fce3bbd18c471e0f74943ce0940529896c600a76a548`
++
++`"request/view"`
+ 
+ <a id="persistence-type-sha256-5bd310104cfe448e530beb11422d2f791e2e32e8e95fdc528a15f9ca693dae75"></a>
+ 
+@@ -4641,7 +4670,7 @@
+ 
+ SHA-256: `335e242de1fcc17b6ca920fc420d71bec2d76e53e37955c00948b65ab77f05c5`
+ 
+-Sources: [`packages/core/session/src/types.ts:462`](../packages/core/session/src/types.ts)
++Sources: [`packages/core/session/src/types.ts:474`](../packages/core/session/src/types.ts)
+ 
+ One of:
+ 
+@@ -5245,6 +5274,8 @@
+ 
+ <a id="persistence-type-attachmentid"></a>
+ 
++<a id="persistence-type-branded"></a>
++
+ <a id="persistence-type-commandid"></a>
+ 
+ <a id="persistence-type-compactionid"></a>
+@@ -5293,6 +5324,8 @@
+ 
+ <a id="persistence-type-packagessessionsession-titlesrctypestssessiontitleproviderid"></a>
+ 
++<a id="persistence-type-packagesutilbrandsrcindextsbranded"></a>
++
+ <a id="persistence-type-packageswebhookwebhooksrcbrandtswebhookdeliveryid"></a>
+ 
+ <a id="persistence-type-packageswebhookwebhooksrcbrandtswebhookruleid"></a>
+@@ -5335,7 +5368,7 @@
+ 
+ SHA-256: `4cd48f3e5108bd6ebedf7301c3638839b8b2b9db8dbd493974177fbdeb91a01b`
+ 
+-Sources: [`packages/api/session-controller/src/types.ts:398`](../packages/api/session-controller/src/types.ts) · [`packages/attachment/attachment/src/brand.ts:6`](../packages/attachment/attachment/src/brand.ts) · [`packages/compaction/compaction/src/brand.ts:4`](../packages/compaction/compaction/src/brand.ts) · [`packages/core/session/src/types.ts:20`](../packages/core/session/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:20`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:32`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:8`](../packages/experimental/agent-team/src/types.ts) · [`packages/feedback/message-feedback/src/types.ts:14`](../packages/feedback/message-feedback/src/types.ts) · [`packages/goal/goal/src/types.ts:17`](../packages/goal/goal/src/types.ts) · [`packages/interaction/commands/src/brand.ts:31`](../packages/interaction/commands/src/brand.ts) · [`packages/interaction/user-approval/src/types.ts:17`](../packages/interaction/user-approval/src/types.ts) · [`packages/llm/llm-retry/src/brand.ts:4`](../packages/llm/llm-retry/src/brand.ts) · [`packages/llm/llm/src/brand.ts:16`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:31`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:43`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:67`](../packages/llm/llm/src/brand.ts) · [`packages/schedule/schedule/src/types.ts:14`](../packages/schedule/schedule/src/types.ts) · [`packages/session/session-title/src/index.ts:42`](../packages/session/session-title/src/index.ts) · [`packages/session/session-title/src/types.ts:17`](../packages/session/session-title/src/types.ts) · [`packages/webhook/webhook/src/brand.ts:12`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:6`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:9`](../packages/webhook/webhook/src/brand.ts) · [`packages/workflow/workflow/src/types.ts:13`](../packages/workflow/workflow/src/types.ts)
++Sources: [`packages/api/session-controller/src/types.ts:398`](../packages/api/session-controller/src/types.ts) · [`packages/attachment/attachment/src/brand.ts:6`](../packages/attachment/attachment/src/brand.ts) · [`packages/compaction/compaction/src/brand.ts:4`](../packages/compaction/compaction/src/brand.ts) · [`packages/core/session/src/types.ts:20`](../packages/core/session/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:20`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:32`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:8`](../packages/experimental/agent-team/src/types.ts) · [`packages/feedback/message-feedback/src/types.ts:14`](../packages/feedback/message-feedback/src/types.ts) · [`packages/goal/goal/src/types.ts:17`](../packages/goal/goal/src/types.ts) · [`packages/interaction/commands/src/brand.ts:31`](../packages/interaction/commands/src/brand.ts) · [`packages/interaction/user-approval/src/types.ts:17`](../packages/interaction/user-approval/src/types.ts) · [`packages/llm/llm-retry/src/brand.ts:4`](../packages/llm/llm-retry/src/brand.ts) · [`packages/llm/llm/src/brand.ts:16`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:31`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:43`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:67`](../packages/llm/llm/src/brand.ts) · [`packages/schedule/schedule/src/types.ts:14`](../packages/schedule/schedule/src/types.ts) · [`packages/session/session-title/src/index.ts:42`](../packages/session/session-title/src/index.ts) · [`packages/session/session-title/src/types.ts:17`](../packages/session/session-title/src/types.ts) · [`packages/util/brand/src/index.ts:18`](../packages/util/brand/src/index.ts) · [`packages/webhook/webhook/src/brand.ts:12`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:6`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:9`](../packages/webhook/webhook/src/brand.ts) · [`packages/workflow/workflow/src/types.ts:13`](../packages/workflow/workflow/src/types.ts)
+ 
+ `string`
+ 
+@@ -5569,6 +5602,21 @@
+ | `name` | required | `string` |
+ | `step` | required | `number` |
+ | `turn` | required | `number` |
++
++<a id="persistence-type-sha256-f5dd7d2decb17497efe8b691b211d6c59fd59917476bcdcee755716759ad553d"></a>
++
++### `{ authorizationVersion, scopes, viewId, visibleSeqs }`
++
++SHA-256: `f5dd7d2decb17497efe8b691b211d6c59fd59917476bcdcee755716759ad553d`
++
++Sources: [`packages/core/session/src/types.ts:408`](../packages/core/session/src/types.ts)
++
++| Property | Presence | Type |
++|---|---|---|
++| `authorizationVersion` | required | [`OptionalSessionSeq`](#persistence-type-sha256-3bd652ebfa8726b3ce3937a4f1bd2759e02f86b3a08a20f9e41a8513656fbc5f) |
++| `scopes` | required | [`string[]`](#persistence-type-sha256-93c33d9687613293f8c95d46c4d922fe9ceae83b84c384beff5c3315abe005f2) |
++| `viewId` | required | `string` |
++| `visibleSeqs` | required | [`number[]`](#persistence-type-sha256-5d03ba38734809bcbd2a55221bd938b3b3fc34b49bb686c6113e9e4931e3aa78) |
+ 
+ <a id="persistence-type-sha256-1528539c63db8b23506f0209a99ce77d8ad138adfbfcee3d4769b7382d93756c"></a>
+ 
+@@ -5913,7 +5961,7 @@
+ 
+ SHA-256: `bcf0caf62d964b2fcf5404bd5c909cfa9a21c3f3c96e6b7e36d9e33565223825`
+ 
+-Sources: [`packages/core/session/src/types.ts:464`](../packages/core/session/src/types.ts)
++Sources: [`packages/core/session/src/types.ts:476`](../packages/core/session/src/types.ts)
+ 
+ | Property | Presence | Type |
+ |---|---|---|
+@@ -6079,7 +6127,7 @@
+ 
+ SHA-256: `17d1afb770d9941936130996da00dc86782cfef731d8d6526162c301256a4ac3`
+ 
+-Sources: [`packages/core/session/src/types.ts:427`](../packages/core/session/src/types.ts)
++Sources: [`packages/core/session/src/types.ts:439`](../packages/core/session/src/types.ts)
+ 
+ | Property | Presence | Type |
+ |---|---|---|
+@@ -8180,6 +8228,22 @@
+ | `time` | required | `number` |
+ | `type` | required | `"request/header"` |
+ 
++<a id="persistence-type-sha256-5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6"></a>
++
++<a id="persistence-type-eventrequestview"></a>
++
++### `{ type: "request/view" }`
++
++SHA-256: `5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6`
++
++| Property | Presence | Type |
++|---|---|---|
++| `data` | required | [`{ authorizationVersion, scopes, viewId, visibleSeqs }`](#persistence-type-sha256-f5dd7d2decb17497efe8b691b211d6c59fd59917476bcdcee755716759ad553d) |
++| `ignorable` | optional | `true` |
++| `seq` | required | `number` |
++| `time` | required | `number` |
++| `type` | required | `"request/view"` |
++
+ <a id="persistence-type-sha256-516da4cdd6d2f1e5ce488e648578ca51f40e458f707b803e5b24de870e799415"></a>
+ 
+ <a id="persistence-type-eventsandboxmode"></a>
+--- a/docs/persistence-catalog.zh.md
++++ b/docs/persistence-catalog.zh.md
+@@ -51,6 +51,7 @@
+ | `event:plan/mode` | event | `a7cf43ce7c2a4c038feed1885cd7a00d5c6ee2d90a7e0d56b46f78a3e1ca327f` | [`{ type: "plan/mode" }`](#persistence-type-sha256-a7cf43ce7c2a4c038feed1885cd7a00d5c6ee2d90a7e0d56b46f78a3e1ca327f) |
+ | `event:request/context` | event | `37cbc9cf06d494cfe5c67f078af1605eacb8e4c2c853e9e26455b73de0ee7ccf` | [`{ type: "request/context" }`](#persistence-type-sha256-37cbc9cf06d494cfe5c67f078af1605eacb8e4c2c853e9e26455b73de0ee7ccf) |
+ | `event:request/header` | event | `4208123b50df5006b181481ab45fcf1cde807b88d3fd4d340090bc2e202fac41` | [`{ type: "request/header" }`](#persistence-type-sha256-4208123b50df5006b181481ab45fcf1cde807b88d3fd4d340090bc2e202fac41) |
++| `event:request/view` | event | `5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6` | [`{ type: "request/view" }`](#persistence-type-sha256-5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6) |
+ | `event:sandbox/mode` | event | `516da4cdd6d2f1e5ce488e648578ca51f40e458f707b803e5b24de870e799415` | [`{ type: "sandbox/mode" }`](#persistence-type-sha256-516da4cdd6d2f1e5ce488e648578ca51f40e458f707b803e5b24de870e799415) |
+ | `event:schedule/change` | event | `a0a2e5c42e1c929445ecd1cd70f49be6b66441894ec72c08e8ae332821d4a3cb` | [`{ type: "schedule/change" }`](#persistence-type-sha256-a0a2e5c42e1c929445ecd1cd70f49be6b66441894ec72c08e8ae332821d4a3cb) |
+ | `event:session-log-deepseek/delivery-accepted` | event | `d63b8b8ffad9c02fd80c43a17df4f240c1fe8118ecca9de34f9d5871838ab5b9` | [`{ type: "session-log-deepseek/delivery-accepted" }`](#persistence-type-sha256-d63b8b8ffad9c02fd80c43a17df4f240c1fe8118ecca9de34f9d5871838ab5b9) |
+@@ -157,7 +158,7 @@
+ }[T]
+ ```
+ 
+-来源：[`packages/core/session/src/types.ts:431`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:439`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:462`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:493`](../packages/core/session/src/types.ts)
++来源：[`packages/core/session/src/types.ts:443`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:451`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:474`](../packages/core/session/src/types.ts) · [`packages/core/session/src/types.ts:505`](../packages/core/session/src/types.ts)
+ 
+ ## 事件
+ 
+@@ -738,6 +739,26 @@
+ 
+ 来源：[`packages/core/session/src/types.ts:390`](../packages/core/session/src/types.ts)
+ 
++<a id="requestview--log-only"></a>
++
++#### `request/view` — log-only
++
++```ts persistence-catalog
++/**
++ * Host-selected visibility for existing working-history nodes. Nodes added
++ * after this event belong to the selected activity until its next view.
++ * Required on replay: skipping it would expose previously hidden content.
++ */
++'request/view': {
++  viewId: Branded<'SessionRequestViewId'>
++  visibleSeqs: readonly SessionSeq[]
++  scopes: readonly string[]
++  authorizationVersion: number | null
++}
++```
++
++来源：[`packages/core/session/src/types.ts:408`](../packages/core/session/src/types.ts)
++
+ ### `sandbox/*`
+ 
+ <a id="sandboxmode--log-only"></a>
+@@ -813,7 +834,7 @@
+ 'session/end-seed': { inherited?: true }
+ ```
+ 
+-来源：[`packages/core/session/src/types.ts:427`](../packages/core/session/src/types.ts)
++来源：[`packages/core/session/src/types.ts:439`](../packages/core/session/src/types.ts)
+ 
+ <a id="sessiontitle--log-only"></a>
+ 
+@@ -2284,6 +2305,14 @@
+ SHA-256: `3e0eff5946255ff05d88a10839c60305135801f97794ea48d409f8503303317e`
+ 
+ `"request/header"`
++
++<a id="persistence-type-sha256-b40bf1564c622de80579fce3bbd18c471e0f74943ce0940529896c600a76a548"></a>
++
++### `"request/view"`
++
++SHA-256: `b40bf1564c622de80579fce3bbd18c471e0f74943ce0940529896c600a76a548`
++
++`"request/view"`
+ 
+ <a id="persistence-type-sha256-5bd310104cfe448e530beb11422d2f791e2e32e8e95fdc528a15f9ca693dae75"></a>
+ 
+@@ -4643,7 +4672,7 @@
+ 
+ SHA-256: `335e242de1fcc17b6ca920fc420d71bec2d76e53e37955c00948b65ab77f05c5`
+ 
+-来源：[`packages/core/session/src/types.ts:462`](../packages/core/session/src/types.ts)
++来源：[`packages/core/session/src/types.ts:474`](../packages/core/session/src/types.ts)
+ 
+ 以下类型之一：
+ 
+@@ -5247,6 +5276,8 @@
+ 
+ <a id="persistence-type-attachmentid"></a>
+ 
++<a id="persistence-type-branded"></a>
++
+ <a id="persistence-type-commandid"></a>
+ 
+ <a id="persistence-type-compactionid"></a>
+@@ -5295,6 +5326,8 @@
+ 
+ <a id="persistence-type-packagessessionsession-titlesrctypestssessiontitleproviderid"></a>
+ 
++<a id="persistence-type-packagesutilbrandsrcindextsbranded"></a>
++
+ <a id="persistence-type-packageswebhookwebhooksrcbrandtswebhookdeliveryid"></a>
+ 
+ <a id="persistence-type-packageswebhookwebhooksrcbrandtswebhookruleid"></a>
+@@ -5337,7 +5370,7 @@
+ 
+ SHA-256: `4cd48f3e5108bd6ebedf7301c3638839b8b2b9db8dbd493974177fbdeb91a01b`
+ 
+-来源：[`packages/api/session-controller/src/types.ts:398`](../packages/api/session-controller/src/types.ts) · [`packages/attachment/attachment/src/brand.ts:6`](../packages/attachment/attachment/src/brand.ts) · [`packages/compaction/compaction/src/brand.ts:4`](../packages/compaction/compaction/src/brand.ts) · [`packages/core/session/src/types.ts:20`](../packages/core/session/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:20`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:32`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:8`](../packages/experimental/agent-team/src/types.ts) · [`packages/feedback/message-feedback/src/types.ts:14`](../packages/feedback/message-feedback/src/types.ts) · [`packages/goal/goal/src/types.ts:17`](../packages/goal/goal/src/types.ts) · [`packages/interaction/commands/src/brand.ts:31`](../packages/interaction/commands/src/brand.ts) · [`packages/interaction/user-approval/src/types.ts:17`](../packages/interaction/user-approval/src/types.ts) · [`packages/llm/llm-retry/src/brand.ts:4`](../packages/llm/llm-retry/src/brand.ts) · [`packages/llm/llm/src/brand.ts:16`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:31`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:43`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:67`](../packages/llm/llm/src/brand.ts) · [`packages/schedule/schedule/src/types.ts:14`](../packages/schedule/schedule/src/types.ts) · [`packages/session/session-title/src/index.ts:42`](../packages/session/session-title/src/index.ts) · [`packages/session/session-title/src/types.ts:17`](../packages/session/session-title/src/types.ts) · [`packages/webhook/webhook/src/brand.ts:12`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:6`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:9`](../packages/webhook/webhook/src/brand.ts) · [`packages/workflow/workflow/src/types.ts:13`](../packages/workflow/workflow/src/types.ts)
++来源：[`packages/api/session-controller/src/types.ts:398`](../packages/api/session-controller/src/types.ts) · [`packages/attachment/attachment/src/brand.ts:6`](../packages/attachment/attachment/src/brand.ts) · [`packages/compaction/compaction/src/brand.ts:4`](../packages/compaction/compaction/src/brand.ts) · [`packages/core/session/src/types.ts:20`](../packages/core/session/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:20`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:32`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:8`](../packages/experimental/agent-team/src/types.ts) · [`packages/feedback/message-feedback/src/types.ts:14`](../packages/feedback/message-feedback/src/types.ts) · [`packages/goal/goal/src/types.ts:17`](../packages/goal/goal/src/types.ts) · [`packages/interaction/commands/src/brand.ts:31`](../packages/interaction/commands/src/brand.ts) · [`packages/interaction/user-approval/src/types.ts:17`](../packages/interaction/user-approval/src/types.ts) · [`packages/llm/llm-retry/src/brand.ts:4`](../packages/llm/llm-retry/src/brand.ts) · [`packages/llm/llm/src/brand.ts:16`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:31`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:43`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:67`](../packages/llm/llm/src/brand.ts) · [`packages/schedule/schedule/src/types.ts:14`](../packages/schedule/schedule/src/types.ts) · [`packages/session/session-title/src/index.ts:42`](../packages/session/session-title/src/index.ts) · [`packages/session/session-title/src/types.ts:17`](../packages/session/session-title/src/types.ts) · [`packages/util/brand/src/index.ts:18`](../packages/util/brand/src/index.ts) · [`packages/webhook/webhook/src/brand.ts:12`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:6`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:9`](../packages/webhook/webhook/src/brand.ts) · [`packages/workflow/workflow/src/types.ts:13`](../packages/workflow/workflow/src/types.ts)
+ 
+ `string`
+ 
+@@ -5571,6 +5604,21 @@
+ | `name` | 必需 | `string` |
+ | `step` | 必需 | `number` |
+ | `turn` | 必需 | `number` |
++
++<a id="persistence-type-sha256-f5dd7d2decb17497efe8b691b211d6c59fd59917476bcdcee755716759ad553d"></a>
++
++### `{ authorizationVersion, scopes, viewId, visibleSeqs }`
++
++SHA-256: `f5dd7d2decb17497efe8b691b211d6c59fd59917476bcdcee755716759ad553d`
++
++来源：[`packages/core/session/src/types.ts:408`](../packages/core/session/src/types.ts)
++
++| 属性 | 存在性 | 类型 |
++|---|---|---|
++| `authorizationVersion` | 必需 | [`OptionalSessionSeq`](#persistence-type-sha256-3bd652ebfa8726b3ce3937a4f1bd2759e02f86b3a08a20f9e41a8513656fbc5f) |
++| `scopes` | 必需 | [`string[]`](#persistence-type-sha256-93c33d9687613293f8c95d46c4d922fe9ceae83b84c384beff5c3315abe005f2) |
++| `viewId` | 必需 | `string` |
++| `visibleSeqs` | 必需 | [`number[]`](#persistence-type-sha256-5d03ba38734809bcbd2a55221bd938b3b3fc34b49bb686c6113e9e4931e3aa78) |
+ 
+ <a id="persistence-type-sha256-1528539c63db8b23506f0209a99ce77d8ad138adfbfcee3d4769b7382d93756c"></a>
+ 
+@@ -5915,7 +5963,7 @@
+ 
+ SHA-256: `bcf0caf62d964b2fcf5404bd5c909cfa9a21c3f3c96e6b7e36d9e33565223825`
+ 
+-来源：[`packages/core/session/src/types.ts:464`](../packages/core/session/src/types.ts)
++来源：[`packages/core/session/src/types.ts:476`](../packages/core/session/src/types.ts)
+ 
+ | 属性 | 存在性 | 类型 |
+ |---|---|---|
+@@ -6081,7 +6129,7 @@
+ 
+ SHA-256: `17d1afb770d9941936130996da00dc86782cfef731d8d6526162c301256a4ac3`
+ 
+-来源：[`packages/core/session/src/types.ts:427`](../packages/core/session/src/types.ts)
++来源：[`packages/core/session/src/types.ts:439`](../packages/core/session/src/types.ts)
+ 
+ | 属性 | 存在性 | 类型 |
+ |---|---|---|
+@@ -8182,6 +8230,22 @@
+ | `time` | 必需 | `number` |
+ | `type` | 必需 | `"request/header"` |
+ 
++<a id="persistence-type-sha256-5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6"></a>
++
++<a id="persistence-type-eventrequestview"></a>
++
++### `{ type: "request/view" }`
++
++SHA-256: `5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6`
++
++| 属性 | 存在性 | 类型 |
++|---|---|---|
++| `data` | 必需 | [`{ authorizationVersion, scopes, viewId, visibleSeqs }`](#persistence-type-sha256-f5dd7d2decb17497efe8b691b211d6c59fd59917476bcdcee755716759ad553d) |
++| `ignorable` | 可选 | `true` |
++| `seq` | 必需 | `number` |
++| `time` | 必需 | `number` |
++| `type` | 必需 | `"request/view"` |
++
+ <a id="persistence-type-sha256-516da4cdd6d2f1e5ce488e648578ca51f40e458f707b803e5b24de870e799415"></a>
+ 
+ <a id="persistence-type-eventsandboxmode"></a>
+--- /dev/null
++++ b/docs/persistence-changes/2026-10-19-request-views.i18n.yaml
+@@ -0,0 +1,28 @@
++# Bilingual-pair consistency record for 2026-10-19-request-views.md (docs/i18n/README.md): per heading
++# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
++# After editing either side, bring the other along and re-record with:
++#   pnpm run verify-translation-pairing --write docs/persistence-changes/2026-10-19-request-views.md
++/:
++  en: 3d5a424ae7d7e46b
++  zh: c22a8e4a62d8cc1a
++/2026-10-19-request-views:
++  en: 14632f44d6e88459
++  zh: aa8fc649145337fa
++/2026-10-19-request-views/summary:
++  en: 0f8e5073368488de
++  zh: 008c43b9b518b890
++/2026-10-19-request-views/table-of-contents:
++  en: 6cf314a069ceb451
++  zh: 9adff678e9ecab3b
++/2026-10-19-request-views/declaration:
++  en: 6907136f28e48c90
++  zh: 02f8298485f3d8e7
++/2026-10-19-request-views/compatibility:
++  en: d17b4c76f1ecd4ae
++  zh: 0ce6cce3532fd281
++/2026-10-19-request-views/verification:
++  en: 4e20e96b6df313eb
++  zh: b5503a000ee94081
++/2026-10-19-request-views/dev-note:
++  en: b75c8458928b72b9
++  zh: 003ba4e17b4b5269
+--- /dev/null
++++ b/docs/persistence-changes/2026-10-19-request-views.md
+@@ -0,0 +1,48 @@
++---
++description: "Records a persistence type transition and its compatibility acknowledgement."
++kind: persistence-change
++---
++
++# 2026-10-19-request-views
++
++English | [中文](2026-10-19-request-views.zh.md)
++
++## Summary
++
++Adds required request/view records and audience-aware token-meter projections.
++
++## Table of Contents
++
++- [Declaration](#declaration)
++- [Compatibility](#compatibility)
++- [Verification](#verification)
++- [Dev Note](#dev-note)
++
++<a id="declaration"></a>
++## Declaration
++
++```yaml persistence-change
++schemaVersion: 1
++id: 2026-10-19-request-views
++baseline: false
++changes:
++  - root: "event:request/view"
++    previous: null
++    after: "5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6"
++    decision: same-version
++```
++
++<a id="compatibility"></a>
++## Compatibility
++
++Existing V4 logs remain readable. Older runtimes refuse the new required event. Context-breakdown and pressure state versions advance to 6 and old checkpoints refold. Cumulative billing totals are unchanged. Install both patched packages together.
++
++<a id="verification"></a>
++## Verification
++
++Focused tests cover visibility, restore, detached replay, tool pairing, independent projections, native token accounting, and checkpoint round trips. Existing token-meter and compaction behavior tests were also exercised.
++
++<a id="dev-note"></a>
++## Dev Note
++
++None.
+--- /dev/null
++++ b/docs/persistence-changes/2026-10-19-request-views.schema.json
+@@ -0,0 +1,110 @@
++{
++  "formatVersion": 2,
++  "roots": [
++    {
++      "key": "event:request/view",
++      "kind": "event",
++      "event": "request/view",
++      "surface": false,
++      "digest": "5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6",
++      "schema": {
++        "root": 0,
++        "nodes": [
++          {
++            "kind": "object",
++            "properties": [
++              {
++                "name": "data",
++                "type": 1,
++                "optional": false
++              },
++              {
++                "name": "ignorable",
++                "type": 8,
++                "optional": true
++              },
++              {
++                "name": "seq",
++                "type": 4,
++                "optional": false
++              },
++              {
++                "name": "time",
++                "type": 4,
++                "optional": false
++              },
++              {
++                "name": "type",
++                "type": 9,
++                "optional": false
++              }
++            ],
++            "indices": []
++          },
++          {
++            "kind": "object",
++            "properties": [
++              {
++                "name": "authorizationVersion",
++                "type": 2,
++                "optional": false
++              },
++              {
++                "name": "scopes",
++                "type": 5,
++                "optional": false
++              },
++              {
++                "name": "viewId",
++                "type": 6,
++                "optional": false
++              },
++              {
++                "name": "visibleSeqs",
++                "type": 7,
++                "optional": false
++              }
++            ],
++            "indices": []
++          },
++          {
++            "kind": "union",
++            "types": [
++              3,
++              4
++            ]
++          },
++          {
++            "kind": "primitive",
++            "type": "null"
++          },
++          {
++            "kind": "primitive",
++            "type": "number"
++          },
++          {
++            "kind": "array",
++            "element": 6
++          },
++          {
++            "kind": "primitive",
++            "type": "string"
++          },
++          {
++            "kind": "array",
++            "element": 4
++          },
++          {
++            "kind": "literal",
++            "value": true
++          },
++          {
++            "kind": "literal",
++            "value": "request/view"
++          }
++        ]
++      }
++    }
++  ],
++  "types": []
++}
+--- /dev/null
++++ b/docs/persistence-changes/2026-10-19-request-views.zh.md
+@@ -0,0 +1,48 @@
++---
++description: "记录持久化类型更改及其兼容性确认。"
++kind: persistence-change
++---
++
++# 2026-10-19-request-views
++
++[English](2026-10-19-request-views.md) | 中文
++
++## 概述
++
++新增必需的 request/view 记录与跟随可见范围的 Token 计量投影。
++
++## 目录
++
++- [声明](#declaration)
++- [兼容性](#compatibility)
++- [验证](#verification)
++- [开发备注](#dev-note)
++
++<a id="declaration"></a>
++## 声明
++
++```yaml persistence-change
++schemaVersion: 1
++id: 2026-10-19-request-views
++baseline: false
++changes:
++  - root: "event:request/view"
++    previous: null
++    after: "5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6"
++    decision: same-version
++```
++
++<a id="compatibility"></a>
++## 兼容性
++
++已有 V4 日志仍可读取。旧运行时拒绝新的必需事件。上下文构成与压力状态版本升级为 6 并重新折叠旧检查点，累计计费用量不变。两个扩展包必须一起安装。
++
++<a id="verification"></a>
++## 验证
++
++定向测试覆盖可见范围、恢复、离线回放、工具配对、独立投影、原生 Token 计量及检查点往返；同时执行已有计量与压缩行为测试。
++
++<a id="dev-note"></a>
++## 开发备注
++
++无。
+--- a/docs/persistence-changes/historical-formats/README.i18n.yaml
++++ b/docs/persistence-changes/historical-formats/README.i18n.yaml
+@@ -15,8 +15,8 @@
+   en: 14c57f30e676f6e3
+   zh: b1a0ccf26fab3727
+ /session-persistence-formats/format-references:
+-  en: b19e6cfc84bfc46d
+-  zh: 5b1d86bcdab672ca
++  en: f34bdc313d84408d
++  zh: 7eb42c30d269bb6f
+ /session-persistence-formats/scope-and-evidence:
+   en: b220062139ddac1e
+   zh: 7c4c0efe05dafa9c
+--- a/docs/persistence-changes/historical-formats/README.md
++++ b/docs/persistence-changes/historical-formats/README.md
+@@ -32,7 +32,7 @@
+ | 1 | PR #3349 | [V1](v1.md) | [JSON](v1.schema.json) | 54 / 415 |
+ | 2 | `dsh-v0.1.3-alpha.2` | [V2](v2.md) | [JSON](v2.schema.json) | 56 / 435 |
+ | 3 | PR #4320 | [V3](v3.md) | [JSON](v3.schema.json) | 60 / 467 |
+-| 4 | Current checkout | [Current catalog](../../persistence-catalog.md) | [JSON](../../persistence-schema.json) | 62 / 590 |
++| 4 | Current checkout | [Current catalog](../../persistence-catalog.md) | [JSON](../../persistence-schema.json) | 63 / 593 |
+ 
+ <!-- persistence-format-index:end -->
+ 
+--- a/docs/persistence-changes/historical-formats/README.zh.md
++++ b/docs/persistence-changes/historical-formats/README.zh.md
+@@ -32,7 +32,7 @@
+ | 1 | PR #3349 | [V1](v1.zh.md) | [JSON](v1.schema.json) | 54 / 415 |
+ | 2 | `dsh-v0.1.3-alpha.2` | [V2](v2.zh.md) | [JSON](v2.schema.json) | 56 / 435 |
+ | 3 | PR #4320 | [V3](v3.zh.md) | [JSON](v3.schema.json) | 60 / 467 |
+-| 4 | 当前工作树 | [当前目录](../../persistence-catalog.zh.md) | [JSON](../../persistence-schema.json) | 62 / 590 |
++| 4 | 当前工作树 | [当前目录](../../persistence-catalog.zh.md) | [JSON](../../persistence-schema.json) | 63 / 593 |
+ 
+ <!-- persistence-format-index:end -->
+ 
+--- a/docs/persistence-schema.json
++++ b/docs/persistence-schema.json
+@@ -11152,6 +11152,110 @@
+       }
+     },
+     {
++      "key": "event:request/view",
++      "kind": "event",
++      "event": "request/view",
++      "surface": false,
++      "digest": "5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6",
++      "schema": {
++        "root": 0,
++        "nodes": [
++          {
++            "kind": "object",
++            "properties": [
++              {
++                "name": "data",
++                "type": 1,
++                "optional": false
++              },
++              {
++                "name": "ignorable",
++                "type": 8,
++                "optional": true
++              },
++              {
++                "name": "seq",
++                "type": 4,
++                "optional": false
++              },
++              {
++                "name": "time",
++                "type": 4,
++                "optional": false
++              },
++              {
++                "name": "type",
++                "type": 9,
++                "optional": false
++              }
++            ],
++            "indices": []
++          },
++          {
++            "kind": "object",
++            "properties": [
++              {
++                "name": "authorizationVersion",
++                "type": 2,
++                "optional": false
++              },
++              {
++                "name": "scopes",
++                "type": 5,
++                "optional": false
++              },
++              {
++                "name": "viewId",
++                "type": 6,
++                "optional": false
++              },
++              {
++                "name": "visibleSeqs",
++                "type": 7,
++                "optional": false
++              }
++            ],
++            "indices": []
++          },
++          {
++            "kind": "union",
++            "types": [
++              3,
++              4
++            ]
++          },
++          {
++            "kind": "primitive",
++            "type": "null"
++          },
++          {
++            "kind": "primitive",
++            "type": "number"
++          },
++          {
++            "kind": "array",
++            "element": 6
++          },
++          {
++            "kind": "primitive",
++            "type": "string"
++          },
++          {
++            "kind": "array",
++            "element": 4
++          },
++          {
++            "kind": "literal",
++            "value": true
++          },
++          {
++            "kind": "literal",
++            "value": "request/view"
++          }
++        ]
++      }
++    },
++    {
+       "key": "event:sandbox/mode",
+       "kind": "event",
+       "event": "sandbox/mode",
+@@ -22125,7 +22229,7 @@
+       "digest": "17d1afb770d9941936130996da00dc86782cfef731d8d6526162c301256a4ac3",
+       "names": [],
+       "sources": [
+-        "packages/core/session/src/types.ts:427"
++        "packages/core/session/src/types.ts:439"
+       ]
+     },
+     {
+@@ -22585,7 +22689,7 @@
+         "packages/core/session/src/types.ts#SurfaceOp"
+       ],
+       "sources": [
+-        "packages/core/session/src/types.ts:462"
++        "packages/core/session/src/types.ts:474"
+       ]
+     },
+     {
+@@ -22931,6 +23035,7 @@
+         "packages/schedule/schedule/src/types.ts#ScheduleId",
+         "packages/session/session-title/src/index.ts#SessionTitleProviderId",
+         "packages/session/session-title/src/types.ts#SessionTitleProviderId",
++        "packages/util/brand/src/index.ts#Branded",
+         "packages/webhook/webhook/src/brand.ts#WebhookDeliveryId",
+         "packages/webhook/webhook/src/brand.ts#WebhookRuleId",
+         "packages/webhook/webhook/src/brand.ts#WebhookSourceId",
+@@ -22956,6 +23061,7 @@
+         "packages/schedule/schedule/src/types.ts:14",
+         "packages/session/session-title/src/index.ts:42",
+         "packages/session/session-title/src/types.ts:17",
++        "packages/util/brand/src/index.ts:18",
+         "packages/webhook/webhook/src/brand.ts:12",
+         "packages/webhook/webhook/src/brand.ts:6",
+         "packages/webhook/webhook/src/brand.ts:9",
+@@ -23187,6 +23293,11 @@
+     },
+     {
+       "digest": "5c45bf4c544a7211dcd8ba6ba7e5f1bc39b49e7a9df9d5cbdc8e87c22771b37b",
++      "names": [],
++      "sources": []
++    },
++    {
++      "digest": "5c7ccb76862e93b3cc5290dfc2d5acb57ac61c76321c8ada3fce36fa1be1cba6",
+       "names": [],
+       "sources": []
+     },
+@@ -24477,6 +24588,11 @@
+       "sources": []
+     },
+     {
++      "digest": "b40bf1564c622de80579fce3bbd18c471e0f74943ce0940529896c600a76a548",
++      "names": [],
++      "sources": []
++    },
++    {
+       "digest": "b4ec0af39fd52ed971990e42f04e5be3204882e555c409eb330f8238eec21569",
+       "names": [],
+       "sources": []
+@@ -24650,7 +24766,7 @@
+       "digest": "bcf0caf62d964b2fcf5404bd5c909cfa9a21c3f3c96e6b7e36d9e33565223825",
+       "names": [],
+       "sources": [
+-        "packages/core/session/src/types.ts:464"
++        "packages/core/session/src/types.ts:476"
+       ]
+     },
+     {
+@@ -25258,6 +25374,13 @@
+       ]
+     },
+     {
++      "digest": "f5dd7d2decb17497efe8b691b211d6c59fd59917476bcdcee755716759ad553d",
++      "names": [],
++      "sources": [
++        "packages/core/session/src/types.ts:408"
++      ]
++    },
++    {
+       "digest": "f6329fb30c7ea8013e8975ca5e78284fb7685cc6bd620e8aa4e9a99bc81d45eb",
+       "names": [],
+       "sources": []
+--- a/docs/subsystems/session.md
++++ b/docs/subsystems/session.md
+@@ -146,6 +146,18 @@
+    * call's capability, not this snapshot from an earlier request.
+    */
+   'request/context': RequestContext
++  /**
++   * Host-selected visibility for existing working-history nodes. Nodes added
++   * after this event belong to the selected activity until its next view.
++   * Required on replay: skipping it would expose previously hidden content.
++   */
++  'request/view': {
++    viewId: Branded<'SessionRequestViewId'>
++    visibleSeqs: readonly SessionSeq[]
++    scopes: readonly string[]
++    authorizationVersion: number | null
++  }
++
+   /**
+    * Separates inherited or restored history from later lifecycle-owned work.
+    * This log-only marker need not be at {@link Session.firstLiveSeq}: a fork
+@@ -374,7 +386,7 @@
+   /** Absolute sequence of the window's first event. */
+   baseSeq: SessionLogOffset
+   /** Previously projected messages keyed by their original event sequences. */
+-  messages: ReadonlyMap<SessionSeq, Message>
++  messages: ReadonlyMap<SessionSeq, Message | null>
+ }
+ ```
+ 
+@@ -391,7 +403,7 @@
+    * @returns changed current messages keyed by their original sequences.
+    * @throws when the durable decision cannot be applied to this history.
+    */
+-  project(event: SessionEvent<T>, context: SessionMessageProjectionContext): ReadonlyMap<SessionSeq, Message>
++  project(event: SessionEvent<T>, context: SessionMessageProjectionContext): ReadonlyMap<SessionSeq, Message | null>
+ }
+ ```
+ 
+@@ -439,7 +451,7 @@
+   /** Replacement operations in event order. */
+   replacements: SurfaceFoldReplacement[]
+   /** Immutable projected messages, keyed by their original event sequences. */
+-  projectedMessages: ReadonlyMap<SessionSeq, Message>
++  projectedMessages: ReadonlyMap<SessionSeq, Message | null>
+ }
+ ```
+ 
+--- a/docs/subsystems/session.zh.md
++++ b/docs/subsystems/session.zh.md
+@@ -146,6 +146,18 @@
+    * call's capability, not this snapshot from an earlier request.
+    */
+   'request/context': RequestContext
++  /**
++   * Host-selected visibility for existing working-history nodes. Nodes added
++   * after this event belong to the selected activity until its next view.
++   * Required on replay: skipping it would expose previously hidden content.
++   */
++  'request/view': {
++    viewId: Branded<'SessionRequestViewId'>
++    visibleSeqs: readonly SessionSeq[]
++    scopes: readonly string[]
++    authorizationVersion: number | null
++  }
++
+   /**
+    * Separates inherited or restored history from later lifecycle-owned work.
+    * This log-only marker need not be at {@link Session.firstLiveSeq}: a fork
+@@ -376,7 +388,7 @@
+   /** Absolute sequence of the window's first event. */
+   baseSeq: SessionLogOffset
+   /** Previously projected messages keyed by their original event sequences. */
+-  messages: ReadonlyMap<SessionSeq, Message>
++  messages: ReadonlyMap<SessionSeq, Message | null>
+ }
+ ```
+ 
+@@ -393,7 +405,7 @@
+    * @returns changed current messages keyed by their original sequences.
+    * @throws when the durable decision cannot be applied to this history.
+    */
+-  project(event: SessionEvent<T>, context: SessionMessageProjectionContext): ReadonlyMap<SessionSeq, Message>
++  project(event: SessionEvent<T>, context: SessionMessageProjectionContext): ReadonlyMap<SessionSeq, Message | null>
+ }
+ ```
+ 
+@@ -441,7 +453,7 @@
+   /** Replacement operations in event order. */
+   replacements: SurfaceFoldReplacement[]
+   /** Immutable projected messages, keyed by their original event sequences. */
+-  projectedMessages: ReadonlyMap<SessionSeq, Message>
++  projectedMessages: ReadonlyMap<SessionSeq, Message | null>
+ }
+ ```
+ 
+--- /dev/null
++++ b/docs/upgrade-guide/v0.2.0-rc.2/request-views/guide.i18n.yaml
+@@ -0,0 +1,16 @@
++# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
++# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
++# After editing either side, bring the other along and re-record with:
++#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.0-rc.2/request-views/guide.md
++/:
++  en: cd549c0b5aa162eb
++  zh: de8895c30f024276
++/logs-with-activity-request-views:
++  en: d5e3fc458da04bdd
++  zh: 6b0a644edc09ec9f
++/logs-with-activity-request-views/change:
++  en: 0d0527e997e5df66
++  zh: 043954c3697157dd
++/logs-with-activity-request-views/migration:
++  en: 6475cb89949bede9
++  zh: dc405a08d18a0a01
+--- /dev/null
++++ b/docs/upgrade-guide/v0.2.0-rc.2/request-views/guide.md
+@@ -0,0 +1,17 @@
++---
++kind: upgrade-guide
++description: "Logs containing request/view events require a runtime that understands logged visibility."
++---
++# Logs with activity request views
++
++English | [中文](guide.zh.md)
++
++## Change
++
++A required `request/view` event records which existing messages remain visible. Older runtimes reject such logs instead of silently exposing hidden history. Existing logs without the event retain their behavior.
++
++## Migration
++
++1. Back up session directories and install the matching Session, Token Meter and plugin packages together.
++2. Confirm both `ctx.sessions.requestViewVersion` and `ctx.tokenMeter.requestViewVersion` are `1` before enabling activity views. Context-breakdown and pressure checkpoints now use state version 6 and are refolded; billing totals retain their meaning.
++3. Keep the patched runtime when opening, replaying or exporting view-bearing logs. To roll back the application, restore the complete pre-deployment backup; never delete view records or mark them ignorable.
+--- /dev/null
++++ b/docs/upgrade-guide/v0.2.0-rc.2/request-views/guide.zh.md
+@@ -0,0 +1,17 @@
++---
++kind: upgrade-guide
++description: "包含 request/view 事件的日志需要理解持久化可见范围的运行时。"
++---
++# 带活动请求视图的日志
++
++[English](guide.md) | 中文
++
++## 变更
++
++必需事件 `request/view` 记录哪些已有消息保持可见。旧运行时会拒绝这种日志，避免静默暴露已隐藏的历史。不包含该事件的已有日志保留原来行为。
++
++## 迁移
++
++1. 备份会话目录，将匹配的 Session、Token Meter 和插件包一起安装。
++2. 开启活动视图前确认 `ctx.sessions.requestViewVersion` 与 `ctx.tokenMeter.requestViewVersion` 均为 `1`。上下文构成与压力检查点升级为状态版本 6 并重新折叠；计费用量总计含义不变。
++3. 打开、回放或导出含视图的日志时继续使用扩展后的运行时。回退应用时恢复完整的部署前备份；不得删除视图记录或将其标记为可忽略。
+--- a/packages/compaction/compaction-basic/src/index.ts
++++ b/packages/compaction/compaction-basic/src/index.ts
+@@ -111,6 +111,8 @@
+  * token meter.
+  */
+ export class BasicCompactionEngine extends CompactionEngine {
++  /** Compaction preserves messages hidden by a logged request view. */
++  readonly requestViewVersion: 1 = 1
+   static inject = ['llm', 'tokenMeter', 'sessions']
+ 
+   static Config: z<BasicCompactionConfig> = z.object({
+--- a/packages/compaction/compaction-basic/src/region.ts
++++ b/packages/compaction/compaction-basic/src/region.ts
+@@ -19,7 +19,7 @@
+ import { createUserMessage, errorChain } from '@deepseek-ai/dsh-llm'
+ import type { Message, UserMessage } from '@deepseek-ai/dsh-llm'
+ import type { TokenMeasurement, TokenMeter } from '@deepseek-ai/dsh-token-meter'
+-import { SessionSeq, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
++import { SessionSeq, deriveEventMessage, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+ import type { Agent } from '@deepseek-ai/dsh-agent'
+ import { frameSummary } from './summarizer.ts'
+ import type { SummarizationInput, SummaryResult } from './summarizer.ts'
+@@ -151,6 +151,28 @@
+   const first = surfaceNodes[firstIdx]!
+   // oxlint-disable-next-line typescript/no-non-null-assertion
+   const cutoff = surfaceNodes[keepFromIdx - 1]!
++  const hidden = (seq: SessionSeq): boolean => {
++    const event = session.eventAt(seq)!
++    return session.deriveEventMessage(event) === null && deriveEventMessage(event) !== null
++  }
++  if (surfaceNodes.slice(firstIdx,keepFromIdx).some(hidden)) {
++    let best: {start:SessionSeq;end:SessionSeq;tokens:number} | undefined
++    let start=firstIdx
++    while(start<keepFromIdx){
++      while(start<keepFromIdx&&hidden(surfaceNodes[start]!))start++
++      let end=start
++      while(end<keepFromIdx&&!hidden(surfaceNodes[end]!))end++
++      let left=start,right=end-1
++      while(left<=right&&!toolPairingBalancedBefore(session,surfaceNodes[left]!))left++
++      while(right>=left&&!toolPairingBalancedAfter(session,surfaceNodes[right]!))right--
++      if(left<=right){
++        const tokens=pricedNodes.slice(left,right+1).reduce((total,node)=>total+node.tokens,0)
++        if(tokens>0&&(!best||tokens>best.tokens))best={start:surfaceNodes[left]!,end:surfaceNodes[right]!,tokens}
++      }
++      start=end+1
++    }
++    return best===undefined?null:{start:best.start,end:best.end}
++  }
+   return { start: first, end: cutoff }
+ }
+ 
+@@ -344,6 +366,10 @@
+     throw new Error(
+       `compactRegion: start seq ${start} (position ${startIdx}) is after end seq ${end} (position ${endIdx}) on the surface`,
+     )
++  }
++  for(const seq of nodes.slice(startIdx,endIdx+1)){
++    const event=session.eventAt(seq)!
++    if(session.deriveEventMessage(event)===null&&deriveEventMessage(event)!==null)throw new Error('compactRegion: selected range contains hidden request-view messages')
+   }
+   // oxlint-disable-next-line typescript/no-non-null-assertion
+   if (!toolPairingBalancedBefore(session, nodes[startIdx]!)) {
+--- a/packages/compaction/compaction-tool-result-pruner/src/index.ts
++++ b/packages/compaction/compaction-tool-result-pruner/src/index.ts
+@@ -145,7 +145,8 @@
+     const pruned: PrunedEntry[] = []
+     let charsRemoved = 0
+     for (const { seq, event } of candidates) {
+-      const original = session.deriveEventMessage(event) as ToolResultMessage
++      const original = session.deriveEventMessage(event) as ToolResultMessage | null
++      if (original === null) continue
+       const content = this.pruneContent(original.content)
+       if (content === null) continue
+       const charsBefore = this.measureContent(original.content)
+--- a/packages/core/session/README.i18n.yaml
++++ b/packages/core/session/README.i18n.yaml
+@@ -59,6 +59,9 @@
+ /deepseek-ai-dsh-session/further-exploration:
+   en: e23d6c8b31295044
+   zh: 5105ac9ce8c5d90d
++/deepseek-ai-dsh-session/logged-request-views:
++  en: 173b2303eb5fb570
++  zh: bae755d978f8b4cc
+ /deepseek-ai-dsh-session/model-experience:
+   en: 215e7ba838619b7b
+   zh: a311da3843709f90
+--- a/packages/core/session/README.md
++++ b/packages/core/session/README.md
+@@ -137,6 +137,12 @@
+ -----
+ 
+ <a id="model-experience"></a>
++## Logged request views
++
++A `request/view` event selects which existing surface nodes enter subsequent model requests. Hidden messages remain in the original log; another view can restore them without creating a new Session or Agent. New nodes belong to the current activity until the next view. The host owns selection, authorization and tool-call/result pairing; the Session validates sequence membership and records the decision. Token measurement and compaction consume the same projected messages. Independent message projections remain effective while a node is hidden.
++
++This build exposes `ctx.sessions.requestViewVersion === 1`. A view-bearing log requires this build; older builds refuse its unknown required event. Do not omit or mark view events ignorable when exporting.
++
+ ## Model Experience
+ 
+ ### Derived message history
+--- a/packages/core/session/README.zh.md
++++ b/packages/core/session/README.zh.md
+@@ -137,6 +137,12 @@
+ -----
+ 
+ <a id="model-experience"></a>
++## 已记录的请求视图
++
++`request/view` 事件选择哪些已有 surface 节点进入后续模型请求。隐藏消息仍保留在原始日志中；另一视图可以在不创建新 Session 或 Agent 的情况下恢复它们。新增节点属于当前活动，直到下一次视图切换。宿主负责节点选择、授权和工具调用与结果配对；Session 校验序号是否属于当前 surface 并记录决定。Token 计量与压缩使用同一份投影消息。节点被隐藏时，其他消息投影仍然生效。
++
++此构建提供 `ctx.sessions.requestViewVersion === 1`。包含视图事件的日志需要此构建；旧构建会拒绝不认识的必需事件。导出时不得省略视图事件或将它标记为可忽略。
++
+ ## 模型体验
+ 
+ ### 派生消息历史
+--- a/packages/core/session/src/index.ts
++++ b/packages/core/session/src/index.ts
+@@ -925,6 +925,9 @@
+ export class SessionStore extends Service {
+   private store = new Map<SessionId, SessionEntry>()
+   private counter = 0
++  /** Logged request-view support understood by this build. */
++  readonly requestViewVersion: 1 = 1
++
+   private readonly projections: SessionMessageProjection[] = []
+ 
+   /** Borrowed definitions for detached replay; contributions live until their registering fibers unload. */
+--- a/packages/core/session/src/known-event-types.ts
++++ b/packages/core/session/src/known-event-types.ts
+@@ -49,6 +49,7 @@
+   'plan/mode',
+   'request/context',
+   'request/header',
++  'request/view',
+   'sandbox/mode',
+   'schedule/change',
+   'session-log-deepseek/delivery-accepted',
+--- a/packages/core/session/src/surface.ts
++++ b/packages/core/session/src/surface.ts
+@@ -28,7 +28,7 @@
+   /** Absolute sequence of the window's first event. */
+   baseSeq: SessionLogOffset
+   /** Previously projected messages keyed by their original event sequences. */
+-  messages: ReadonlyMap<SessionSeq, Message>
++  messages: ReadonlyMap<SessionSeq, Message | null>
+ }
+ 
+ /** Pure interpretation of one plugin-owned event that changes existing message content. */
+@@ -43,7 +43,7 @@
+    * @returns changed current messages keyed by their original sequences.
+    * @throws when the durable decision cannot be applied to this history.
+    */
+-  project(event: SessionEvent<T>, context: SessionMessageProjectionContext): ReadonlyMap<SessionSeq, Message>
++  project(event: SessionEvent<T>, context: SessionMessageProjectionContext): ReadonlyMap<SessionSeq, Message | null>
+ }
+ 
+ /** Runtime counterpart of the message-producing event union. */
+@@ -119,7 +119,7 @@
+  */
+ export function deriveEventMessage(
+   event: SessionEvent,
+-  projectedMessages?: ReadonlyMap<SessionSeq, Message>,
++  projectedMessages?: ReadonlyMap<SessionSeq, Message | null>,
+ ): Message | null {
+   const projected = projectedMessages?.get(event.seq)
+   if (projected !== undefined) return projected
+@@ -244,7 +244,7 @@
+   /** Replacement operations in event order. */
+   replacements: SurfaceFoldReplacement[]
+   /** Immutable projected messages, keyed by their original event sequences. */
+-  projectedMessages: ReadonlyMap<SessionSeq, Message>
++  projectedMessages: ReadonlyMap<SessionSeq, Message | null>
+ }
+ 
+ /** Readonly live projection of the message-producing session events. */
+@@ -262,7 +262,8 @@
+   nodes: SessionSeq[]
+   replaceGeneration: number
+   contentGeneration: number
+-  projectedMessages: Map<SessionSeq, Message>
++  projectedMessages: Map<SessionSeq, Message | null>
++  hiddenOriginals: Map<SessionSeq, Message | null | undefined>
+   projections: Set<SessionMessageProjection>
+ }
+ 
+@@ -276,12 +277,13 @@
+ /** One validated surface transition that has not mutated fold state yet. */
+ type SurfacePlan =
+   | { kind: 'append'; seq: SessionSeq }
++  | { kind: 'view'; visibleSeqs: ReadonlySet<SessionSeq>; nodes: readonly SessionSeq[] }
+   | SurfaceReplacePlan
+-  | { kind: 'project'; projection: SessionMessageProjection; messages: ReadonlyMap<SessionSeq, Message> }
++  | { kind: 'project'; projection: SessionMessageProjection; messages: ReadonlyMap<SessionSeq, Message | null> }
+ 
+ /** Create an empty surface fold state. */
+ function createFoldState(): SurfaceFoldState {
+-  return { nodes: [], replaceGeneration: 0, contentGeneration: 0, projectedMessages: new Map(), projections: new Set() }
++  return { nodes: [], replaceGeneration: 0, contentGeneration: 0, projectedMessages: new Map(), hiddenOriginals: new Map(), projections: new Set() }
+ }
+ 
+ /** Whether a runtime value is a non-negative safe event sequence. */
+@@ -526,6 +528,34 @@
+   }
+   const surfaceOp = validateSurfaceMetadata(event)
+   assertDeveloperHeader(event, events, baseSeq)
++  if (event.type === 'request/view') {
++    const { viewId, visibleSeqs, scopes, authorizationVersion } = event.data
++    if (typeof viewId !== 'string' || viewId.length === 0 || !Array.isArray(visibleSeqs)
++      || !Array.isArray(scopes) || scopes.length === 0 || scopes.some(scope => typeof scope !== 'string' || scope.length === 0)
++      || (authorizationVersion !== null && (!Number.isSafeInteger(authorizationVersion) || authorizationVersion < 1))) {
++      throw new Error('request/view: invalid view metadata')
++    }
++    const visible = new Set<SessionSeq>(visibleSeqs)
++    if (visible.size !== visibleSeqs.length || visibleSeqs.some(seq => !isEventSeq(seq) || !state.nodes.includes(seq))) {
++      throw new Error('request/view: selected nodes must be unique current surface sequences')
++    }
++    const calls = new Map<string, SessionSeq>()
++    for (const seq of state.nodes) {
++      const source = events[seq - baseSeq]
++      if (source === undefined) throw new Error('request/view: current node is unavailable')
++      const message = deriveEventMessage(source)
++      if (message?.role === 'assistant') {
++        for (const block of message.content) if (block.type === 'tool-call') calls.set(block.id, seq)
++      } else if (message?.role === 'tool') {
++        const call = calls.get(message.toolCallId)
++        if (call !== undefined && visible.has(call) !== visible.has(seq)) {
++          throw new Error('request/view: tool calls and their results must remain paired')
++        }
++        calls.delete(message.toolCallId)
++      }
++    }
++    return { kind: 'view', visibleSeqs: visible, nodes: [...state.nodes] }
++  }
+   const projection = projections.find(item => item.type === event.type)
+   if (projection !== undefined) {
+     return { kind: 'project', projection, messages: projection.project(event, {
+@@ -576,8 +606,27 @@
+     state.nodes.splice(plan.startIdx, plan.endIdx - plan.startIdx + 1, plan.seq)
+     state.replaceGeneration += 1
+     state.contentGeneration += 1
++  } else if (plan?.kind === 'view') {
++    for (const seq of plan.nodes) {
++      if (plan.visibleSeqs.has(seq)) {
++        if (state.hiddenOriginals.has(seq)) {
++          const original = state.hiddenOriginals.get(seq)
++          if (original === undefined) state.projectedMessages.delete(seq)
++          else state.projectedMessages.set(seq, original)
++          state.hiddenOriginals.delete(seq)
++        }
++      } else {
++        if (!state.hiddenOriginals.has(seq)) state.hiddenOriginals.set(seq, state.projectedMessages.get(seq))
++        state.projectedMessages.set(seq, null)
++      }
++    }
++    state.contentGeneration += 1
+   } else if (plan?.kind === 'project') {
+-    for (const [seq, message] of plan.messages) state.projectedMessages.set(seq, message)
++    for (const [seq, message] of plan.messages) {
++      if (state.hiddenOriginals.has(seq)) {
++        state.hiddenOriginals.set(seq, message)
++      } else state.projectedMessages.set(seq, message)
++    }
+     state.projections.add(plan.projection)
+     state.contentGeneration += 1
+   }
+--- a/packages/core/session/src/types.ts
++++ b/packages/core/session/src/types.ts
+@@ -400,6 +400,18 @@
+    * call's capability, not this snapshot from an earlier request.
+    */
+   'request/context': RequestContext
++  /**
++   * Host-selected visibility for existing working-history nodes. Nodes added
++   * after this event belong to the selected activity until its next view.
++   * Required on replay: skipping it would expose previously hidden content.
++   */
++  'request/view': {
++    viewId: Branded<'SessionRequestViewId'>
++    visibleSeqs: readonly SessionSeq[]
++    scopes: readonly string[]
++    authorizationVersion: number | null
++  }
++
+   /**
+    * Separates inherited or restored history from later lifecycle-owned work.
+    * This log-only marker need not be at {@link Session.firstLiveSeq}: a fork
+--- /dev/null
++++ b/packages/core/session/tests/request-view.spec.ts
+@@ -0,0 +1,139 @@
++import { describe, expect, it } from 'vitest'
++import { createUserMessage,createAssistantMessage,createToolResultMessage,ToolCallId } from '@deepseek-ai/dsh-llm'
++import { Session, SessionId, SessionSeq, foldSurface, deriveEventMessage } from '../src/index.ts'
++import type { SessionEventMap, SessionMessageProjection } from '../src/index.ts'
++import { Context } from '@deepseek-ai/cordis'
++import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
++import TokenMeter from '@deepseek-ai/dsh-token-meter'
++import { selectCompactableRange } from '../../../compaction/compaction-basic/src/region.ts'
++import ToolResultPruner from '@deepseek-ai/dsh-compaction-tool-result-pruner'
++
++function input(session: Session, text: string) {
++  return session.append('user/message', createUserMessage({ content: [{type: 'text', text}], source: {kind: 'user'} }), {surfaceOp: 'append'})
++}
++function view(session: Session, seqs: number[]) {
++  return session.append('request/view', {viewId: 'view' as SessionEventMap['request/view']['viewId'], visibleSeqs: seqs.map(SessionSeq), scopes: ['public'], authorizationVersion: null})
++}
++function text(session: Session) {return JSON.stringify(session.deriveMessages())}
++
++describe('logged activity request views', () => {
++  it('does not choose hidden private work for another activity compaction', async () => {
++    const ctx=new Context();new SessionProjectionRegistry(ctx);const meter=new TokenMeter(ctx,{})
++    try{
++      const s=Session.create(SessionId('private-work-retained'))
++      const secret=input(s,'PRIVATE_WORK_CANARY')
++      const publicOld=input(s,'public old '.repeat(1000))
++      input(s,'other hidden work')
++      const publicLarge=input(s,'public large '.repeat(3000))
++      const tail=input(s,'tail '.repeat(200))
++      view(s,[publicOld.seq,publicLarge.seq,tail.seq])
++      const range=selectCompactableRange(s,meter.measure(s),1)
++      expect(range).toEqual({start:publicLarge.seq,end:publicLarge.seq})
++      s.append('user/message',createUserMessage({content:[{type:'text',text:'public summary'}],source:{kind:'user'}}),{surfaceOp:{op:'replace',startSeq:publicLarge.seq,endSeq:publicLarge.seq},sourceEventSeqs:[publicLarge.seq]})
++      view(s,[secret.seq])
++      expect(text(s)).toContain('PRIVATE_WORK_CANARY')
++    }finally{await ctx.fiber.dispose()}
++  })
++  it('skips hidden tool results during model-free pruning', async () => {
++    const ctx=new Context();new SessionProjectionRegistry(ctx);new TokenMeter(ctx,{})
++    const pruner=new ToolResultPruner(ctx,{thresholdChars:50,headChars:4,tailChars:3})
++    try{
++      const s=Session.create(SessionId('private-tool-result'))
++      const secret=s.append('tool/result',{turn:1,step:1,message:createToolResultMessage({callId:ToolCallId('private'),content:[{type:'text',text:'PRIVATE_TOOL_RESULT'.repeat(100)}],isError:false})},{surfaceOp:'append'})
++      view(s,[])
++      expect(()=>pruner.pruneSession(s)).not.toThrow()
++      view(s,[secret.seq]);expect(text(s)).toContain('PRIVATE_TOOL_RESULT'.repeat(100))
++    }finally{await ctx.fiber.dispose()}
++  })
++  it('uses the same visibility for native context accounting', async () => {
++    const ctx = new Context()
++    new SessionProjectionRegistry(ctx)
++    const meter = new TokenMeter(ctx,{})
++    try {
++      const s = Session.create(SessionId('metered-view'))
++      const privateNode = input(s,'private '.repeat(10000))
++      const publicNode = input(s,'public')
++      const before = meter.measure(s).totalTokens
++      view(s,[publicNode.seq])
++      const after = meter.measure(s)
++      expect(after.totalTokens).toBeLessThan(before)
++      expect(after.surfaceTokens).toBe(meter.estimateMessage(s.deriveMessages()[0]!))
++      const breakdown=ctx.sessionProjections.snapshot(s).values.contextBreakdown
++      expect(breakdown?.messageTokens).toBe(after.surfaceTokens)
++      const checkpoint=JSON.parse(JSON.stringify(ctx.sessionProjections.checkpoint(s)))
++      expect(ctx.sessionProjections.viewCheckpoint(checkpoint).contextBreakdown).toEqual(breakdown)
++      view(s,[privateNode.seq,publicNode.seq])
++      expect(meter.measure(s).totalTokens).toBe(before)
++    } finally { await ctx.fiber.dispose() }
++  })
++  it('keeps a tool invocation and its response together', () => {
++    const s = Session.create(SessionId('tool-pair'))
++    const id = ToolCallId('call')
++    const call = s.append('assistant/message', {turn:1,step:1,stream:[],message:createAssistantMessage({source:{provider:'test',model:'test'},content:[{type:'tool-call',id,name:'read',arguments:'{}'}]})}, {surfaceOp:'append'})
++    const result = s.append('tool/result', {turn:1,step:1,message:createToolResultMessage({callId:id,isError:false,content:[{type:'text',text:'private result'}]})}, {surfaceOp:'append'})
++    expect(() => view(s,[call.seq])).toThrow(/paired/)
++    expect(() => view(s,[result.seq])).toThrow(/paired/)
++    view(s,[])
++    expect(s.deriveMessages()).toEqual([])
++    view(s,[call.seq,result.seq])
++    expect(s.deriveMessages()).toHaveLength(2)
++  })
++  it('hides private history and restores it within the same session', () => {
++    const s = Session.create(SessionId('one-mind'))
++    const secret = input(s, 'PRIVATE_CANARY_4bf871')
++    const publicText = input(s, 'public information')
++    const original = s.deriveMessages()[0]
++    view(s, [publicText.seq])
++    expect(text(s)).not.toContain('PRIVATE_CANARY_4bf871')
++    expect(text(s)).toContain('public information')
++    input(s, 'new public activity')
++    expect(text(s)).toContain('new public activity')
++    view(s, [secret.seq])
++    expect(text(s)).toContain('PRIVATE_CANARY_4bf871')
++    expect(text(s)).not.toContain('public information')
++    expect(s.deriveMessages()[0]).toBe(original)
++    expect(s.id).toBe('one-mind')
++  })
++  it('replays the selection after restart and through detached folds', () => {
++    const s = Session.create(SessionId('resume'))
++    input(s, 'private data')
++    const allowed = input(s, 'visible')
++    view(s, [allowed.seq])
++    const events = s.snapshotEvents()
++    const restored = Session.create(s.id, events)
++    expect(restored.deriveMessages()).toEqual(s.deriveMessages())
++    const folded = foldSurface(events)
++    const messages = folded.nodes.map(seq => deriveEventMessage(events[seq]!, folded.projectedMessages)).filter(Boolean)
++    expect(messages).toEqual(s.deriveMessages())
++  })
++  it('rejects duplicate and nonexistent selected nodes before commit', () => {
++    const s = Session.create(SessionId('invalid'))
++    const allowed = input(s, 'visible')
++    const before = s.seq
++    expect(() => view(s, [999])).toThrow(/current surface/)
++    expect(() => view(s, [allowed.seq, allowed.seq])).toThrow(/unique/)
++    expect(s.seq).toBe(before)
++    expect(text(s)).toContain('visible')
++    view(s, [])
++    expect(s.deriveMessages()).toEqual([])
++  })
++  it('retains independent content projection changes while a node is hidden', () => {
++    const projection: SessionMessageProjection<'image/offload'> = {
++      type: 'image/offload',
++      project(event, context) {
++        const seq = event.data.targets[0]!.seq
++        const source = context.events[seq - context.baseSeq]!
++        const original = deriveEventMessage(source)!
++        return new Map([[seq, {...original, content: [{type: 'text', text: 'offloaded safe representation'}]}]])
++      },
++    }
++    const s = Session.create(SessionId('with-offload'), undefined, undefined, undefined, [projection])
++    const privateNode = input(s, 'private image reference')
++    view(s, [])
++    s.append('image/offload', {targets: [{seq: privateNode.seq, imageIndexes: [0]}]})
++    expect(text(s)).not.toContain('offloaded safe representation')
++    view(s, [privateNode.seq])
++    expect(text(s)).toContain('offloaded safe representation')
++    expect(text(s)).not.toContain('private image reference')
++  })
++})
+--- a/packages/extensions/tool-cordis/src/api-catalog.ts
++++ b/packages/extensions/tool-cordis/src/api-catalog.ts
+@@ -2356,6 +2356,11 @@
+     description: 'In-memory session store (`ctx.sessions`).\n\nPersistence is intentionally not implemented here — the agent lifecycle attaches a session-log writer to each published session\'s write handle; a session published outside that lifecycle persists nothing.',
+     methods: [
+       {
++        signature: 'readonly requestViewVersion: 1 = 1',
++        description: 'Logged request-view support understood by this build.',
++        parameters: [],
++      },
++      {
+         signature: 'registerMessageProjection(projection: SessionMessageProjection): () => Promise<void>',
+         description: 'Register one event interpreter for live creation, restore, and fork. Disposing the contribution makes sessions that used it refuse further derivation.',
+         parameters: [{ name: 'projection', description: 'pure definition owned by the event\'s plugin.' }],
+@@ -3216,6 +3221,11 @@
+     summary: 'Replay owner for one service-wide estimator and isolated per-session folds.',
+     description: 'Replay owner for one service-wide estimator and isolated per-session folds.',
+     methods: [
++      {
++        signature: 'readonly requestViewVersion: 1 = 1',
++        description: 'Supports logged request-view visibility and audience-safe usage anchors.',
++        parameters: [],
++      },
+       {
+         signature: 'measure(session: Session, requestHeader?: EpochHeader): TokenMeasurement',
+         description: 'Measure current request pressure and surface through the durable tail.\n\nThe effective envelope\'s routed provider/model selects the request-image pricing every node is priced under: a route whose adapter declares image pricing charges each retained image its visual tokens plus its model-visible text, while other routes keep the fixed heuristic. Provider usage is reused only when the latest successful call\'s canonical request envelope matches `requestHeader` and its total is no lower than that call\'s full route-priced anchor; otherwise the complete envelope and surface are repriced. The anchor includes all surface nodes immediately before the assistant message, including inputs admitted after step/start.\n\n`requestHeader` replaces the latest logged envelope for pressure and node pricing; the node set always describes the current session surface. Every call clones those positional nodes, so measurement is O(surface).',
+@@ -6511,7 +6521,7 @@
+   },
+   {
+     name: 'SessionEventMap',
+-    declaration: 'export interface SessionEventMap {\n    \'turn/start\': {\n        turn: number;\n    };\n    \'turn/end\': {\n        turn: number;\n        reason: TurnEndReason;\n    };\n    \'step/start\': {\n        turn: number;\n        step: number;\n    };\n    \'step/end\': {\n        turn: number;\n        step: number;\n    };\n    \'user/message\': UserMessage;\n    \'developer/message\': {\n        turn: number;\n        step: number;\n        message: DeveloperMessage;\n        headerSeq?: SessionSeq;\n    };\n    \'system/message\': {\n        turn: number;\n        step: number;\n        message: SystemMessage;\n    };\n    \'assistant/message\': {\n        turn: number;\n        step: number;\n        message: AssistantMessage;\n        stream: AssistantStreamRecord[];\n        usage?: TokenUsage;\n        interrupted?: true;\n    };\n    \'assistant/attempt\': {\n        turn: number;\n        step: number;\n        stream: AssistantStreamRecord[];\n    };\n    \'tool/call\': {\n        turn: number;\n        step: number;\n        callId: ToolCallId;\n        name: string;\n        arguments: string;\n    };\n    \'tool/result\': {\n        turn: number;\n        step: number;\n        message: ToolResultMessage;\n        error?: {\n            name: string;\n            code: string;\n            reason?: string;\n        };\n        meta?: JsonValue;\n    };\n    \'request/header\': {\n        header: EpochHeader;\n        reason: RequestHeaderReason;\n        startsSeries?: true;\n    };\n    \'request/context\': RequestContext;\n    \'session/end-seed\': {\n   /* …truncated — full shape in source */',
++    declaration: 'export interface SessionEventMap {\n    \'turn/start\': {\n        turn: number;\n    };\n    \'turn/end\': {\n        turn: number;\n        reason: TurnEndReason;\n    };\n    \'step/start\': {\n        turn: number;\n        step: number;\n    };\n    \'step/end\': {\n        turn: number;\n        step: number;\n    };\n    \'user/message\': UserMessage;\n    \'developer/message\': {\n        turn: number;\n        step: number;\n        message: DeveloperMessage;\n        headerSeq?: SessionSeq;\n    };\n    \'system/message\': {\n        turn: number;\n        step: number;\n        message: SystemMessage;\n    };\n    \'assistant/message\': {\n        turn: number;\n        step: number;\n        message: AssistantMessage;\n        stream: AssistantStreamRecord[];\n        usage?: TokenUsage;\n        interrupted?: true;\n    };\n    \'assistant/attempt\': {\n        turn: number;\n        step: number;\n        stream: AssistantStreamRecord[];\n    };\n    \'tool/call\': {\n        turn: number;\n        step: number;\n        callId: ToolCallId;\n        name: string;\n        arguments: string;\n    };\n    \'tool/result\': {\n        turn: number;\n        step: number;\n        message: ToolResultMessage;\n        error?: {\n            name: string;\n            code: string;\n            reason?: string;\n        };\n        meta?: JsonValue;\n    };\n    \'request/header\': {\n        header: EpochHeader;\n        reason: RequestHeaderReason;\n        startsSeries?: true;\n    };\n    \'request/context\': RequestContext;\n    \'request/view\': {\n       /* …truncated — full shape in source */',
+   },
+   {
+     name: 'SessionEventMetadataFilter',
+@@ -6679,11 +6689,11 @@
+   },
+   {
+     name: 'SessionMessageProjection',
+-    declaration: 'export interface SessionMessageProjection<T extends SessionEventType = SessionEventType> {\n    type: T;\n    project(event: SessionEvent<T>, context: SessionMessageProjectionContext): ReadonlyMap<SessionSeq, Message>;\n}',
++    declaration: 'export interface SessionMessageProjection<T extends SessionEventType = SessionEventType> {\n    type: T;\n    project(event: SessionEvent<T>, context: SessionMessageProjectionContext): ReadonlyMap<SessionSeq, Message | null>;\n}',
+   },
+   {
+     name: 'SessionMessageProjectionContext',
+-    declaration: 'export interface SessionMessageProjectionContext {\n    nodes: readonly SessionSeq[];\n    events: readonly SessionEvent[];\n    baseSeq: SessionLogOffset;\n    messages: ReadonlyMap<SessionSeq, Message>;\n}',
++    declaration: 'export interface SessionMessageProjectionContext {\n    nodes: readonly SessionSeq[];\n    events: readonly SessionEvent[];\n    baseSeq: SessionLogOffset;\n    messages: ReadonlyMap<SessionSeq, Message | null>;\n}',
+   },
+   {
+     name: 'SessionObservation',
+--- a/packages/llm/token-meter/README.i18n.yaml
++++ b/packages/llm/token-meter/README.i18n.yaml
+@@ -50,6 +50,9 @@
+ /deepseek-ai-dsh-token-meter/further-exploration:
+   en: 32cf70f8c66ca097
+   zh: a7daf5e0732f31c3
++/deepseek-ai-dsh-token-meter/logged-request-views:
++  en: 95880fba9b0bfb35
++  zh: a3b344765d4a92da
+ /deepseek-ai-dsh-token-meter/model-experience:
+   en: 8aae37ff5ed5fc76
+   zh: 5773d20de3acfb4f
+--- a/packages/llm/token-meter/README.md
++++ b/packages/llm/token-meter/README.md
+@@ -122,6 +122,10 @@
+ -----
+ 
+ <a id="model-experience"></a>
++## Logged request views
++
++The meter prices the current Session message projection, including hidden nodes as zero-price positions. A request/view change clears the previous audience's usage anchor. The context-breakdown and pressure checkpoints use version 6 and refold earlier caches; cumulative provider billing usage is unchanged. Both the Session and Token Meter services expose requestViewVersion = 1.
++
+ ## Model Experience
+ 
+ Indirectly, through consumers such as `dsh-compaction-basic`; the service itself adds no prompt, message, schema, tool, or model call.
+--- a/packages/llm/token-meter/README.zh.md
++++ b/packages/llm/token-meter/README.zh.md
+@@ -122,6 +122,10 @@
+ -----
+ 
+ <a id="model-experience"></a>
++## 持久化请求视图
++
++计量器按当前 Session 消息投影定价，隐藏节点保留位置但价格为零。request/view 变化会清除上一个可见范围的用量锚点。上下文构成与压力检查点使用版本 6，并重新折叠旧缓存；累计提供方计费用量不变。Session 与 Token Meter 服务均暴露 requestViewVersion = 1。
++
+ ## 模型体验
+ 
+ 间接地，通过 `dsh-compaction-basic` 等消费方；服务本身不添加任何提示词、消息、schema、工具或模型调用。
+--- a/packages/llm/token-meter/src/breakdown-projection.ts
++++ b/packages/llm/token-meter/src/breakdown-projection.ts
+@@ -29,6 +29,7 @@
+ 
+ /** Plain-JSON checkpoint: one compact entry per retained surface position. */
+ const contextBreakdownStateSchema = z.object({
++  view: z.object({seq:sessionSeq,visibleSeqs:z.array(sessionSeq)}).strict().optional(),
+   nodes: z.array(z.object({
+     seq: sessionSeq,
+     heuristicTokens: tokenCount,
+@@ -47,13 +48,20 @@
+  */
+ export const contextBreakdownProjectionDefinition = {
+   key: 'contextBreakdown',
+-  stateVersion: 5,
++  stateVersion: 6,
+   stateSchema: contextBreakdownStateSchema,
+   init: (): ContextBreakdownState => ({
+     nodes: [],
+     breakdown: { systemTokens: 0, toolsTokens: 0, messageTokens: 0 },
+   }),
+   apply: (state, event) => {
++    if(event.type==='request/view') {
++      const view={seq:event.seq,visibleSeqs:[...event.data.visibleSeqs]},visible=new Set(view.visibleSeqs)
++      const nodes=state.nodes.filter(node=>visible.has(node.seq))
++      const systemTokens=nodes.findLast(node=>node.system&&node.heuristicTokens>0)?.heuristicTokens??0
++      const messageTokens=nodes.reduce((total,node)=>total+node.heuristicTokens,0)-systemTokens
++      return {...state,view,breakdown:{...state.breakdown,systemTokens,messageTokens}}
++    }
+     if (event.type === 'request/header') {
+       const toolsTokens = estimateToolsTokens(canonicalHeader(event.data.header))
+       return toolsTokens === state.breakdown.toolsTokens
+@@ -67,12 +75,13 @@
+       ...plan,
+       node: { seq: event.seq, heuristicTokens: plan.tokens, system: event.type === 'system/message' },
+     })
+-    const systemTokens = nodes.findLast(node => node.system && node.heuristicTokens > 0)?.heuristicTokens ?? 0
+-    const messageTokens = state.breakdown.systemTokens + state.breakdown.messageTokens + plan.deltaTokens - systemTokens
++    const visible=state.view===undefined?nodes:nodes.filter(node=>node.seq>state.view!.seq||state.view!.visibleSeqs.includes(node.seq))
++    const systemTokens = visible.findLast(node => node.system && node.heuristicTokens > 0)?.heuristicTokens ?? 0
++    const messageTokens = visible.reduce((total,node)=>total+node.heuristicTokens,0)-systemTokens
+     const breakdown = systemTokens === state.breakdown.systemTokens && messageTokens === state.breakdown.messageTokens
+       ? state.breakdown
+       : { systemTokens, toolsTokens: state.breakdown.toolsTokens, messageTokens }
+-    return { nodes, breakdown }
++    return { ...state,nodes, breakdown }
+   },
+   wire: {
+     viewSchema: breakdownSchema,
+--- a/packages/llm/token-meter/src/index.ts
++++ b/packages/llm/token-meter/src/index.ts
+@@ -33,7 +33,7 @@
+ import { contextBreakdownProjectionDefinition } from './breakdown-projection.ts'
+ import { contextPressureProjectionDefinition, tokenUsageProjectionDefinition } from './usage-projection.ts'
+ import { estimateContent, estimateMessage, estimateToolsTokens, ROLE_OVERHEAD } from './estimate.ts'
+-import { commitSurfaceTokens, planSurfaceTokens } from './surface-fold.ts'
++import { analyzeNode, commitSurfaceTokens, planSurfaceTokens } from './surface-fold.ts'
+ import type { MeterSurfaceNode } from './surface-fold.ts'
+ import { priceSurface } from './route-pricing.ts'
+ 
+@@ -65,6 +65,13 @@
+   surface: MeterSurfaceNode[]
+   stepStart: { turn: number; step: number } | undefined
+   anchor: MeasurementAnchor | undefined
++  view?: { seq: number; visible: ReadonlySet<number> }
++}
++
++/** Filter retained prices by the latest logged request selection. */
++function visibleNodes(state: ReplayState): MeterSurfaceNode[] {
++  const view = state.view
++  return view === undefined ? [...state.surface] : state.surface.filter(node => node.seq > view.seq || view.visible.has(node.seq))
+ }
+ 
+ /** Sum disjoint provider usage buckets without double-counting reasoning output. */
+@@ -99,6 +106,8 @@
+ 
+ /** Replay owner for one service-wide estimator and isolated per-session folds. */
+ export class TokenMeter extends Service {
++  /** Supports logged request-view visibility and audience-safe usage anchors. */
++  readonly requestViewVersion: 1 = 1
+   // Schemastery preserves untrusted loader keys on an empty object schema;
+   // the public type excludes settings while validateConfigKeys rejects them.
+   static Config: z<TokenMeterConfig> = z.object({}) as unknown as z<TokenMeterConfig>
+@@ -150,7 +159,8 @@
+       : canonicalHeader(requestHeader)
+     const pricing = this._routeImagePricing(header)
+     const fileText = this._fileRequestText()
+-    const surface = priceSurface(state.surface, pricing, fileText)
++    const nodes = session.surface.nodes.map(seq => analyzeNode(seq,session.deriveEventMessage(session.eventAt(seq)!)))
++    const surface = priceSurface(nodes, pricing, fileText)
+     const anchor = state.anchor
+ 
+     let baseline: TokenMeasurementBaseline
+@@ -250,6 +260,10 @@
+     let nextAnchor = state.anchor
+ 
+     switch (event.type) {
++      case 'request/view':
++        state.view = {seq:event.seq,visible:new Set(event.data.visibleSeqs)}
++        nextAnchor = undefined
++        break
+       case 'image/offload': {
+         const offloaded = new Map(event.data.targets.map(target => [target.seq, new Set(target.imageIndexes)]))
+         state.surface = state.surface.map((node) => {
+@@ -306,14 +320,14 @@
+       if (event.data.usage !== undefined && nextHeader !== undefined) {
+         nextAnchor = {
+           header: nextHeader,
+-          nodes: [...state.surface],
++          nodes: visibleNodes(state),
+           assistantTokens: this._estimateProviderAssistant(event),
+           usage: event.data.usage,
+         }
+       } else {
+         nextAnchor = {
+           header: nextHeader,
+-          nodes: [...state.surface],
++          nodes: visibleNodes(state),
+           assistantTokens: eventTokens,
+           usage: undefined,
+         }
+--- a/packages/llm/token-meter/src/surface-fold.ts
++++ b/packages/llm/token-meter/src/surface-fold.ts
+@@ -69,8 +69,13 @@
+   return { imageTokens, fileTokens }
+ }
+ 
+-/** Build one priced node from a surface event's derived message. */
+-function analyzeNode(seq: SessionSeq, message: Message | null): MeterSurfaceNode {
++/**
++ * Build one priced node from a surface event's derived message.
++ * @param seq - durable identity of the surface position.
++ * @param message - projected visible message, or null for a hidden position.
++ * @returns heuristic and attachment prices for the supplied position.
++ */
++export function analyzeNode(seq: SessionSeq, message: Message | null): MeterSurfaceNode {
+   if (message === null) {
+     return {
+       seq,
+--- a/packages/llm/token-meter/src/usage-projection.ts
++++ b/packages/llm/token-meter/src/usage-projection.ts
+@@ -172,10 +172,16 @@
+  */
+ export const contextPressureProjectionDefinition = {
+   key: 'contextPressure',
+-  stateVersion: 5,
++  stateVersion: 6,
+   stateSchema: contextPressureStateSchema,
+   init: () => ({ surfaceTokens: 0 }),
+   apply: (state, event) => {
++    if(event.type==='request/view'){
++      // A previous audience's usage sample cannot anchor this new request.
++      // Wait for a fresh provider sample; billing totals remain unchanged.
++      const {pressureTokens:_pressure,sampledSurfaceTokens:_sample,claim:_claim,...rest}=state
++      return rest
++    }
+     const fold = foldSurfaceProjection(state.claim, event)
+     let next = state
+     if (event.type === 'request/context') {
+--- a/packages/llm/token-meter/tests/context-breakdown-projection.spec.ts
++++ b/packages/llm/token-meter/tests/context-breakdown-projection.spec.ts
+@@ -412,7 +412,7 @@
+       ctx.sessionProjections.checkpoint(session),
+     )) as ReturnType<typeof ctx.sessionProjections.checkpoint>
+     const row = checkpoint['contextBreakdown']!
+-    expect(row.ver).toBe(5)
++    expect(row.ver).toBe(6)
+     expect(ctx.sessionProjections.viewCheckpoint(checkpoint).contextBreakdown).toEqual(projected(ctx, session))
+     const replacement = session.append('user/message', createUserMessage({
+       content: [{ type: 'text', text: 'summary' }], source: { kind: 'user' },
+@@ -431,7 +431,7 @@
+       stale, session.snapshotEvents(), SessionLogOffset(0), session.header, session.inheritedEventCount,
+     )
+     expect(replayed.snapshot.values.contextBreakdown).toEqual(projected(ctx, session))
+-    expect(replayed.checkpoint['contextBreakdown']?.ver).toBe(5)
++    expect(replayed.checkpoint['contextBreakdown']?.ver).toBe(6)
+     const invalid = {
+       ...checkpoint,
+       contextBreakdown: {
+@@ -465,7 +465,7 @@
+         systemTokens: 8, toolsTokens: staleValue.toolsTokens, messageTokens: 9,
+       })
+       expect(restored.checkpoint).toEqual(current)
+-      expect(restored.checkpoint['contextBreakdown']?.ver).toBe(5)
++      expect(restored.checkpoint['contextBreakdown']?.ver).toBe(6)
+     } finally {
+       await ctx.fiber.dispose()
+     }
+--- a/packages/llm/token-meter/tests/token-usage-projection.spec.ts
++++ b/packages/llm/token-meter/tests/token-usage-projection.spec.ts
+@@ -446,7 +446,7 @@
+     const checkpoint = JSON.parse(JSON.stringify(
+       ctx.sessionProjections.checkpoint(session),
+     )) as ReturnType<typeof ctx.sessionProjections.checkpoint>
+-    expect(checkpoint.contextPressure?.ver).toBe(5)
++    expect(checkpoint.contextPressure?.ver).toBe(6)
+ 
+     await meterFiber.dispose()
+     expect(ctx.sessionProjections.snapshot(session).values).not.toHaveProperty('contextPressure')

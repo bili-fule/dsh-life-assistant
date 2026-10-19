@@ -16,6 +16,7 @@ import { BrowserTools,workspacePath } from './tools.mjs'
 import { communicationState,forgetCommunication,resetCommunication } from './communication.mjs'
 import { Maintenance } from './maintenance.mjs'
 import { markdownChunks } from './markdown.mjs'
+import { SocialAgent } from './social-agent.mjs'
 
 export function safeBase(value) {
   const u=new URL(value)
@@ -39,6 +40,7 @@ export class Runtime {
     this.media=new Media({store:this.store,workspace:this.workspace,attachments:config.attachments,signal:this.abort.signal,config})
     this.tools=new BrowserTools({workspace:this.workspace,signal:this.abort.signal,config})
     this.model=config.agentDriver??new NativeAgent(config.nativeContext,this,this.config)
+    this.autonomy=new SocialAgent(this,config.nativeContext,config.autonomy??{})
     this.maintenance=new Maintenance(this,config)
     this.running=false;this.working=null;this.polling=null;this.login=null;this.pollGeneration=0
     const tokenPath=join(this.stateDir,'admin-token')
@@ -56,6 +58,7 @@ export class Runtime {
     this.server=createServer((req,res)=>this.http(req,res).catch(()=>{if(!res.headersSent)json(res,{error:'操作未完成，请检查输入或查看状态'},400);else res.end()}))
     await new Promise((yes,no)=>{this.server.once('error',no);this.server.listen(this.config.port,this.config.host,yes)})
     this.timer=setInterval(()=>{if(!this.working)this.working=this.tick().catch(e=>this.log('worker.error',e)).finally(()=>{this.working=null})},500)
+    this.deliveryTimer=setInterval(()=>{void this.deliveryTick().catch(e=>this.log('delivery.error',e))},500)
     this.working=this.tick().catch(e=>this.log('worker.error',e)).finally(()=>{this.working=null})
     this.startPolling()
     console.log(`[life-assistant] ready on ${this.config.host}:${this.config.port}; private data outside plugin source`)
@@ -67,7 +70,8 @@ export class Runtime {
       provider:this.config.provider,model:this.config.model,timezone:'Asia/Shanghai',engine:'DSH native Agent',nativeSessionId:this.store.get('native_session_id'),
       batching:{quietSeconds:this.batcher.quietMs/1000,maxWaitSeconds:this.batcher.maxWaitMs/1000,maxMessages:this.batcher.maxMessages},
       maintenance:this.maintenance.status(),markdown:true,communication:communicationState(this.store,{all:true}),contextPolicy:{configuredTriggerTokens:263000,declaredModelWindow:1000000,retainTokens:65536,summaryMaxTokens:8192},
-      capabilities:{shell:true,links:true,browser:true,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true,messageSending:true},workspaceFiles:this.workspaceFiles(),
+      capabilities:{shell:!this.autonomy.enabled||!!this.autonomy.executor,links:true,browser:!this.autonomy.enabled,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true,messageSending:true},workspaceFiles:this.workspaceFiles(),
+      autonomy:{enabled:this.autonomy.enabled,nativeReady:this.autonomy.nativeReady,...this.autonomy.data.snapshot(),persona:this.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同边界。'),self:this.store.get('yoyo_self',{mood:'calm',energy:'steady'}),plans:this.store.db.prepare('SELECT id,title,progress,state,not_before,scopes FROM yoyo_plans ORDER BY updated_at DESC LIMIT 30').all(),settings:this.store.get('yoyo_settings',{observeOnly:true,paused:false,dailySteps:0}),qqConfigured:!!this.autonomy.qq},
       persona:this.store.get('persona','你是一位贴心但不啰嗦的中文事务助理，说话自然，判断谨慎，帮用户把事情理清楚。'),
       styleLearning:this.store.get('style_learning',true),learnedStyle:this.store.get('learned_style',{}),styleCounts:this.store.get('style_counts',{}),
       quiet:this.store.get('quiet',{start:22,end:8}),digestHour:this.store.get('digest_hour',9),deliveryError:this.store.get('delivery_error'),pollError:this.store.get('poll_error'),lastInbound:this.store.get('last_inbound'),modelHealth:this.store.get('model_health')}
@@ -77,6 +81,12 @@ export class Runtime {
     res.setHeader('x-content-type-options','nosniff');res.setHeader('referrer-policy','no-referrer');res.setHeader('x-frame-options','DENY')
     res.setHeader('content-security-policy',"default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
     if(req.method==='GET' && url.pathname==='/health')return json(res,{ok:true,service:'dsh-life-assistant'})
+    if(req.method==='POST'&&url.pathname==='/onebot/event') {
+      const qq=this.autonomy.qq;if(!qq)return json(res,{error:'QQ 未配置'},404)
+      let size=0;const parts=[];for await(const chunk of req){size+=chunk.length;if(size>1024*1024)throw Error('消息过大');parts.push(chunk)}
+      const bytes=Buffer.concat(parts);if(!qq.authorizedEvent(req.headers,bytes))return json(res,{error:'上报认证失败'},401)
+      qq.ingest(this.autonomy.data,JSON.parse(bytes.toString()));return json(res,{ok:true})
+    }
     const assets={'/':['../public/index.html','text/html; charset=utf-8'],'/app.js':['../public/app.js','text/javascript; charset=utf-8'],'/app.css':['../public/app.css','text/css; charset=utf-8']}
     if(req.method==='GET' && assets[url.pathname]) {const [file,type]=assets[url.pathname];res.writeHead(200,{'content-type':type,'cache-control':'no-store'});return res.end(readFileSync(new URL(file,import.meta.url)))}
     const token=String(req.headers.authorization??'').replace(/^Bearer /,'')
@@ -87,6 +97,21 @@ export class Runtime {
     if(req.method==='GET' && url.pathname==='/api/asset') {const file=workspacePath(this.workspace,url.searchParams.get('path')??'');if(!statSync(file).isFile())throw Error('路径不是文件');res.writeHead(200,{'content-type':'application/octet-stream','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(safeFilename(file))});return createReadStream(file).on('error',()=>res.destroy()).pipe(res)}
     if(req.method!=='POST')return json(res,{error:'没有这个操作'},404)
     const data=await body(req,url.pathname==='/api/upload'?44*1024*1024:100000)
+    if(url.pathname==='/api/yoyo/settings') {
+      const current=this.store.get('yoyo_settings',{observeOnly:true,paused:false,dailySteps:0})
+      if(Object.keys(data).some(k=>!['observeOnly','paused','dailySteps','persona'].includes(k)))throw Error('设置项无效')
+      for(const k of ['observeOnly','paused'])if(k in data&&typeof data[k]!=='boolean')throw Error('开关设置无效')
+      if('dailySteps' in data&&(!Number.isSafeInteger(data.dailySteps)||data.dailySteps<0||data.dailySteps>100000))throw Error('每日预算无效')
+      if('persona' in data){if(typeof data.persona!=='string'||!data.persona.trim()||data.persona.length>2000)throw Error('人设无效');this.store.set('yoyo_persona',data.persona)}
+      const {persona,...settings}=data;this.store.set('yoyo_settings',{...current,...settings})
+      if(data.observeOnly===true||data.paused===true)this.autonomy.data.db.prepare("UPDATE yoyo_outbox SET state='cancelled',error='已暂停发言' WHERE state IN ('queued','retry_wait') AND (?=1 OR target IN (SELECT handle FROM yoyo_targets WHERE platform='qq'))").run(data.paused===true?1:0)
+      if(data.paused===true&&this.model.sessionId){const result=await this.config.nativeContext?.sessionController.resolveAgent(this.model.sessionId);result?.agent?.cancel({kind:'hook',reason:'用户暂停自主活动'})}
+      return json(res,{ok:true})
+    }
+    if(url.pathname==='/api/yoyo/approve')return json(res,{target:this.autonomy.data.approve(data.target,data.approved)})
+    if(url.pathname==='/api/yoyo/wake') {const target=data.target??'overview';if(!['overview','public'].includes(target))this.autonomy.data.target(target,{approved:true});this.store.set('yoyo_next_focus',target);return json(res,{ok:true})}
+    if(url.pathname==='/api/yoyo/qq-check') {if(!this.autonomy.qq)throw Error('QQ 未配置');return json(res,await this.autonomy.qq.health(this.abort.signal))}
+    if(url.pathname==='/api/yoyo/forget')return json(res,{forgotten:this.autonomy.data.forget(data.id)})
     if(url.pathname==='/api/upload') {
       if(typeof data.data!=='string'||data.data.length>43*1024*1024)throw Error('文件过大')
       const bytes=Buffer.from(data.data,'base64');if(!bytes.length||bytes.length>32*1024*1024)throw Error('文件大小无效')
@@ -190,6 +215,12 @@ export class Runtime {
   }
   async tick() {
     if(!this.running)return
+    if(this.autonomy.enabled){
+      await this.autonomy.tick();schedule(this.store);await this.deliveryTick()
+      const date=localParts().date;if(this.store.get('backup_date')!==date){this.backup();this.store.set('backup_date',date)}
+      const job=this.maintenance.next();if(job&&this.model.maintain&&!this.store.get('yoyo_next_focus'))await this.maintenance.run(job)
+      return
+    }
     const batch=this.batcher.ready(),row=batch?.[0]
     if(row) {
       this.batcher.claim(batch)
@@ -213,11 +244,19 @@ export class Runtime {
       } finally {this.activeBatch=null;this.store.set('conversation_finished_at',Date.now())}
     }
     schedule(this.store)
-    if(this.store.get('wechat')?.token&&this.store.get('context_token'))await deliverOne(this.store,(text,key,kind)=>this.send(text,key,kind))
+    await this.deliveryTick()
     const date=localParts().date
     if(this.store.get('backup_date')!==date){this.backup();this.store.set('backup_date',date)}
     const job=this.maintenance.next()
     if(job&&this.model.maintain)await this.maintenance.run(job)
+  }
+  async deliveryTick() {
+    if(this.delivering)return this.delivering
+    this.delivering=(async()=>{
+      if(this.store.get('wechat')?.token&&this.store.get('context_token'))await deliverOne(this.store,(text,key,kind)=>this.send(text,key,kind))
+      if(this.autonomy.enabled)await this.autonomy.deliver()
+    })().finally(()=>{this.delivering=null})
+    return this.delivering
   }
 
   async waitForMore(reason,signal) {
@@ -259,21 +298,23 @@ export class Runtime {
     this.store.enqueue('file:'+key,'file',JSON.stringify({path:relative(this.workspace,path),name:basename(path),hash}))
     return {queued:true,path:relative(this.workspace,path),message:'文件已加入微信发送队列，发送状态可在管理页查看。'}
   }
-  async send(text,key,kind='reply') {
+  async send(text,key,kind='reply',authorize=()=>{}) {
     const c=this.store.get('wechat'),to=this.store.get('owner'),contextToken=this.store.get('context_token')
     if(!c?.token||!to||!contextToken)throw Error('微信尚未建立可用会话')
+    authorize()
     if(kind==='file') {
       const file=JSON.parse(text),path=workspacePath(this.workspace,file.path),data=readFileSync(path)
       if(createHash('sha256').update(data).digest('hex')!==file.hash)throw Error('待发送文件已变更，需要重新发送')
       let item=this.store.get('uploaded:'+key)
       if(!item){item=await ilink.uploadMedia({baseUrl:safeBase(c.base),token:c.token,to,data,name:file.name,image:/\.(png|jpe?g|webp|gif)$/i.test(file.name)});this.store.set('uploaded:'+key,item)}
-      await ilink.sendMedia({baseUrl:safeBase(c.base),token:c.token,to,contextToken,item,clientId:'life-'+createHash('sha256').update(key).digest('hex').slice(0,32)})
+      authorize();await ilink.sendMedia({baseUrl:safeBase(c.base),token:c.token,to,contextToken,item,clientId:'life-'+createHash('sha256').update(key).digest('hex').slice(0,32)})
       return
     }
     const parts=markdownChunks(text)
     for(let i=0;i<parts.length;i++) {
       const chunkKey=`sent-chunk:${key}:${i}`
       if(this.store.get(chunkKey))continue
+      authorize()
       await ilink.sendMessage({baseUrl:safeBase(c.base),token:c.token,to,text:parts[i],contextToken,maxAttempts:1,clientId:'life-'+createHash('sha256').update(chunkKey).digest('hex').slice(0,32)})
       this.store.set(chunkKey,true)
     }
@@ -288,9 +329,10 @@ export class Runtime {
     this.store.audit('backup.created',{})
   }
   async stop() {
-    this.running=false;this.abort.abort();clearInterval(this.timer);this.pollGeneration++
+    this.running=false;this.abort.abort();clearInterval(this.timer);clearInterval(this.deliveryTimer);this.pollGeneration++
     if(this.server)await new Promise(r=>this.server.close(r))
-    await this.working?.catch(()=>{});await this.polling?.catch(()=>{})
+    await this.working?.catch(()=>{});await this.polling?.catch(()=>{});await this.delivering?.catch(()=>{})
+    this.autonomy.stop()
     this.model.stop?.()
     await this.tools.stop()
     // Login polling is bounded and never mutates the store after running=false.
