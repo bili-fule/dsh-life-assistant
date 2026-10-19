@@ -36,3 +36,13 @@ test('communication learning does not promote one utterance or a forwarded ident
  const forwarded=data.ingest({target:target.handle,sender:'123',externalId:'three',text:'直说吧',segments:[{type:'forward',data:{id:'forward'}}]})
  assert.throws(()=>data.remember(view.id,{...value,confidence:'self_report',sources:[{id:forwarded.id,quote:'直说吧'}]}),/直接原文/)
 })
+
+
+test('operator retry reuses a failed range with a new request and advances the cursor on success',t=>{
+ const {data,maintenance,target,view}=fixture(t),now=Date.parse('2026-10-19T15:00:00+08:00')
+ const message=data.ingest({target:target.handle,sender:'123',externalId:'one',text:'记录一下',receivedAt:now-300000});data.markRead(view.id,[message.id])
+ const job=maintenance.claim(maintenance.next(now),'first',now);maintenance.finish(job,{ok:false,error:'timeout'},now)
+ assert.equal(maintenance.next(now+1000),null);maintenance.retry(job.id)
+ const retry=maintenance.claim(maintenance.next(now+1000),'second',now+1000);assert.equal(retry.id,job.id)
+ maintenance.finish(retry,{ok:true},now+2000);assert.equal(maintenance.status().cursors[0].through_id,message.id)
+})

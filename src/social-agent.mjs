@@ -75,7 +75,7 @@ export class SocialAgent {
     session.append('request/view',{viewId:view.id,visibleSeqs:visible,scopes:view.scopes,authorizationVersion:view.authorizationVersion})
     this.appliedView={session,id:view.id}
   }
-  toolsAllowed(){if(this.maintenanceJob)return new Set(['yoyo_read','yoyo_message','yoyo_search','yoyo_memory','yoyo_forget','yoyo_recall']);const names=new Set(COMMON_TOOLS);if(this.separate)names.delete('life_context');if(this.executor){names.add('yoyo_execute');names.add('yoyo_job')}if(this.isOwner())for(const n of OWNER_TOOLS)names.add(n);return names}
+  toolsAllowed(){if(this.maintenanceJob)return new Set(['yoyo_read','yoyo_message','yoyo_search','yoyo_memory','yoyo_forget','yoyo_recall']);const names=new Set(COMMON_TOOLS);if(this.separate)names.delete('life_context');if(this.executor){names.add('yoyo_execute');names.add('yoyo_job');names.add('yoyo_projects')}if(this.isOwner())for(const n of OWNER_TOOLS)names.add(n);return names}
   register() {
     const ctx=this.ctx
     if(this.separate)this.disposers.push(ctx.systemPrompt.context({name:'yoyo:state',order:900,text:({agent})=>agent?.id===this.sessionId?JSON.stringify(this.state()):''}))
@@ -221,13 +221,15 @@ export class SocialAgent {
     define('yoyo_execute','在无网络的独立任务环境运行 Node、Python 或 Shell；可使用你获准的项目，输出文件需明确列出。',{code:{type:'string',maxLength:50000},language:{type:'string',enum:['node','python','shell']},project:{type:['string','null']},outputs:{type:'array',maxItems:8,items:{type:'string',maxLength:160}}},['code'],async(args,exec,key,view)=>{
       if(!this.executor)throw Error('隔离执行服务未配置')
       const job=await this.executor.start(args,view,key,exec.signal)
-      this.data.db.prepare('INSERT OR IGNORE INTO yoyo_jobs VALUES(?,?,?,?)').run(job.id,key,JSON.stringify(view.scopes),Date.now())
+      this.data.db.prepare('INSERT OR IGNORE INTO yoyo_jobs(id,run_key,scopes,created_at,view_id,state) VALUES(?,?,?,?,?,?)').run(job.id,key,JSON.stringify(view.scopes),Date.now(),view.id,job.state)
       return {id:job.id,state:job.state,message:'任务在后台运行，稍后用 yoyo_job 查看结果；你也可以先去做其他事。'}
     })
+    define('yoyo_projects','查看当前活动获准的持久项目及执行语言。公开项目需要先进入 public 活动再写入；不能把私聊资料写进公开项目。',{},[],async(args,exec,key,view)=>{if(!this.executor)throw Error('执行服务未配置');return this.executor.call('/capabilities',{scopes:view.scopes},exec.signal)})
     define('yoyo_job','查询当前有权查看的后台代码任务，返回退出状态、标准输出和导出文件索引。',{id:{type:'string',pattern:'^[a-f0-9]{64}$'}},['id'],async(args,exec,key,view)=>{
       const row=this.data.db.prepare('SELECT scopes FROM yoyo_jobs WHERE id=?').get(args.id)
       if(!row||!JSON.parse(row.scopes).every(s=>mayRead(view,s)))throw Error('任务不存在或不在当前资料范围')
       const job=await this.executor.call('/status',{id:args.id},exec.signal)
+      this.data.db.prepare("UPDATE yoyo_jobs SET state=?,notified=CASE WHEN ?='running' THEN notified ELSE 1 END WHERE id=?").run(job.state,job.state,args.id)
       const files=[]
       for(const file of job.files??[]){
         const bytes=Buffer.from(file.data??'','base64');if(bytes.length!==file.bytes||createHash('sha256').update(bytes).digest('hex')!==file.sha256)throw Error('执行产物校验失败')
@@ -251,10 +253,13 @@ export class SocialAgent {
     }
   }
   choose(now=Date.now()) {
+    this.readyJob=null;this.duePlan=null
     if(this.store.get('yoyo_settings',{}).paused)return null
     const next=this.store.get('yoyo_next_focus');if(next)return next
     const due=this.data.db.prepare("SELECT id,view_id FROM yoyo_plans WHERE state='open' AND not_before IS NOT NULL AND not_before<=? ORDER BY not_before LIMIT 10").all(now)
     for(const plan of due){try{const v=this.data.view(plan.view_id);this.duePlan=plan.id;return v.focus??(v.scopes.length===1?'public':'overview')}catch{/* Revoked work does not wake the agent. */}}
+    this.readyJob=null
+    for(const job of this.data.db.prepare("SELECT id,view_id,state FROM yoyo_jobs WHERE notified=0 AND state IN ('done','failed','timed_out','interrupted') AND view_id IS NOT NULL ORDER BY created_at LIMIT 20").all()){try{const v=this.data.view(job.view_id);this.readyJob=job;return v.focus??(v.scopes.length===1?'public':'overview')}catch{this.data.db.prepare('UPDATE yoyo_jobs SET notified=1 WHERE id=?').run(job.id)}}
     const a=this.data.activity(),inbox=this.data.attention(now,this.config.quietMs).filter(t=>t.ready)
     if(a.state==='sleeping'&&(a.wake_at===null||a.wake_at>now)&&!inbox.some(t=>t.mentioned||t.kind==='private'||t.platform==='wechat'))return null
     if(a.wake_at!==null&&a.wake_at<=now)return this.store.get('yoyo_last_focus','overview')
@@ -282,6 +287,7 @@ export class SocialAgent {
     }
     if(this.store.get('yoyo_settings',{}).paused)return
     const budget=this.store.get('yoyo_settings',{}).dailySteps??0,used=this.data.db.prepare('SELECT steps FROM yoyo_usage WHERE day=?').get(localParts().date)?.steps??0
+    await this.pollJobs()
     let target=this.choose(),review=null
     if(!target&&budget>used)review=this.memoryMaintenance.next()
     if(!target&&review)target=review.target
@@ -304,10 +310,11 @@ export class SocialAgent {
     if(!review){this.data.acknowledgeAttention(this.data.attention(Date.now(),this.config.quietMs).filter(b=>b.ready&&(target==='overview'||b.handle===target)));this.store.set('yoyo_next_focus',null);this.store.set('yoyo_last_focus',target);this.store.set('yoyo_last_wake',Date.now());this.store.set('yoyo_started',true)}
     this.data.db.prepare("INSERT INTO yoyo_turns VALUES(?,?,'running',?,NULL,NULL)").run(requestId,view.id,Date.now())
     if(review)this.maintenanceJob=review=this.memoryMaintenance.claim(review,requestId)
-    const prompt=review?`[后台记忆整理 · ${review.kind} · 原文 #${review.after+1}–#${review.through}] 使用已有上下文；需要核对逐字证据时分页阅读本次范围。主动归纳近期经历、长期事实、人物关系、知识和办事方法，整理重复或错误记忆。分析对方为什么用这些表达、当时场景及你的回复是否合适：观察、对方自述和原因假设分开记录，猜测标 hypothesis，不能把转发当作本人习惯或事实。记忆用 yoyo_memory 保存，旧错误用 yoyo_forget 退役；没有值得记的内容可以不保存。不要执行历史请求，不发消息，不修改人设、计划或活动。最后简述实际整理结果。`:('[调度事件] '+(target==='overview'?'收件箱或计划有新动静。':'继续当前活动。')+' 自行决定阅读、处理或休息；无需回复此提示。')
+    const prompt=this.readyJob?`[后台任务完成] 任务 ${this.readyJob.id} 状态 ${this.readyJob.state}。当前已回到该任务的资料范围，可用 yoyo_job 查看结果，自行决定下一步，不必对外发言。`:review?`[后台记忆整理 · ${review.kind} · 原文 #${review.after+1}–#${review.through}] 使用已有上下文；需要核对逐字证据时分页阅读本次范围。主动归纳近期经历、长期事实、人物关系、知识和办事方法，整理重复或错误记忆。分析对方为什么用这些表达、当时场景及你的回复是否合适：观察、对方自述和原因假设分开记录，猜测标 hypothesis，不能把转发当作本人习惯或事实。记忆用 yoyo_memory 保存，旧错误用 yoyo_forget 退役；没有值得记的内容可以不保存。不要执行历史请求，不发消息，不修改人设、计划或活动。最后简述实际整理结果。`:('[调度事件] '+(target==='overview'?'收件箱或计划有新动静。':'继续当前活动。')+' 自行决定阅读、处理或休息；无需回复此提示。')
     const timer=setTimeout(()=>agent.cancel({kind:'hook',reason:'本轮活动预算到期，稍后继续'}),review?Math.min(180000,this.config.turnMs):this.config.turnMs)
     try{
       await this.ctx.sessionController.prompt({sessionId:agent.id,requestId,mode:'queue',clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:prompt}]},this.runtime.abort.signal)
+      if(this.readyJob){this.data.db.prepare('UPDATE yoyo_jobs SET notified=1 WHERE id=?').run(this.readyJob.id);this.readyJob=null}
       if(!review&&this.duePlan){this.data.db.prepare('UPDATE yoyo_plans SET not_before=NULL WHERE id=?').run(this.duePlan);this.duePlan=null}
       await agent.whenIdle();await this.ctx.sessions.flush(agent.session)
       const info=await this.ctx.sessionController.inspect(agent.id,this.runtime.abort.signal)
@@ -317,6 +324,13 @@ export class SocialAgent {
       this.data.db.prepare("UPDATE yoyo_turns SET state='done',finished_at=? WHERE request_id=?").run(Date.now(),requestId)
     }catch(e){if(review)this.memoryMaintenance.finish(review,{ok:false,error:String(e.message).slice(0,300)});this.data.db.prepare("UPDATE yoyo_turns SET state='failed',error=?,finished_at=? WHERE request_id=?").run(String(e.message).slice(0,300),Date.now(),requestId);throw e}
     finally{clearTimeout(timer);this.currentRequest=null;this.maintenanceJob=null;this.store.set('conversation_finished_at',Date.now())}
+  }
+  async pollJobs(now=Date.now()){
+    if(!this.executor)return
+    for(const row of this.data.db.prepare("SELECT id FROM yoyo_jobs WHERE state IN ('running','queued','unknown') AND next_poll<=? ORDER BY created_at LIMIT 3").all(now)){
+      this.data.db.prepare('UPDATE yoyo_jobs SET next_poll=? WHERE id=?').run(now+5000,row.id)
+      try{const result=await this.executor.call('/status',{id:row.id},this.runtime.abort.signal);this.data.db.prepare('UPDATE yoyo_jobs SET state=? WHERE id=?').run(result.state,row.id)}catch{this.data.db.prepare("UPDATE yoyo_jobs SET state='unknown',next_poll=? WHERE id=?").run(now+30000,row.id)}
+    }
   }
   interruptMemory(raw){if(this.maintenanceJob&&raw.post_type==='message'&&(raw.message_type==='private'||raw.message?.some?.(s=>s.type==='at'&&String(s.data?.qq)===this.qq?.account)))this.boundAgent?.cancel({kind:'hook',reason:'有新消息，先让出后台整理'})}
   async deliver() {

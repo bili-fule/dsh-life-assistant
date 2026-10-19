@@ -41,6 +41,11 @@ const server=createServer(async(req,res)=>{
   if(req.method!=='POST')return json(res,{error:'POST required'},405)
   const chunks=[];let size=0;for await(const b of req){size+=b.length;if(size>100000)throw Error('请求过大');chunks.push(b)}
   const args=JSON.parse(Buffer.concat(chunks))
+  if(req.url==='/capabilities'){
+    if(!Array.isArray(args.scopes)||!args.scopes.length||args.scopes.some(s=>typeof s!=='string'))throw Error('资料范围无效')
+    const projects=[];for(const [name,grant] of Object.entries(policy.projects??{})){try{authorizeProject(grant,args.scopes);projects.push({name,readOnly:!!grant.readOnly})}catch{}}
+    return json(res,{languages:Object.keys(policy.images),projects,network:false,timeoutMs:policy.timeoutMs??120000})
+  }
   if(req.url==='/run') {
     if(typeof args.key!=='string'||!args.key||args.key.length>300||typeof args.code!=='string'||!args.code.trim()||args.code.length>50000||!['node','python','shell'].includes(args.language)||!Array.isArray(args.scopes)||args.scopes.some(s=>typeof s!=='string'))throw Error('执行参数无效')
     const id=idFor(args.key),hash=createHash('sha256').update(JSON.stringify(args)).digest('hex')

@@ -27,6 +27,8 @@ export class SocialStore {
       INSERT OR IGNORE INTO yoyo_activity(id,updated_at) VALUES(1,0);
     `)
     if(!this.db.prepare('PRAGMA table_info(yoyo_outbox)').all().some(c=>c.name==='content'))this.db.exec('ALTER TABLE yoyo_outbox ADD COLUMN content TEXT')
+    const jobColumns=this.db.prepare('PRAGMA table_info(yoyo_jobs)').all().map(c=>c.name)
+    for(const [name,type] of [['view_id','TEXT'],['state',"TEXT NOT NULL DEFAULT 'running'"],['notified','INTEGER NOT NULL DEFAULT 0'],['next_poll','INTEGER NOT NULL DEFAULT 0']])if(!jobColumns.includes(name))this.db.exec('ALTER TABLE yoyo_jobs ADD COLUMN '+name+' '+type)
     // A lost response can mean an actual sent message. Never blindly resend it.
     this.db.prepare("UPDATE yoyo_outbox SET state='uncertain',error='进程重启前未取得确定回执' WHERE state='sending'").run()
   }

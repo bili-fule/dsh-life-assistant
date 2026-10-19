@@ -106,3 +106,14 @@ test('memory maintenance blocks message sending and execution at actual native t
  for(const name of ['yoyo_send','yoyo_send_file','yoyo_execute','yoyo_open','yoyo_web','yoyo_activity'])await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name},async()=>{throw Error('must not execute')}),/未获/)
  assert.equal(agent.toolsAllowed().has('yoyo_memory'),true)
 })
+
+
+test('background job completion wakes the original authorized scope once and ignores revoked views',async t=>{
+ const {agent,store,target}=fixture(t),a=target('123'),view=agent.data.open(a.handle),id='a'.repeat(64)
+ store.set('yoyo_started',true);agent.data.saveActivity(view.id,{state:'sleeping',description:'等编译完成',wakeAt:null})
+ agent.data.db.prepare('INSERT INTO yoyo_jobs(id,run_key,scopes,created_at,view_id) VALUES(?,?,?,?,?)').run(id,'run-a',JSON.stringify(view.scopes),Date.now(),view.id)
+ agent.executor={async call(){return {id,state:'done'}}};await agent.pollJobs()
+ assert.equal(agent.choose(),a.handle);assert.equal(agent.readyJob.id,id)
+ agent.data.approve(a.handle,false);assert.equal(agent.choose(),null)
+ assert.equal(agent.data.db.prepare('SELECT notified FROM yoyo_jobs WHERE id=?').get(id).notified,1)
+})
