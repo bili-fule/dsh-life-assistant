@@ -14,6 +14,7 @@ export class SocialStore {
       CREATE TABLE IF NOT EXISTS yoyo_persona_versions(id INTEGER PRIMARY KEY,body TEXT NOT NULL,created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_activity(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'idle',body TEXT NOT NULL DEFAULT '{}',scopes TEXT NOT NULL DEFAULT '["public"]',wake_at INTEGER,updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_turns(request_id TEXT PRIMARY KEY,view_id TEXT NOT NULL REFERENCES yoyo_views(id),state TEXT NOT NULL,created_at INTEGER NOT NULL,finished_at INTEGER,error TEXT);
+      CREATE TABLE IF NOT EXISTS yoyo_tool_sources(run_key TEXT PRIMARY KEY,name TEXT NOT NULL,scopes TEXT NOT NULL,result_text TEXT NOT NULL,created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_event_scopes(session_id TEXT NOT NULL,seq INTEGER NOT NULL,scopes TEXT NOT NULL,PRIMARY KEY(session_id,seq));
       CREATE TABLE IF NOT EXISTS yoyo_memories(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,sources TEXT NOT NULL,confidence TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER,active INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS yoyo_retirements(memory_id INTEGER PRIMARY KEY,through_id INTEGER NOT NULL,forgotten_at INTEGER NOT NULL);
@@ -128,10 +129,11 @@ export class SocialStore {
     const view=this.view(viewId);body=boundedText(body,2000)
     if(!['episodes','profile','relations','knowledge','procedures','intention','communication'].includes(kind)||!['observed','hypothesis','self_report'].includes(confidence)||!Array.isArray(sources)||!sources.length||sources.length>10||expiresAt!==null&&(!Number.isSafeInteger(expiresAt)||expiresAt<=Date.now()))throw Error('记忆类型或来源无效')
     for(const s of sources){
-      if(!s||typeof s!=='object'||!Number.isSafeInteger(s.document??s.id)||s.document!==undefined&&s.id!==undefined)throw Error('原文来源编号无效')
-      const row=s.document!==undefined?this.db.prepare('SELECT body text,scope FROM yoyo_documents WHERE id=?').get(s.document):this.db.prepare('SELECT text,scope FROM yoyo_events WHERE id=?').get(s.id)
-      if(!row||!mayRead(view,row.scope)||typeof s.quote!=='string'||!s.quote.trim()||!row.text.includes(s.quote))throw Error('记忆必须有当前可见原文的逐字证据')
+      if(!s||typeof s!=='object'||[s.id,s.document,s.receipt].filter(v=>v!==undefined).length!==1||(s.receipt!==undefined?(typeof s.receipt!=='string'||s.receipt.length>500):!Number.isSafeInteger(s.document??s.id)))throw Error('原文来源编号无效')
+      const row=s.receipt!==undefined?this.db.prepare("SELECT result_text text,scopes FROM yoyo_tool_sources WHERE run_key=? AND name NOT IN ('yoyo_memory','yoyo_forget','yoyo_recall')").get(s.receipt):s.document!==undefined?this.db.prepare('SELECT body text,scope FROM yoyo_documents WHERE id=?').get(s.document):this.db.prepare('SELECT text,scope FROM yoyo_events WHERE id=?').get(s.id)
+      if(!row||!(row.scopes?JSON.parse(row.scopes).every(s=>mayRead(view,s)):mayRead(view,row.scope))||typeof s.quote!=='string'||!s.quote.trim()||!row.text.includes(s.quote))throw Error('记忆必须有当前可见原文的逐字证据')
     }
+    if(kind==='procedures'&&confidence==='observed'&&!sources.some(s=>s.receipt!==undefined))throw Error('已验证流程需要实际工具回执；未实测的方法请标 hypothesis')
     if(kind==='communication'){
       const direct=sources.filter(s=>s.id!==undefined).map(s=>this.db.prepare('SELECT id,sender,kind,segments FROM yoyo_events WHERE id=?').get(s.id)).filter(r=>r?.kind==='message'&&!JSON.parse(r.segments).some(s=>s.type==='forward'))
       if(!direct.length||new Set(direct.map(r=>r.sender)).size!==1)throw Error('语言习惯须有同一实际发送者的直接原文，不能混合人物或转发')

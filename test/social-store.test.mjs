@@ -121,3 +121,16 @@ test('asset outbox pins the original payload and rechecks target revocation befo
  await data.deliver(async()=>{sent=true;return {messageId:'should-not-send'}})
  assert.equal(sent,false);assert.equal(data.db.prepare('SELECT state FROM yoyo_outbox WHERE id=?').get(queued.id).state,'cancelled')
 })
+
+
+test('verified procedural memories require real tool receipts and inherit their private scope',t=>{
+ const {data,target}=fixture(t),a=target('123'),b=target('456'),av=data.open(a.handle),bv=data.open(b.handle)
+ const message=data.ingest({target:a.handle,sender:'123',externalId:'a',text:'执行成功'})
+ const value={kind:'procedures',body:'实测过的处理流程',confidence:'observed',sources:[{id:message.id,quote:'执行成功'}]}
+ assert.throws(()=>data.remember(av.id,value),/实际工具回执/)
+ data.db.prepare('INSERT INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run('real-receipt','yoyo_job',JSON.stringify(av.scopes),JSON.stringify({exitCode:0,stdout:'selftest passed'}),Date.now())
+ const proven={...value,sources:[{receipt:'real-receipt',quote:'selftest passed'}]}
+ assert.ok(data.remember(av.id,proven).id)
+ assert.throws(()=>data.remember(bv.id,proven),/逐字证据/)
+ assert.throws(()=>data.remember(av.id,{...proven,sources:[{receipt:'invented',quote:'passed'}]}),/逐字证据/)
+})

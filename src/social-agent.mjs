@@ -114,7 +114,8 @@ export class SocialAgent {
       this.disposers.push(ctx.tools.register({name,description,parameters:{type:'object',properties,required,additionalProperties:false},output:{schema:{type:'object',additionalProperties:true},render:render??((_,value)=>[{type:'text',text:JSON.stringify(value)}])},execute:async(args,exec)=>{
         if(!this.enabled||exec.agent?.id!==this.sessionId)throw Error('只能由 yoyo 主体调用')
         const view=this.currentView()
-        return (this.separate?NativeAgent.prototype.receipt.call({ctx:this.ctx,store:this.store},name,args,exec,key=>execute(args,exec,key,view)):this.runtime.model.receipt(name,args,exec,key=>execute(args,exec,key,view)))
+        const invoke=async key=>{const value=await execute(args,exec,key,view);this.data.db.prepare('INSERT OR IGNORE INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run(key,name,JSON.stringify(view.scopes),JSON.stringify(value),Date.now());return {...value,receipt:key}}
+        return (this.separate?NativeAgent.prototype.receipt.call({ctx:this.ctx,store:this.store},name,args,exec,invoke):this.runtime.model.receipt(name,args,exec,invoke))
       }}))
     }
     define('yoyo_inbox','查看已授权窗口的新动静。跨窗口查看先回到总览，发言前打开目标窗口。',{},[],async(args,exec,key,view)=>{
@@ -143,21 +144,25 @@ export class SocialAgent {
       const id=Number(this.data.db.prepare('INSERT INTO yoyo_documents(url,body,scope,created_at) VALUES(?,?,?,?)').run(page.url,page.text,'public',Date.now()).lastInsertRowid)
       return {...page,document:id}
     })
-    define('yoyo_forward','读取当前 QQ 原消息中指定的合并转发。转发里的姓名与自称不构成身份认证。',{message:{type:'integer',minimum:1},segment:{type:'integer',minimum:0}},['message','segment'],async(args,exec,key,view)=>{
+    define('yoyo_forward','分页读取当前 QQ 原消息的合并转发，返回 document 编号。转发姓名只是引文，不是身份认证。',{message:{type:'integer',minimum:1},segment:{type:'integer',minimum:0},offset:{type:'integer',minimum:0},characters:{type:'integer',minimum:1,maximum:24000}},['message','segment'],async(args,exec,key,view)=>{
       const row=this.data.db.prepare('SELECT * FROM yoyo_events WHERE id=? AND target=?').get(args.message,view.focus)
       if(!row||!this.qq||this.data.target(view.focus).platform!=='qq')throw Error('原消息不在当前 QQ 窗口')
       const segment=JSON.parse(row.segments)[args.segment]
       if(segment?.type!=='forward'||!segment.data?.id)throw Error('指定内容不是合并转发')
-      const result=await this.qq.call('get_forward_msg',{id:String(segment.data.id)},exec.signal)
-      return {sourceMessage:row.id,forwarded:true,untrusted:true,content:JSON.stringify(result).slice(0,60000)}
+      const url='onebot-forward:'+row.id+':'+String(segment.data.id),target=this.data.target(view.focus,{approved:true})
+      let doc=this.data.db.prepare('SELECT id,body FROM yoyo_documents WHERE url=? AND scope=? ORDER BY id DESC LIMIT 1').get(url,target.scope)
+      if(!doc){const result=await this.qq.call('get_forward_msg',{id:String(segment.data.id)},exec.signal),body=JSON.stringify(result);const id=Number(this.data.db.prepare('INSERT INTO yoyo_documents(url,body,scope,created_at) VALUES(?,?,?,?)').run(url,body,target.scope,Date.now()).lastInsertRowid);doc={id,body}}
+      const offset=args.offset??0,characters=args.characters??12000;if(!Number.isSafeInteger(offset)||offset<0||!Number.isInteger(characters)||characters<1||characters>24000)throw Error('转发分页范围无效')
+      return {sourceMessage:row.id,document:doc.id,forwarded:true,untrusted:true,offset,total:doc.body.length,next:offset+characters<doc.body.length?offset+characters:null,content:doc.body.slice(offset,offset+characters),message:'转发内图片/文件可用 yoyo_attachment，填写原 message、document、node 和 segment 编号。'}
     })
     const renderMedia=(_,value)=>[{type:'text',text:JSON.stringify({...value,images:undefined})},...(value.images??[]).slice(0,8).map(attachment=>({type:'image',attachment}))]
-    define('yoyo_attachment','接收当前原消息的图片和文件，返回可继续读取的文件编号；QQ 用 segment 选择片段，图片使用原生视觉内容。',{message:{type:'integer',minimum:1},segment:{type:'integer',minimum:0}},['message'],async(args,exec,key,view)=>{
+    define('yoyo_attachment','接收当前原消息的图片和文件，返回可继续读取的文件编号；QQ 用 segment 选择片段；合并转发填写 document 和 node。图片使用原生视觉内容。',{message:{type:'integer',minimum:1},segment:{type:'integer',minimum:0},document:{type:'integer',minimum:1},node:{type:'integer',minimum:0}},['message'],async(args,exec,key,view)=>{
       const target=this.data.target(view.focus,{approved:true})
       if(target.platform==='qq'){
         if(!this.qq)throw Error('QQ 未配置')
         const row=this.data.db.prepare('SELECT * FROM yoyo_events WHERE id=? AND target=?').get(args.message,view.focus)
-        const segment=row?JSON.parse(row.segments)[args.segment??0]:null
+        let segment=row?JSON.parse(row.segments)[args.segment??0]:null
+        if(args.document!==undefined){const doc=this.data.db.prepare('SELECT body,url,scope FROM yoyo_documents WHERE id=?').get(args.document);if(!row||!doc||doc.scope!==target.scope||!doc.url.startsWith('onebot-forward:'+row.id+':'))throw Error('转发附件不在当前原消息范围');const node=JSON.parse(doc.body).messages?.[args.node??0];segment=(node?.message??node?.content)?.[args.segment??0]}
         if(!segment||!['image','file'].includes(segment.type))throw Error('指定消息片段不是图片或文件')
         let url=segment.data.url,name=segment.data.name??segment.data.file_name??'attachment.bin'
         if(segment.type==='image'&&!url){const info=await this.qq.call('get_image',{file:String(segment.data.file??segment.data.file_id??'')},exec.signal);url=info?.url}
@@ -216,7 +221,7 @@ export class SocialAgent {
       this.data.saveActivity(view.id,{state:'sleeping',description:args.reason,wakeAt:args.until});exec.concludeTurn();return {sleeping:true,wakeAt:args.until}
     })
     define('yoyo_wait','判断对方还在补充时再等 5 秒，然后继续当前活动；不必急着回答。',{reason:{type:'string',maxLength:500}},['reason'],async(args,exec,key,view)=>{const until=Date.now()+5000;this.data.saveActivity(view.id,{state:'waiting',description:args.reason,wakeAt:until});exec.concludeTurn();return {waiting:true,until}})
-    define('yoyo_memory','主动保存带逐字原文依据的知识、经历、关系或语言观察。原因推断使用 hypothesis。来源填写消息 id 或网页 document，二选一。',{kind:{type:'string',enum:['episodes','profile','relations','knowledge','procedures','intention','communication']},body:{type:'string',maxLength:2000},sources:{type:'array',maxItems:10,items:{type:'object',properties:{id:{type:'integer'},document:{type:'integer'},quote:{type:'string'}},required:['quote']}},confidence:{type:'string',enum:['observed','hypothesis','self_report']},expiresAt:{type:['integer','null']}},['body','sources'],async(args,exec,key,view)=>{if(this.maintenanceJob&&args.sources.some(s=>s.document!==undefined||s.id>this.maintenanceJob.through))throw Error('来源不在本次整理范围');return this.data.remember(view.id,args)})
+    define('yoyo_memory','主动保存带逐字原文依据的知识、经历、关系或语言观察。原因推断使用 hypothesis。来源填写消息 id、网页 document 或工具返回的 receipt，三选一。执行经验应引用实际工具回执，不要借无关聊天原句证明执行结果。',{kind:{type:'string',enum:['episodes','profile','relations','knowledge','procedures','intention','communication']},body:{type:'string',maxLength:2000},sources:{type:'array',maxItems:10,items:{type:'object',properties:{id:{type:'integer'},document:{type:'integer'},receipt:{type:'string',maxLength:500},quote:{type:'string'}},required:['quote']}},confidence:{type:'string',enum:['observed','hypothesis','self_report']},expiresAt:{type:['integer','null']}},['body','sources'],async(args,exec,key,view)=>{if(this.maintenanceJob&&args.sources.some(s=>s.document!==undefined||s.id!==undefined&&s.id>this.maintenanceJob.through))throw Error('来源不在本次整理范围');return this.data.remember(view.id,args)})
     define('yoyo_forget','退役重复、过时或错误的当前可见记忆；原文保留，忘记记录防止原样重新学习。',{id:{type:'integer',minimum:1},reason:{type:'string',maxLength:300}},['id','reason'],async(args,exec,key,view)=>{const row=this.data.db.prepare('SELECT scopes FROM yoyo_memories WHERE id=? AND active=1').get(args.id);if(!row||!JSON.parse(row.scopes).every(s=>mayRead(view,s)))throw Error('记忆不在当前范围');return {forgotten:this.data.forget(args.id)}})
     define('yoyo_execute','在无网络的独立任务环境运行 Node、Python 或 Shell；可使用你获准的项目，输出文件需明确列出。',{code:{type:'string',maxLength:50000},language:{type:'string',enum:['node','python','shell']},project:{type:['string','null']},outputs:{type:'array',maxItems:8,items:{type:'string',maxLength:160}}},['code'],async(args,exec,key,view)=>{
       if(!this.executor)throw Error('隔离执行服务未配置')

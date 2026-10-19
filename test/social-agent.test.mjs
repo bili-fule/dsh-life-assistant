@@ -117,3 +117,17 @@ test('background job completion wakes the original authorized scope once and ign
  agent.data.approve(a.handle,false);assert.equal(agent.choose(),null)
  assert.equal(agent.data.db.prepare('SELECT notified FROM yoyo_jobs WHERE id=?').get(id).notified,1)
 })
+
+
+test('merged forward pages preserve the full original and cannot use another window document for attachments',async t=>{
+ const {agent,tools,target,exec}=fixture(t),a=target('123'),b=target('456');agent.activeView=agent.data.open(a.handle)
+ const original=agent.data.ingest({target:a.handle,sender:'123',externalId:'forward',text:'[forward]',segments:[{type:'forward',data:{id:'source-forward'}}]})
+ let reads=0;agent.qq={async call(action){assert.equal(action,'get_forward_msg');reads++;return {messages:[{user_id:'999',message:[{type:'text',data:{text:'x'.repeat(70000)}}]}]}}}
+ const first=await tools.get('yoyo_forward').execute({message:original.id,segment:0,characters:12000},exec)
+ assert.ok(first.total>70000);assert.equal(first.content.length,12000);assert.equal(first.next,12000)
+ const tail=await tools.get('yoyo_forward').execute({message:original.id,segment:0,offset:60000,characters:24000},{...exec,callId:'2'})
+ assert.equal(tail.next,null);assert.equal(reads,1)
+ agent.activeView=agent.data.open(b.handle)
+ const other=agent.data.ingest({target:b.handle,sender:'456',externalId:'other',text:'[forward]',segments:[{type:'forward',data:{id:'other-forward'}}]})
+ await assert.rejects(()=>tools.get('yoyo_attachment').execute({message:other.id,document:first.document,node:0,segment:0},{...exec,callId:'3'}),/当前原消息范围/)
+})
