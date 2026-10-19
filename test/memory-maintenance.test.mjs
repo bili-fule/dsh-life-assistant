@@ -70,3 +70,10 @@ test('Markdown survives the channel and long fenced code is balanced in every ch
   assert.ok(chunks.length>1);assert.ok(chunks.every(s=>s.length<=1400));assert.ok(chunks.every(s=>(s.match(/^```/gm)??[]).length%2===0));assert.match(chunks.at(-1),/结束/)
   assert.ok(markdownChunks('`'.repeat(5000)).every(s=>s.length<=1400))
 })
+
+
+test('daytime maintenance has a cooldown and no-new-message scans are suppressed',t=>{
+  const store=fixture(t),now=Date.parse('2026-10-19T14:00:00+08:00');add(store,'新的偏好',now-600000);store.db.exec("UPDATE inbox SET state='done'");store.set('native_session_id','native')
+  const maintenance=new Maintenance({store});store.set('maintenance_last_attempt_at',now-599999)
+  assert.equal(maintenance.next(now),null);store.set('maintenance_last_attempt_at',now-600000);assert.ok(maintenance.next(now))
+})

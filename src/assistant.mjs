@@ -1,3 +1,4 @@
+import { resetCommunication } from './communication.mjs'
 import { formatTime,localParts,inQuietHours,nextQuietEnd } from './time.mjs'
 
 const STATUS={open:'待办',confirm:'待确认',waiting:'等别人',done:'已完成',cancelled:'已取消'}
@@ -36,7 +37,7 @@ export function command(text,store,sourceId) {
   m=text.match(/^(?:\/persona|设置人设[：:]?|人设[：:])\s*([\s\S]+)$/u)
   if(m) {store.set('persona',m[1].trim().slice(0,2000));store.audit('persona.set',{sourceId});return '人设已更新，之后的回复会按这个风格来。'}
   if(text==='/persona') return store.get('persona','默认：贴心、不啰嗦的中文事务助理。')
-  if(text==='/style reset') {store.set('style_counts',{});store.set('learned_style',{});store.audit('style.reset',{});return '已清空学习到的语言偏好，人设保持原样。'}
+  if(text==='/style reset') {store.set('style_counts',{});store.set('learned_style',{});resetCommunication(store);store.audit('style.reset',{});return '已清空学习到的语言偏好，人设保持原样。'}
   if(text==='/style') return `语言学习${store.get('style_learning',true)?'已开启':'已关闭'}\n当前偏好：${JSON.stringify(store.get('learned_style',{}))}\n至少三次同类观察才会形成偏好；群转发不参与学习。`
   m=text.match(/^\/learn\s+(on|off)$/)
   if(m) {store.set('style_learning',m[1]==='on');return `语言学习已${m[1]==='on'?'开启':'关闭'}。`}

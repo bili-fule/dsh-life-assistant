@@ -1,33 +1,34 @@
 import { localParts } from './time.mjs'
-import { directSource } from './memory.mjs'
 
 export class Maintenance {
-  constructor(runtime,config={}) {this.runtime=runtime;this.store=runtime.store;this.idleMs=Math.max(1000,Number(config.memoryIdleMs)||300000);this.nightHour=Number.isInteger(config.maintenanceHour)?config.maintenanceHour:3;this.active=null}
-  status(){return {idleSeconds:this.idleMs/1000,nightHour:this.nightHour,active:this.active?.key??null,last:this.store.get('maintenance_last'),jobs:this.store.db.prepare('SELECT key,kind,state,phase,attempts,error,finished_at FROM maintenance_jobs ORDER BY created_at DESC LIMIT 5').all()}}
+  constructor(runtime,config={}) {this.runtime=runtime;this.store=runtime.store;this.idleMs=Math.max(1000,Number(config.memoryIdleMs)||300000);this.cooldownMs=Math.max(1000,Number(config.memoryCooldownMs)||600000);this.nightHour=Number.isInteger(config.maintenanceHour)?config.maintenanceHour:3;this.active=null}
+  status(){return {idleSeconds:this.idleMs/1000,cooldownSeconds:this.cooldownMs/1000,nightHour:this.nightHour,active:this.active?.key??null,last:this.store.get('maintenance_last'),jobs:this.store.db.prepare('SELECT key,kind,state,phase,attempts,error,finished_at FROM maintenance_jobs ORDER BY created_at DESC LIMIT 5').all()}}
   next(now=Date.now()) {
     const db=this.store.db
     if(!this.store.get('native_session_id')||db.prepare("SELECT 1 FROM inbox WHERE state IN ('pending','processing') LIMIT 1").get())return null
     const last=db.prepare("SELECT max(id) id,max(received_at) at FROM inbox WHERE state='done'").get()
     if(!last.id||now-Math.max(last.at,this.store.get('conversation_finished_at',last.at))<this.idleMs)return null
-    const prior=db.prepare("SELECT * FROM maintenance_jobs WHERE state IN ('pending','running') AND next_at<=? ORDER BY created_at LIMIT 1").get(now)
-    if(prior)return prior
     const p=localParts(now),night=p.hour>=this.nightHour&&p.hour<8
-    const cursor=this.store.get('memory_reviewed_through',0)
+    if(!night&&now-this.store.get('maintenance_last_attempt_at',0)<this.cooldownMs)return null
+    const prior=db.prepare("SELECT * FROM maintenance_jobs WHERE state IN ('pending','running') AND next_at<=? AND (kind!='night' OR ?) ORDER BY created_at LIMIT 1").get(now,night?1:0)
+    if(prior)return prior
+    const cursor=Math.min(this.store.get('memory_reviewed_through',0),this.store.get('reflection_reviewed_through',this.store.get('memory_reviewed_through',0)))
     let kind,key,through=last.id
     const backlog=db.prepare("SELECT count(*) n FROM inbox WHERE state='done' AND id>?").get(cursor).n
     if(night&&backlog<=30&&!db.prepare('SELECT 1 FROM maintenance_jobs WHERE key=?').get('night:'+p.date)){kind='night';key='night:'+p.date}
-    else if(last.id>cursor){kind='idle';const rows=db.prepare("SELECT id FROM inbox WHERE state='done' AND id>? ORDER BY id LIMIT 30").all(cursor);through=rows.at(-1).id;key='idle:'+through+':'+p.date}
+    else if(last.id>cursor){kind='idle';const rows=db.prepare("SELECT id FROM inbox WHERE state='done' AND id>? ORDER BY id LIMIT 30").all(cursor);through=rows.at(-1).id;key='idle-v5:'+through+':'+p.date}
     else return null
     if(db.prepare('SELECT 1 FROM maintenance_jobs WHERE key=?').get(key))return null
     db.prepare("INSERT INTO maintenance_jobs(key,kind,through_id,state,created_at) VALUES (?,?,?,'pending',?)").run(key,kind,through,now)
     return db.prepare('SELECT * FROM maintenance_jobs WHERE key=?').get(key)
   }
   sources(job) {
-    const cursor=this.store.get('memory_reviewed_through',0)
-    return this.store.db.prepare("SELECT id FROM inbox WHERE state='done' AND id<=? AND id>? ORDER BY id LIMIT 30").all(job.through_id,cursor).map(r=>directSource(this.store,r.id)).filter(Boolean).map(r=>({id:r.id,received_at:r.received_at,direct_text:r.direct_text.slice(0,1800),truncated:r.direct_text.length>1800}))
+    const cursor=Math.min(this.store.get('memory_reviewed_through',0),this.store.get('reflection_reviewed_through',this.store.get('memory_reviewed_through',0)))
+    return this.store.db.prepare("SELECT id FROM inbox WHERE state='done' AND id<=? AND id>? ORDER BY id LIMIT 30").all(job.through_id,cursor)
   }
   async run(job) {
     this.active=job
+    this.store.set('maintenance_last_attempt_at',Date.now())
     const db=this.store.db
     try {
       if(job.phase!=='memory')db.prepare("UPDATE maintenance_jobs SET state='running',attempts=attempts+1 WHERE key=?").run(job.key)
@@ -36,8 +37,9 @@ export class Maintenance {
         const requestId=job.state==='running'?job.request_id:`maintenance:${job.key}:${job.attempts+1}`
         db.prepare("UPDATE maintenance_jobs SET state='running',request_id=?,attempts=attempts+? WHERE key=?").run(requestId,job.state==='running'?0:1,job.key)
         await this.runtime.model.maintain({...job,request_id:requestId},this.sources(job))
-        const reviewed=job.kind==='night'?Math.max(this.store.get('memory_reviewed_through',0),...this.sources(job).map(s=>s.id),0):job.through_id
-        this.store.set('memory_reviewed_through',reviewed)
+        const reviewed=job.kind==='night'?Math.max(this.store.get('reflection_reviewed_through',0),...this.sources(job).map(s=>s.id),0):job.through_id
+        this.store.set('memory_reviewed_through',Math.max(this.store.get('memory_reviewed_through',0),reviewed))
+        this.store.set('reflection_reviewed_through',Math.max(this.store.get('reflection_reviewed_through',0),reviewed))
         db.prepare("UPDATE maintenance_jobs SET phase='compact',error=NULL WHERE key=?").run(job.key)
       }
       if(job.kind==='night') {

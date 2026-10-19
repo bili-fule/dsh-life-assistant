@@ -104,7 +104,7 @@ test('background native turns leave a trace but do not enqueue a WeChat response
   })
   const job={kind:'idle',through_id:1,request_id:'maintenance:test:1'}
   await runtime.model.maintain(job,[{id:1,direct_text:'我喜欢简短回复'}]);await runtime.model.maintain(job,[])
-  assert.equal(host.prompts.length,1);assert.equal(runtime.store.snapshot().outbox.length,0);assert.equal(runtime.store.memories().length,1);assert.equal(runtime.model.maintenanceJob,null)
+  assert.equal(host.prompts.length,1);assert.equal(runtime.store.snapshot().outbox.length,0);assert.equal(runtime.store.memories().length,1);assert.equal(runtime.model.maintenanceJob,null);assert.ok(!host.prompts[0].content[0].text.includes('我喜欢简短回复'));assert.ok(host.prompts[0].content[0].text.includes('直接使用你已有的原生会话上下文'))
 })
 test('native waits are bounded and a new round with no supplement leaves messages available',async t=>{
   const {runtime,host}=fixture(t);runtime.running=true;runtime.config.agentWaitMs=1
@@ -118,4 +118,12 @@ test('native waits are bounded and a new round with no supplement leaves message
   })
   await runtime.tick();assert.equal(runtime.store.inputContext(1).nativeRequest.waits,3)
   assert.equal(runtime.store.snapshot().outbox.length,1)
+})
+
+
+test('context inspection returns lossless JSON using the host token meter',async t=>{
+  const {runtime,host}=fixture(t);host.ctx.get=name=>name==='tokenMeter'?{measure:()=>({totalTokens:263050,baseline:{kind:'usage'}})}:undefined
+  await runtime.model.ensure()
+  const result=await host.registered.get('life_context').execute({},{agent:host.agent,callId:'context',signal:runtime.abort.signal})
+  assert.equal(result.measuredTokens,263050);assert.equal(result.declaredModelWindow,1000000);assert.deepEqual(result,JSON.parse(JSON.stringify(result)))
 })

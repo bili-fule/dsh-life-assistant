@@ -17,6 +17,8 @@ DSH 原生 standard preset 提供 Agent 执行循环、模型路由、Shell、�
 | 工具 | 用途 |
 | --- | --- |
 | `life_state` | 读取待办、长期记忆及来源、忘记记录、人设、语言偏好与迁移摘要 |
+| `life_recall` | 按关键词/层/分页按需召回长期记忆与证据 |
+| `life_context` | 查看原生 Token 测量与压缩策略 |
 | `life_record` | 验证原文证据后记录待办、更新、明确记忆和语言观察 |
 | `life_history` | 按编号、关键词或分页查阅微信原文与直接发言，及旧版资料提取结果 |
 | `life_wait` | Agent 自行决定再等 5 秒，将后续文字、图片和文件并入同一原生回合，最多三轮 |
@@ -40,17 +42,39 @@ DSH 原生 standard preset 提供 Agent 执行循环、模型路由、Shell、�
 
 ## 主动记忆、后台整理与 Markdown
 
-普通对话中 Agent 可立即调用 `life_memory` 记录有长期价值的事实。对话完成并空闲 **5 分钟**后，持久化后台钩子再驱动同一 DSH 原生 Agent，审阅尚未整理的微信直接发言、合并重复项、检查纠正及过时记忆和语言偏好；无需用户逐条提醒。每轮最多审阅 30 条，积压按编号分轮推进。后台结论留在原生轨迹，不进入微信发送队列。新微信消息会中断记忆整理，让对话优先。
+普通对话中 Agent 可立即调用 `life_memory` 记录有长期价值的事实。对话完成并空闲 **5 分钟**后，持久化后台钩子再驱动同一 DSH 原生 Agent，审阅尚未整理的微信直接发言、合并重复项、检查纠正及过时记忆和语言偏好；无需用户逐条提醒。每轮最多审阅 30 条，积压按编号分轮推进。白天相邻整理至少间隔 10 分钟、单轮最多 60 秒；夜间整理不受白天间隔限制、单轮最多 180 秒。升级和重启保留进度，不重放已整理的历史。后台结论留在原生轨迹，不进入微信发送队列。新微信消息会中断记忆整理，让对话优先。
 
-北京时间每天 **03:00** 起在夜间空闲时段（至 08:00）先完成增量记忆整理，再调用 DSH 官方 `compaction.compactNow()` 压缩上下文。夜间任务按日期去重，服务重启保留回执；整理成功而压缩失败时只重试压缩，最多三次，错误可在管理页状态及审计中查询。可配置 `memoryIdleMs`（默认 300000）与 `maintenanceHour`（默认 3）。原生基于 Token 压力的自动压缩也继续生效。首次升级会从已完成的消息归档渐进补做记忆整理。
+北京时间每天 **03:00** 起在夜间空闲时段（至 08:00）先完成增量记忆整理，再调用 DSH 官方 `compaction.compactNow()` 压缩上下文。夜间任务按日期去重，服务重启保留回执；整理成功而压缩失败时只重试压缩，最多三次，错误可在管理页状态及审计中查询。可配置 `memoryIdleMs`（默认 300000）与 `maintenanceHour`（默认 3）。原生基于 Token 压力的自动压缩也继续生效。升级和重启沿用已有进度，不自动重扫历史。
 
 记忆保存在独立 SQLite 中，压缩只影响模型后续读取的会话表面，不删除记忆、待办或原始日志。用户可在管理页或微信 `/memory` 查看，`/forget 编号` 忘记。自动记忆仅允许有原文依据的长期事实，短期琐事仍归待办。
 
 微信 ClawBot 回复保留 Markdown 原文：标题、加粗、列表、引用、链接与代码块等由微信客户端渲染。长回复优先按段落或行拆分，代码块跨消息时补齐围栏；也可通过 `life_send_file` 发送生成的 `.md` 文件。实际渲染范围取决于微信客户端版本。
 
+## 263K 触发线与多层记忆（0.5）
+
+当前 xuanluo / `cn:deepseek-v4.1-flash` 的模型声明容量继续为 **1,000,000 Token**，不是 263K。通过配置脚本对 Web 的 `preset-standard` 内部官方 `compaction-basic` 配置 exact-model policy（宿主同名行已禁用，修改它不会影响会话）：`thresholdRatio: 0.263`，在 DSH 测量的请求压力达到约 **263,000 Token** 时启动压缩；保留最近 **65,536 Token** 原文、摘要生成上限 **8,192 Token**，必要时继续压缩两次。模型的回复预留和 65,536 Token 压缩余量仍计算在内；接口确认超限时最多两次原生恢复尝试。测量可能使用真实 usage 或启发式估计，不是精确分词器的硬边界，允许步骤之间暂时超过触发线。
+
+超过触发线不会因为本地把容量设成 263K 而拒绝请求；原生摘要仍使用真实模型容量。一个本身超过真实模型容量的输入或不可拆工具单元仍可能失败，大文件应按索引分段读取；不承诺无限长度输入。更换模型时应为新 route 单独配置相应 policy，不能套用当前 1M 路由的比率。可用原生工具 `life_context` 查看实际测量与生效的原生配置。
+
+记忆结构包括：原始微信/附件归档；DSH 当前会话及压缩摘要；持久化的 `profile`（身份偏好）、`projects`（长期项目）、`relations`（关系）、`episodes`（经历）、`procedures`（处理规则）五类记忆。`life_memory.upserts` 可设置 layer、topic、importance（1–5）、expires_at。经历默认 30 天后退出活跃召回，原记录保留；可指定 null 长期保留。旧记忆兼容迁移，后台重新归类，来源和忘记记录保留。
+
+取消原来 100 条的写入上限。上下文仅放相关性、重要性及新近程度排序后的少量记忆（最多 24 条、正文预算约 12,000 字符）和主题索引；更多内容由 `life_recall` 按词和中文双字片段匹配、分层与分页检索。不是向量检索；可查到原始证据，避免把全部档案重复塞入系统上下文。
+
+语言学习同时保留计数偏好与场景分析。后台钩子只发送短维护指令和归档编号范围；Agent 直接使用原生会话已有上下文，不重复附带聊天记录。只有已压缩部分或旧归档确实不在当前上下文时，才按需调用 `life_history` 核对用户直接发言和互动，区分补充、纠正、催促和解释请求，并调用 `life_memory.communication` 存储 pattern、context、rationale、guidance 与逐字来源。**多次出现只能支持行为模式，原因仍是可推翻的假设**；只有用户明确解释原因并提供因果原文 `reason_quote` 才标 self_report。仅说“别啰嗦”可将模式标明确要求，但不能据此断言其内在原因。新纠正可通过 replace_ids 替换旧判断。
+
+管理页「记忆与人设」可查看场景、可能原因、回应策略和证据，也能移除判断。关闭语言学习会停止新增分析并停止将分析注入 Agent；重置会同时清空计数与停用场景分析，旧证据不会自动学回。原始聊天仍按原有规则留档。人设与用户当次要求优先于学习结果。升级后从新增对话继续学习；已整理过的历史不会因为升级而自动重扫。
+
 ## 安装与界面
 
 目标环境 Linux、Node.js 24+、Python 3.9+；已验证 DSH `0.2.0-rc.2`。PDF 和旧 Word 依赖 `poppler-utils`、`antiword`。真实浏览器需要 Chromium，可用 `DSH_CHROMIUM_EXECUTABLE` 指定已有程序，或运行 `npx playwright-core install --with-deps chromium`。
+
+先在 DSH 停止时运行配置脚本，把策略写入实际生效的 standard preset；脚本从已安装的官方 preset 复制完整配置并保留其他工具与 YAML 标签，若 profile 已有自定义 standard 配置则在其基础上修改；不会修改官方包源码或模型窗口：
+
+```sh
+python3 deploy/configure-context.py --preset /path/to/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml --profile /path/to/DSH_HOME/profiles/assistant/cordis.patch.yml
+```
+
+脚本保留一次 `.before-life-context` 私有备份；改动后重启 DSH，现有会话下一次激活使用新策略。默认路由配置为 xuanluo / `cn:deepseek-v4.1-flash`，其他路由应相应调整脚本里的 policy。
 
 profile 必须组合官方 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app` 和本插件；不要再重复插入独立 LLM、附件或 Agent 服务。`deploy/profile.package.example.json` 与 `deploy/assistant-profile.patch.example.yml` 给出组合示例。先在 profile 安装插件依赖，再将这三个包加入 `dsh.profile.bundles`。
 

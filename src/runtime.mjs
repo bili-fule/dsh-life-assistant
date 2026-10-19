@@ -13,6 +13,7 @@ import { localParts,parseTime } from './time.mjs'
 import * as ilink from './ilink.mjs'
 import { Media,inboundLabel,safeFilename } from './media.mjs'
 import { BrowserTools,workspacePath } from './tools.mjs'
+import { communicationState,forgetCommunication,resetCommunication } from './communication.mjs'
 import { Maintenance } from './maintenance.mjs'
 import { markdownChunks } from './markdown.mjs'
 
@@ -65,7 +66,7 @@ export class Runtime {
     return {bound:!!c?.token,ownerBound:!!this.store.get('owner'),login:this.login?{status:this.login.status,message:this.login.message}:null,
       provider:this.config.provider,model:this.config.model,timezone:'Asia/Shanghai',engine:'DSH native Agent',nativeSessionId:this.store.get('native_session_id'),
       batching:{quietSeconds:this.batcher.quietMs/1000,maxWaitSeconds:this.batcher.maxWaitMs/1000,maxMessages:this.batcher.maxMessages},
-      maintenance:this.maintenance.status(),markdown:true,
+      maintenance:this.maintenance.status(),markdown:true,communication:communicationState(this.store,{all:true}),contextPolicy:{configuredTriggerTokens:263000,declaredModelWindow:1000000,retainTokens:65536,summaryMaxTokens:8192},
       capabilities:{shell:true,links:true,browser:true,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true},workspaceFiles:this.workspaceFiles(),
       persona:this.store.get('persona','你是一位贴心但不啰嗦的中文事务助理，说话自然，判断谨慎，帮用户把事情理清楚。'),
       styleLearning:this.store.get('style_learning',true),learnedStyle:this.store.get('learned_style',{}),styleCounts:this.store.get('style_counts',{}),
@@ -101,7 +102,7 @@ export class Runtime {
     if(url.pathname==='/api/settings') {
       if(typeof data.persona==='string')this.store.set('persona',data.persona.slice(0,2000))
       if(typeof data.styleLearning==='boolean')this.store.set('style_learning',data.styleLearning)
-      if(data.resetStyle===true){this.store.set('style_counts',{});this.store.set('learned_style',{})}
+      if(data.resetStyle===true){this.store.set('style_counts',{});this.store.set('learned_style',{});resetCommunication(this.store)}
       if(data.quiet && [data.quiet.start,data.quiet.end].every(v=>Number.isInteger(v)&&v>=0&&v<=23))this.store.set('quiet',data.quiet)
       if(data.digestHour===null||(Number.isInteger(data.digestHour)&&data.digestHour>=0&&data.digestHour<=23))this.store.set('digest_hour',data.digestHour)
       this.store.audit('settings.update',{fields:Object.keys(data)});return json(res,{ok:true})
@@ -115,6 +116,7 @@ export class Runtime {
       catch(e){this.store.set('model_health',{ok:false,at:Date.now(),message:'模型预览未成功'});this.log('model.preview.error',e);return json(res,{error:'模型调用未成功，原有事务未改动'},502)}
     }
     if(url.pathname==='/api/task') {const patch={};if(['open','confirm','waiting','done','cancelled'].includes(data.status))patch.status=data.status;if(Object.hasOwn(data,'remindAt'))patch.remind_at=parseTime(data.remindAt);if(Object.hasOwn(data,'dueAt'))patch.due_at=parseTime(data.dueAt);if(!Number.isInteger(data.id))throw Error('编号无效');return json(res,this.store.updateTask(data.id,patch))}
+    if(url.pathname==='/api/forget-insight'){if(!Number.isInteger(data.id))throw Error('编号无效');forgetCommunication(this.store,data.id);return json(res,{ok:true})}
     if(url.pathname==='/api/forget') {if(!Number.isInteger(data.id))throw Error('编号无效');this.store.forget(data.id);return json(res,{ok:true})}
     if(url.pathname==='/api/retry') {if(!Number.isInteger(data.id))throw Error('编号无效');this.batcher.retry(data.id);return json(res,{ok:true})}
     if(url.pathname==='/api/compact') {if(this.working)return json(res,{error:'正在处理消息，请稍后再试'},409);this.working=this.model.compact().finally(()=>{this.working=null});return json(res,{ok:await this.working})}
