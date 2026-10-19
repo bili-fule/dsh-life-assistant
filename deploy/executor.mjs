@@ -54,6 +54,7 @@ const server=createServer(async(req,res)=>{
     writeFileSync(join(directory,script),args.code,{mode:0o444})
     writeFileSync(join(directory,'config.json'),JSON.stringify({language:args.language,outputs:args.outputs,timeout:policy.timeoutMs??120000,maxBytes:policy.maxExportBytes??20*1024*1024}),{mode:0o444})
     writeFileSync(join(directory,'wrapper.'+(args.language==='python'?'py':'mjs')),args.language==='python'?pythonWrapper:nodeWrapper,{mode:0o444})
+    chmodSync(directory,0o755);for(const file of readdirSync(directory))chmodSync(join(directory,file),0o444)
     const job={id,inputHash:hash,state:'running',container:'yoyo-job-'+id.slice(0,24),scopes:args.scopes,startedAt:Date.now(),exitCode:null,timedOut:false,stdout:'',stderr:''}
     const argv=['run','--rm','--name',job.container,'--network=none','--cap-drop=ALL','--security-opt=no-new-privileges','--read-only','--pids-limit=64','--memory='+String(policy.memory??'192m'),'--cpus='+String(policy.cpus??0.5),'--user=65534:65534','--tmpfs','/tmp:rw,nosuid,nodev,size=16m','--tmpfs','/work:rw,nosuid,nodev,size=64m,mode=1777','--mount','type=bind,src='+directory+',dst=/input,readonly','--workdir=/work']
     if(args.project!==null&&args.project!==undefined){
