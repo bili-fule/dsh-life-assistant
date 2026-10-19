@@ -76,3 +76,13 @@ test('already alerted unread messages do not repeatedly wake the social agent',t
  agent.data.ingest({target:a.handle,sender:'123',externalId:'second',text:'new message',receivedAt:now})
  assert.equal(agent.choose(now+300000),'overview')
 })
+
+
+test('separate social agent creates and reuses its own native session and workspace',async t=>{
+ const root=mkdtempSync(join(tmpdir(),'separate-session-')),store=new Store(join(root,'private.sqlite')),created=[]
+ const social=new SocialAgent({store,workspace:root,config:{provider:'mock',model:'mock'},model:{sessionId:'private-session',ensure(){throw Error('must not use private agent')}}},null,{separateSession:true})
+ t.after(()=>{social.stop();store.close();rmSync(root,{recursive:true,force:true})})
+ social.ctx={workspaceController:{async create({path}){assert.equal(path,join(root,'qq-social'));return {workspace:{workspaceId:'social-workspace'}}}},sessionController:{async create(args){created.push(args)},async selectModel(){},async rename(){},async resolveAgent(id){return {agent:{id}}}}}
+ const first=await social.ensureAgent(),second=await social.ensureAgent()
+ assert.equal(first.id,second.id);assert.notEqual(first.id,'private-session');assert.equal(created[0].workspaceId,'social-workspace')
+})

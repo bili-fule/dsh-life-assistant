@@ -256,9 +256,9 @@ export class SocialAgent {
   async tick() {
     if(!this.enabled)return
     await this.migrateInbox()
-    if(this.separate&&!this.qq&&!this.store.get('social_initialized'))return
     const agent=await this.ensureAgent()
     this.boundAgent=agent
+    if(this.separate&&!this.qq&&!this.store.get('yoyo_settings',{}).dailySteps&&!this.store.get('yoyo_next_focus'))return
     if(agent.status==='running')return
     await agent.whenIdle()
     const unfinished=this.data.db.prepare("SELECT request_id FROM yoyo_turns WHERE state='running'").all()
