@@ -100,6 +100,33 @@ test('new private messages wake a sleeping agent after the five-second batch win
  assert.equal(agent.choose(now+10000),null)
 })
 
+test('a chosen concern review restores its original view once and stops after revocation',t=>{
+ const {agent,store,target}=fixture(t),a=target('123'),b=target('456'),view=agent.data.open(a.handle),now=Date.now()
+ store.set('yoyo_started',true);store.set('yoyo_last_focus',b.handle)
+ const fields={title:'question',why:'curious',origin:'previous conversation',next:'test',doneWhen:'answer',stopWhen:'no progress',reviewAt:now+1000}
+ const c=agent.data.concern(view.id,fields)
+ assert.equal(agent.choose(now+999),null)
+ assert.equal(agent.choose(now+1000),a.handle)
+ assert.equal(agent.wakeView.id,view.id);assert.equal(agent.wakeEvent.concern,c.id)
+ assert.ok(agent.decisionPrompt().includes('concern_review_due'))
+ assert.equal(agent.decisionPrompt().includes('继续当前活动'),false)
+ agent.data.consumeConcernReview(c.id,fields.reviewAt)
+ assert.equal(agent.choose(now+2000),null)
+ agent.data.concern(view.id,{id:c.id,reviewAt:now+3000})
+ agent.data.approve(a.handle,false)
+ assert.equal(agent.choose(now+4000),null)
+})
+
+test('activity resumption uses its saved scope and an idle clock cannot create work',t=>{
+ const {agent,store,target}=fixture(t),a=target('123'),b=target('456'),v=agent.data.open(a.handle),now=Date.now()
+ store.set('yoyo_started',true);store.set('yoyo_last_focus',b.handle)
+ agent.data.saveActivity(v.id,{state:'waiting',description:'await result',next:'inspect',wakeAt:now+1000})
+ assert.equal(agent.choose(now+1000),a.handle);assert.equal(agent.wakeView.id,v.id)
+ assert.equal(agent.wakeEvent.kind,'self_scheduled_review')
+ agent.data.db.prepare('UPDATE yoyo_activity SET wake_at=NULL').run()
+ for(const time of [now+2000,now+60000,now+86400000])assert.equal(agent.choose(time),null)
+})
+
 
 test('memory maintenance blocks message sending and execution at actual native tool dispatch',async t=>{
  const {agent,hooks,target}=fixture(t),a=target('123');agent.activeView=agent.data.open(a.handle);agent.maintenanceJob={after:0,through:10}

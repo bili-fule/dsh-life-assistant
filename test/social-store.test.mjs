@@ -9,6 +9,53 @@ import { SocialAgent } from '../src/social-agent.mjs'
 
 function fixture(t){const dir=mkdtempSync(join(tmpdir(),'yoyo-')),store=new Store(join(dir,'data.sqlite')),data=new SocialStore(store);t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true})});const target=(peer,kind='private')=>{const target=data.discover({platform:'qq',account:'10001',kind,peer,label:'相同昵称'});return data.approve(target.handle,true)};return {store,data,target}}
 
+test('persistent concerns retain intention and cannot cross private windows',t=>{
+  const {data,target}=fixture(t),a=data.open(target('123').handle),b=data.open(target('456').handle)
+  const saved=data.concern(a.id,{title:'study',why:'understand',origin:'a question',next:'experiment',doneWhen:'verified result',stopWhen:'no useful progress'})
+  assert.equal(data.concerns(a.id)[0].next,'experiment')
+  assert.deepEqual(data.concerns(b.id),[])
+  assert.throws(()=>data.concern(b.id,{id:saved.id,state:'done'}),/范围/)
+  data.concern(a.id,{id:saved.id,state:'abandoned'})
+  assert.equal(data.concerns(a.id)[0].state,'abandoned')
+  assert.throws(()=>data.concern(a.id,{title:'empty'}))
+})
+
+test('feedback distinguishes a self report from scoped tool evidence and review consumption preserves newer decisions',t=>{
+ const {data,target}=fixture(t),a=data.open(target('123').handle),b=data.open(target('456').handle),now=Date.now()
+ const c=data.concern(a.id,{title:'experiment',why:'question',origin:'experience',next:'run',doneWhen:'measured',stopWhen:'no progress',reviewAt:now+1000})
+ assert.equal(data.concernFeedback(a.id,{id:c.id,outcome:'seems promising',decision:'continue'}).evidence,'self_report')
+ data.db.prepare('INSERT INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run('private-result','yoyo_job',JSON.stringify(a.scopes),'done',now)
+ assert.throws(()=>data.concernFeedback(b.id,{id:c.id,outcome:'read',decision:'done',receipt:'private-result'}),/范围/)
+ assert.equal(data.concernFeedback(a.id,{id:c.id,outcome:'job done',decision:'continue',receipt:'private-result'}).evidence,'tool_receipt')
+ data.concern(a.id,{id:c.id,reviewAt:now+2000})
+ data.consumeConcernReview(c.id,now+1000)
+ assert.equal(data.concerns(a.id)[0].reviewAt,now+2000)
+ assert.deepEqual(data.concernFeedbacks(b.id),[])
+})
+
+test('learning selects one admired identity, requires a real trial before adoption and retains retirement history',t=>{
+ const {data,target}=fixture(t),a=target('123'),b=target('456'),v=data.open(a.handle),other=data.open(b.handle)
+ const first=data.ingest({target:a.handle,sender:'123',externalId:'learn-1',text:'先把问题说清楚'})
+ const second=data.ingest({target:a.handle,sender:'123',externalId:'learn-2',text:'可以一步一步来'})
+ const wrong=data.ingest({target:a.handle,sender:'456',externalId:'learn-3',text:'也可以'})
+ const forwarded=data.ingest({target:a.handle,sender:'123',externalId:'learn-4',text:'转发',segments:[{type:'forward',data:{id:'f'}}]})
+ const fields={trait:'耐心解释',admiration:'欣赏其先澄清再解释的方式',trial:'下一次解释先澄清问题',sources:[{id:first.id,quote:'问题说清楚'},{id:second.id,quote:'一步一步'}]}
+ assert.throws(()=>data.learn(v.id,{...fields,state:'adopted',review:'good',trialReceipt:'none'}),/先记录尝试/)
+ assert.throws(()=>data.learn(v.id,{...fields,sources:[fields.sources[0],{id:wrong.id,quote:'也可以'}]}),/同一稳定身份/)
+ assert.throws(()=>data.learn(v.id,{...fields,sources:[fields.sources[0],{id:forwarded.id,quote:'转发'}]}),/不接受转发/)
+ const l=data.learn(v.id,fields)
+ assert.deepEqual(data.learning(other.id),[])
+ data.learn(v.id,{id:l.id,state:'trial'})
+ assert.throws(()=>data.learn(v.id,{id:l.id,state:'adopted',review:'helpful',trialReceipt:'missing'}),/回执/)
+ data.db.prepare('INSERT INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run('trial-job','yoyo_job',JSON.stringify(v.scopes),JSON.stringify({state:'done'}),Date.now())
+ data.learn(v.id,{id:l.id,state:'adopted',review:'这次清晰了一些，仍是自己的判断',trialReceipt:'trial-job'})
+ assert.equal(data.learning(v.id)[0].reviewConfidence,'self_report')
+ data.learn(v.id,{id:l.id,state:'retired'})
+ assert.equal(data.learning(v.id)[0].state,'retired')
+ assert.equal(data.db.prepare('SELECT count(*) n FROM yoyo_learning_versions WHERE learning_id=?').get(l.id).n,4)
+ assert.throws(()=>data.learn(other.id,{id:l.id,state:'trial'}),/范围/)
+})
+
 test('stable accounts separate identical nicknames and duplicate incoming events',t=>{
   const {data,target}=fixture(t),a=target('123'),b=target('456')
   const first=data.ingest({target:a.handle,sender:'123',externalId:'1',text:'PRIVATE_CANARY'})

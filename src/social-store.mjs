@@ -25,6 +25,10 @@ export class SocialStore {
       CREATE TABLE IF NOT EXISTS yoyo_documents(id INTEGER PRIMARY KEY,url TEXT NOT NULL,body TEXT NOT NULL,scope TEXT NOT NULL,created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_assets(id TEXT PRIMARY KEY,path TEXT NOT NULL,scopes TEXT NOT NULL,name TEXT NOT NULL,created_at INTEGER NOT NULL,UNIQUE(path,scopes));
       CREATE TABLE IF NOT EXISTS yoyo_plans(id INTEGER PRIMARY KEY,title TEXT NOT NULL,progress TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT 'open',scopes TEXT NOT NULL,view_id TEXT NOT NULL,not_before INTEGER,updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_learning(id INTEGER PRIMARY KEY,body TEXT NOT NULL,scopes TEXT NOT NULL,updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_learning_versions(id INTEGER PRIMARY KEY,learning_id INTEGER NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_concerns(id INTEGER PRIMARY KEY,body TEXT NOT NULL,scopes TEXT NOT NULL,updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_concern_feedback(id INTEGER PRIMARY KEY,concern_id INTEGER NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,created_at INTEGER NOT NULL);
       INSERT OR IGNORE INTO yoyo_activity(id,updated_at) VALUES(1,0);
     `)
     if(!this.db.prepare('PRAGMA table_info(yoyo_outbox)').all().some(c=>c.name==='content'))this.db.exec('ALTER TABLE yoyo_outbox ADD COLUMN content TEXT')
@@ -120,11 +124,103 @@ export class SocialStore {
   saveActivity(viewId,{state='idle',description='',next='',wakeAt=null}={}) {
     const view=this.view(viewId)
     if(!['idle','working','sleeping','waiting','paused'].includes(state)||typeof description!=='string'||description.length>1000||typeof next!=='string'||next.length>1000||wakeAt!==null&&(!Number.isSafeInteger(wakeAt)||wakeAt<Date.now()||wakeAt>Date.now()+30*86400000))throw Error('活动或唤醒时间无效')
-    this.db.prepare('UPDATE yoyo_activity SET revision=revision+1,state=?,body=?,scopes=?,wake_at=?,updated_at=? WHERE id=1').run(state,JSON.stringify({description,next}),JSON.stringify(view.scopes),wakeAt,Date.now())
+    this.db.prepare('UPDATE yoyo_activity SET revision=revision+1,state=?,body=?,scopes=?,wake_at=?,updated_at=? WHERE id=1').run(state,JSON.stringify({description,next,viewId}),JSON.stringify(view.scopes),wakeAt,Date.now())
     this.db.prepare('INSERT INTO yoyo_activity_log(state,body,scopes,created_at) VALUES(?,?,?,?)').run(state,JSON.stringify({description,next}),JSON.stringify(view.scopes),Date.now())
     return this.activity(viewId)
   }
   activityHistory(viewId){const view=this.view(viewId);return this.db.prepare("SELECT state,body,created_at FROM yoyo_activity_log l WHERE NOT EXISTS(SELECT 1 FROM json_each(l.scopes) s WHERE s.value NOT IN(SELECT value FROM json_each(?))) ORDER BY id DESC LIMIT 20").all(JSON.stringify(view.scopes)).map(r=>({...r,body:JSON.parse(r.body)}))}
+  concerns(viewId) {
+    const view=this.view(viewId)
+    return this.db.prepare('SELECT * FROM yoyo_concerns c WHERE NOT EXISTS(SELECT 1 FROM json_each(c.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?))) ORDER BY updated_at DESC LIMIT 100').all(JSON.stringify(view.scopes)).map(r=>({id:r.id,...JSON.parse(r.body),updatedAt:r.updated_at}))
+  }
+  concern(viewId,args) {
+    const visible=this.concerns(viewId),view=this.view(viewId)
+    const previous=args.id===undefined?null:visible.find(r=>r.id===args.id)
+    if(args.id!==undefined&&!previous)throw Error('关切不存在或不在当前资料范围')
+    const body={...previous,...args};delete body.id;delete body.updatedAt
+    for(const field of ['title','why','origin','next','doneWhen','stopWhen'])body[field]=boundedText(body[field],field==='title'?300:1500)
+    body.state??='active'
+    if(!['active','waiting','done','abandoned'].includes(body.state))throw Error('关切状态无效')
+    body.reviewAt??=null
+    if(args.reviewAt!==undefined&&body.reviewAt!==null&&(!Number.isSafeInteger(body.reviewAt)||body.reviewAt<=Date.now()||body.reviewAt>Date.now()+30*86400000))throw Error('复查时间无效')
+    // Updating a concern from a broader view also broadens its input provenance.
+    body.viewId=viewId
+    const scopes=JSON.stringify(sourceScopes(view.scopes)),now=Date.now()
+    if(previous)this.db.prepare('UPDATE yoyo_concerns SET body=?,scopes=?,updated_at=? WHERE id=?').run(JSON.stringify(body),scopes,now,previous.id)
+    const id=previous?.id??Number(this.db.prepare('INSERT INTO yoyo_concerns(body,scopes,updated_at) VALUES(?,?,?)').run(JSON.stringify(body),scopes,now).lastInsertRowid)
+    return {id,state:body.state}
+  }
+  learning(viewId) {
+    const view=this.view(viewId)
+    return this.db.prepare('SELECT id,body,updated_at FROM yoyo_learning l WHERE NOT EXISTS(SELECT 1 FROM json_each(l.scopes) s WHERE s.value NOT IN(SELECT value FROM json_each(?))) ORDER BY updated_at DESC LIMIT 50').all(JSON.stringify(view.scopes)).map(r=>({id:r.id,...JSON.parse(r.body),updatedAt:r.updated_at}))
+  }
+  learn(viewId,args) {
+    const view=this.view(viewId),previous=args.id===undefined?null:this.learning(viewId).find(r=>r.id===args.id)
+    if(args.id!==undefined&&!previous)throw Error('学习意图不存在或不在当前资料范围')
+    const body={...previous,...args};delete body.id;delete body.updatedAt
+    for(const field of ['trait','admiration','trial'])body[field]=boundedText(body[field],1500)
+    body.state??='proposed'
+    if(!['proposed','trial','adopted','retired'].includes(body.state))throw Error('学习状态无效')
+    if(!Array.isArray(body.sources)||body.sources.length<2||body.sources.length>10)throw Error('欣赏对象至少需要两条直接经历证据')
+    const identities=[]
+    for(const source of body.sources){
+      if(!Number.isSafeInteger(source.id)||typeof source.quote!=='string'||!source.quote.trim())throw Error('学习证据无效')
+      const row=this.db.prepare('SELECT e.*,t.platform,t.account FROM yoyo_events e JOIN yoyo_targets t ON e.target=t.handle WHERE e.id=?').get(source.id)
+      if(!row||!mayRead(view,row.scope)||row.kind!=='message'||!row.text.includes(source.quote)||JSON.parse(row.segments).some(s=>s.type==='forward'))throw Error('学习依据须为当前可见的本人直接原文，不接受转发')
+      identities.push(JSON.stringify([row.platform,row.account,row.sender]))
+    }
+    if(new Set(body.sources.map(s=>s.id)).size<2||new Set(identities).size!==1)throw Error('学习对象必须是同一稳定身份，且有独立原文')
+    body.identity=JSON.parse(identities[0])
+    if(previous&&JSON.stringify(previous.identity)!==JSON.stringify(body.identity))throw Error('更换欣赏对象应创建新的学习意图')
+    if(body.state==='adopted'){
+      if(!previous||!['trial','adopted'].includes(previous.state))throw Error('需要先记录尝试，再决定保留')
+      if(previous.state==='adopted'&&['trait','admiration','trial'].some(k=>body[k]!==previous[k]))throw Error('改变学习内容需要重新进入 trial')
+      body.review=boundedText(body.review,1500)
+      if(typeof body.trialReceipt!=='string')throw Error('保留学习结果需要实际尝试回执')
+      const receipt=this.db.prepare('SELECT name,scopes,result_text,created_at FROM yoyo_tool_sources WHERE run_key=?').get(body.trialReceipt)
+      if(!receipt||!['yoyo_send','yoyo_job'].includes(receipt.name)||!JSON.parse(receipt.scopes).every(s=>mayRead(view,s)))throw Error('尝试回执不存在或不在当前资料范围')
+      if(previous.state==='trial'&&receipt.created_at<previous.updatedAt)throw Error('尝试回执早于本轮学习尝试')
+      if(receipt.name==='yoyo_send'&&!this.db.prepare("SELECT 1 FROM yoyo_outbox WHERE run_key=? AND state='sent'").get(body.trialReceipt))throw Error('发信尚未确认，不能作为已尝试证据')
+      if(receipt.name==='yoyo_job'&&JSON.parse(receipt.result_text).state!=='done')throw Error('尝试任务尚未完成')
+      body.reviewConfidence='self_report'
+    }
+    const scopes=JSON.stringify(sourceScopes(view.scopes)),now=Date.now()
+    return this.store.transaction(()=>{
+      let id=previous?.id
+      if(id)this.db.prepare('UPDATE yoyo_learning SET body=?,scopes=?,updated_at=? WHERE id=?').run(JSON.stringify(body),scopes,now,id)
+      else id=Number(this.db.prepare('INSERT INTO yoyo_learning(body,scopes,updated_at) VALUES(?,?,?)').run(JSON.stringify(body),scopes,now).lastInsertRowid)
+      this.db.prepare('INSERT INTO yoyo_learning_versions(learning_id,body,scopes,created_at) VALUES(?,?,?,?)').run(id,JSON.stringify(body),scopes,now)
+      return {id,state:body.state,identity:body.identity}
+    })
+  }
+  dueConcern(now=Date.now()) {
+    const rows=this.db.prepare("SELECT id,body,scopes FROM yoyo_concerns WHERE json_extract(body,'$.state') IN ('active','waiting') AND json_extract(body,'$.reviewAt')<=? ORDER BY json_extract(body,'$.reviewAt'),id").all(now)
+    for(const r of rows){try{const body=JSON.parse(r.body),view=this.view(body.viewId);if(!JSON.parse(r.scopes).every(s=>mayRead(view,s)))continue;return {id:r.id,...body,view}}catch{/* Revoked or legacy concerns do not wake another scope. */}}
+    return null
+  }
+  consumeConcernReview(id,reviewAt) {
+    // Compare-and-clear so a new decision made while this turn runs survives.
+    this.db.prepare("UPDATE yoyo_concerns SET body=json_set(body,'$.reviewAt',NULL) WHERE id=? AND json_extract(body,'$.reviewAt')=?").run(id,reviewAt)
+  }
+  concernFeedback(viewId,{id,outcome,decision,receipt}) {
+    const view=this.view(viewId),concern=this.concerns(viewId).find(r=>r.id===id)
+    if(!concern)throw Error('关切不存在或不在当前资料范围')
+    outcome=boundedText(outcome,2000)
+    if(!['continue','revise','wait','done','abandon'].includes(decision))throw Error('反馈决定无效')
+    if(receipt!==undefined){
+      const source=this.db.prepare("SELECT scopes,name FROM yoyo_tool_sources WHERE run_key=?").get(receipt)
+      if(!source||['yoyo_concern','yoyo_feedback','yoyo_self','yoyo_memory','yoyo_forget','yoyo_recall'].includes(source.name)||!JSON.parse(source.scopes).every(s=>mayRead(view,s)))throw Error('反馈回执不存在或不在当前资料范围')
+    }
+    const body={outcome,decision,receipt:receipt??null,evidence:receipt?'tool_receipt':'self_report'}
+    const result=this.db.prepare('INSERT INTO yoyo_concern_feedback(concern_id,body,scopes,created_at) VALUES(?,?,?,?)').run(id,JSON.stringify(body),JSON.stringify(sourceScopes(view.scopes)),Date.now())
+    // Feedback is a report, not automatic proof of success. Update the explicit
+    // concern via its tool when next/criteria/state need changing.
+    return {id:Number(result.lastInsertRowid),...body}
+  }
+  concernFeedbacks(viewId) {
+    const view=this.view(viewId)
+    return this.db.prepare('SELECT id,concern_id,body,created_at FROM yoyo_concern_feedback f WHERE NOT EXISTS(SELECT 1 FROM json_each(f.scopes) s WHERE s.value NOT IN(SELECT value FROM json_each(?))) ORDER BY id DESC LIMIT 20').all(JSON.stringify(view.scopes)).map(r=>({id:r.id,concern:r.concern_id,...JSON.parse(r.body),at:r.created_at}))
+  }
   remember(viewId,{kind='episodes',body,sources=[],confidence='observed',expiresAt=null}) {
     const view=this.view(viewId);body=boundedText(body,2000)
     if(!['episodes','profile','relations','knowledge','procedures','intention','communication'].includes(kind)||!['observed','hypothesis','self_report'].includes(confidence)||!Array.isArray(sources)||!sources.length||sources.length>10||expiresAt!==null&&(!Number.isSafeInteger(expiresAt)||expiresAt<=Date.now()))throw Error('记忆类型或来源无效')

@@ -4,6 +4,10 @@
 
 新增可选的 **yoyo 自主活动模式**：QQ 社交主体使用独立原生 Agent，自选 QQ 群、私聊或公开研究；微信私人助理拥有单独的会话、工作区和记忆库，维护自己的打算、记忆与稳定情绪。该模式默认关闭，需要配套的原生 Session / Token Meter / Compaction 扩展；[配置、构建与能力边界](deploy/README.md)。
 
+## 动机与选择性学习
+
+0.8.0 增加持续关切、下一步意图、一次性复查和实际行动反馈；理解人物与模仿表达分开，向欣赏对象学习需直接经历、明确尝试与复查，保留修改版本。具体实现和限制见[动机与学习文档](docs/motivation.md)，[Generative Agents 参考说明](docs/generative-agents-reference.md)。真实连续行为仍需运行验收，不能以工具存在代表已具备自然人格。
+
 ## 原生 DSH 架构
 
 微信 → 持久化收件箱与连续消息合批 → 官方 `SessionController.create / prompt / resolveAgent` → DSH 原生 Agent / 工具调度 / Session JSONL / 自动压缩 → 微信回复队列。

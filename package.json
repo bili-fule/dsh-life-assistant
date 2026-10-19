@@ -1,6 +1,6 @@
 {
   "name": "dsh-life-assistant",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "A persistent WeChat inbox, personal task assistant and bounded memory system for DeepSeek Harness",
   "type": "module",
   "main": "src/index.mjs",
@@ -13,6 +13,7 @@
     "src/*.py",
     "public",
     "licenses",
+    "docs",
     "deploy",
     "cordis.patch.yml",
     "README.md",

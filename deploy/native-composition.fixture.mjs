@@ -89,3 +89,39 @@ it('keeps QQ in its own real native agent and denies outbound actions during mem
   expect(adapter.requests.at(-1).toolHistory.tools.map(t=>t.name)).not.toContain('yoyo_send')
  }finally{await ctx.fiber.dispose();social?.stop();store?.close();rmSync(root,{recursive:true,force:true})}
 })
+
+
+it('persists a self-chosen concern and resumes it once through the native loop without new chat',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'motivated-native-yoyo-')),ctx=new Context()
+ let store,social
+ try{
+  const base=process.env.YOYO_PLUGIN_ROOT
+  const {Store}=await import(pathToFileURL(join(base,'src/store.mjs')).href)
+  const {SocialAgent}=await import(pathToFileURL(join(base,'src/social-agent.mjs')).href)
+  const {NativeAgent}=await import(pathToFileURL(join(base,'src/native-agent.mjs')).href)
+  for(const plugin of [LlmRuntime,SessionStore,SessionProjectionRegistry,SystemPrompt,ToolRuntime,AgentRegistry,TokenMeter])await ctx.plugin(plugin)
+  await ctx.plugin(AgentLoop,{agents:[]});await ctx.plugin(BasicCompactionEngine,{auto:false});await ctx.plugin(ToolResultPruner)
+  ctx.agentPresets={serviceFor(){return ctx.compaction}}
+  store=new Store(join(root,'data.sqlite'));store.set('yoyo_legacy_labelled',true);store.set('yoyo_settings',{dailySteps:30})
+  const native=await ctx.agentLoop.create(SessionId('motivated-yoyo'),{provider:'mock',model:'mock'})
+  ctx.sessionController={async inspect(){return {events:native.session.snapshotEvents()}},async prompt(r){native.followup(createUserMessage({content:r.content,source:{kind:'user',rpcId:r.requestId}}));return {accepted:true}}}
+  const runtime={store,workspace:root,abort:new AbortController(),model:{sessionId:native.id,async ensure(){return native},receipt:NativeAgent.prototype.receipt.bind({ctx,store})}}
+  social=new SocialAgent(runtime,ctx,{enabled:true})
+  const adapter=new MockAdapter([
+   toolCallResponse('concern','yoyo_concern',{title:'understand a question',why:'I remain curious',origin:'earlier experience',next:'compare possible explanations',doneWhen:'one tested explanation',stopWhen:'no useful evidence'}),
+   toolCallResponse('pause','yoyo_sleep',{until:null,reason:'wait for a useful moment'}),
+   toolCallResponse('feedback','yoyo_feedback',{id:1,outcome:'no new evidence; stop for now',decision:'abandon'}),
+   toolCallResponse('abandon','yoyo_concern',{id:1,state:'abandoned'}),
+   toolCallResponse('rest','yoyo_sleep',{until:null,reason:'no worthwhile next action'})])
+  ctx.llm.registerAdapter(['mock'],adapter);store.set('yoyo_next_focus','public')
+  await social.tick()
+  social.data.db.prepare("UPDATE yoyo_concerns SET body=json_set(body,'$.reviewAt',?) WHERE id=1").run(Date.now()-1)
+  await social.tick();await social.tick()
+  expect(adapter.requests).toHaveLength(5)
+  expect(JSON.stringify(adapter.requests)).toContain('concern_review_due')
+  expect(JSON.stringify(adapter.requests)).not.toContain('[调度事件]')
+  expect(social.data.concerns(social.activeView.id)[0].state).toBe('abandoned')
+  expect(social.data.concernFeedbacks(social.activeView.id)[0].evidence).toBe('self_report')
+  expect(social.data.snapshot().outbox).toHaveLength(0)
+ }finally{social?.stop();await ctx.fiber.dispose();store?.close();rmSync(root,{recursive:true,force:true})}
+})
