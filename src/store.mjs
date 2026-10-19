@@ -16,6 +16,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY,title TEXT NOT NULL,title_key TEXT NOT NULL,status TEXT NOT NULL,due_at INTEGER,remind_at INTEGER,priority TEXT NOT NULL,reason TEXT NOT NULL,evidence TEXT NOT NULL,source_id INTEGER REFERENCES inbox(id),created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,revision INTEGER DEFAULT 1);
       CREATE INDEX IF NOT EXISTS task_status ON tasks(status,remind_at);
       CREATE TABLE IF NOT EXISTS memories(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,body TEXT NOT NULL,source_id INTEGER REFERENCES inbox(id),created_at INTEGER NOT NULL,active INTEGER DEFAULT 1);
+      CREATE TABLE IF NOT EXISTS memory_sources(memory_id INTEGER REFERENCES memories(id),inbox_id INTEGER REFERENCES inbox(id),quote TEXT NOT NULL,PRIMARY KEY(memory_id,inbox_id,quote));
+      CREATE TABLE IF NOT EXISTS memory_retirements(memory_id INTEGER PRIMARY KEY REFERENCES memories(id),reason TEXT NOT NULL,through_id INTEGER NOT NULL,created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS maintenance_jobs(key TEXT PRIMARY KEY,kind TEXT NOT NULL,through_id INTEGER NOT NULL,state TEXT NOT NULL,phase TEXT DEFAULT 'memory',attempts INTEGER DEFAULT 0,next_at INTEGER DEFAULT 0,request_id TEXT,error TEXT,created_at INTEGER NOT NULL,finished_at INTEGER);
       CREATE TABLE IF NOT EXISTS checkpoints(id INTEGER PRIMARY KEY,through_id INTEGER NOT NULL,summary TEXT NOT NULL,created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY,unique_key TEXT UNIQUE NOT NULL,kind TEXT NOT NULL,body TEXT NOT NULL,task_id INTEGER,revision INTEGER,state TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_at INTEGER DEFAULT 0,created_at INTEGER NOT NULL,sent_at INTEGER,error TEXT);
       CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,action TEXT NOT NULL,detail TEXT NOT NULL,created_at INTEGER NOT NULL);
@@ -64,7 +67,7 @@ export class Store {
     return Number(this.db.prepare('INSERT INTO memories(kind,body,source_id,created_at) VALUES (?,?,?,?)').run(kind,body,sourceId,Date.now()).lastInsertRowid)
   }
   memories() { return this.db.prepare('SELECT * FROM memories WHERE active=1 ORDER BY id DESC LIMIT 100').all() }
-  forget(id) { const r=this.db.prepare('UPDATE memories SET active=0 WHERE id=?').run(id); this.audit('memory.forget',{id}); return r.changes }
+  forget(id) { const r=this.db.prepare('UPDATE memories SET active=0 WHERE id=?').run(id); if(r.changes)this.db.prepare("INSERT OR REPLACE INTO memory_retirements VALUES (?,'forgotten',?,?)").run(id,this.db.prepare('SELECT coalesce(max(id),0) id FROM inbox').get().id,Date.now());this.audit('memory.forget',{id}); return r.changes }
   enqueue(key,kind,body,{taskId=null,revision=null,now=Date.now()}={}) { return this.db.prepare('INSERT OR IGNORE INTO outbox(unique_key,kind,body,task_id,revision,created_at) VALUES (?,?,?,?,?,?)').run(key,kind,body,taskId,revision,now).changes }
   checkpoint() { return this.db.prepare('SELECT * FROM checkpoints ORDER BY id DESC LIMIT 1').get() }
   history(after=0,limit=30) { return this.db.prepare("SELECT id,text,result,received_at FROM inbox WHERE id>? AND state='done' ORDER BY id DESC LIMIT ?").all(after,limit).reverse() }

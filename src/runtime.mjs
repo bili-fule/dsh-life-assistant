@@ -13,6 +13,8 @@ import { localParts,parseTime } from './time.mjs'
 import * as ilink from './ilink.mjs'
 import { Media,inboundLabel,safeFilename } from './media.mjs'
 import { BrowserTools,workspacePath } from './tools.mjs'
+import { Maintenance } from './maintenance.mjs'
+import { markdownChunks } from './markdown.mjs'
 
 export function safeBase(value) {
   const u=new URL(value)
@@ -36,6 +38,7 @@ export class Runtime {
     this.media=new Media({store:this.store,workspace:this.workspace,attachments:config.attachments,signal:this.abort.signal,config})
     this.tools=new BrowserTools({workspace:this.workspace,signal:this.abort.signal,config})
     this.model=config.agentDriver??new NativeAgent(config.nativeContext,this,this.config)
+    this.maintenance=new Maintenance(this,config)
     this.running=false;this.working=null;this.polling=null;this.login=null;this.pollGeneration=0
     const tokenPath=join(this.stateDir,'admin-token')
     if(!existsSync(tokenPath))writeFileSync(tokenPath,randomBytes(32).toString('hex'),{mode:0o600})
@@ -51,7 +54,7 @@ export class Runtime {
     }
     this.server=createServer((req,res)=>this.http(req,res).catch(()=>{if(!res.headersSent)json(res,{error:'操作未完成，请检查输入或查看状态'},400);else res.end()}))
     await new Promise((yes,no)=>{this.server.once('error',no);this.server.listen(this.config.port,this.config.host,yes)})
-    this.timer=setInterval(()=>{if(!this.working)this.working=this.tick().catch(e=>this.log('worker.error',e)).finally(()=>{this.working=null})},2000)
+    this.timer=setInterval(()=>{if(!this.working)this.working=this.tick().catch(e=>this.log('worker.error',e)).finally(()=>{this.working=null})},500)
     this.working=this.tick().catch(e=>this.log('worker.error',e)).finally(()=>{this.working=null})
     this.startPolling()
     console.log(`[life-assistant] ready on ${this.config.host}:${this.config.port}; private data outside plugin source`)
@@ -62,6 +65,7 @@ export class Runtime {
     return {bound:!!c?.token,ownerBound:!!this.store.get('owner'),login:this.login?{status:this.login.status,message:this.login.message}:null,
       provider:this.config.provider,model:this.config.model,timezone:'Asia/Shanghai',engine:'DSH native Agent',nativeSessionId:this.store.get('native_session_id'),
       batching:{quietSeconds:this.batcher.quietMs/1000,maxWaitSeconds:this.batcher.maxWaitMs/1000,maxMessages:this.batcher.maxMessages},
+      maintenance:this.maintenance.status(),markdown:true,
       capabilities:{shell:true,links:true,browser:true,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true},workspaceFiles:this.workspaceFiles(),
       persona:this.store.get('persona','你是一位贴心但不啰嗦的中文事务助理，说话自然，判断谨慎，帮用户把事情理清楚。'),
       styleLearning:this.store.get('style_learning',true),learnedStyle:this.store.get('learned_style',{}),styleCounts:this.store.get('style_counts',{}),
@@ -166,7 +170,8 @@ export class Runtime {
             this.store.captureMessage(raw)
             const text=inboundLabel(raw)
             if(raw.context_token){this.store.set('context_token',raw.context_token);this.store.set('last_inbound',Date.now());this.store.db.prepare("UPDATE outbox SET next_at=0 WHERE state='pending'").run()}
-            this.store.ingest(messageKey(raw),owner,text.slice(0,30000))
+            const inserted=this.store.ingest(messageKey(raw),owner,text.slice(0,30000))
+            if(inserted&&this.maintenance.active)void this.model.interruptMaintenance?.().catch(e=>this.log('maintenance.interrupt',e))
           }
           if(result.get_updates_buf!=null)this.store.set('cursor',result.get_updates_buf)
           this.store.set('poll_error',null)
@@ -186,8 +191,9 @@ export class Runtime {
     const batch=this.batcher.ready(),row=batch?.[0]
     if(row) {
       this.batcher.claim(batch)
+      this.activeBatch={anchor:row.id,sender:row.sender,waits:this.store.inputContext(row.id)?.nativeRequest?.waits??0}
       try {
-        if(/^(?:\/status|状态)$/u.test(row.text.trim())) this.finishCommand(row,JSON.stringify(this.status(),null,2))
+        if(batch.length===1&&/^(?:\/status|状态)$/u.test(row.text.trim())) this.finishCommand(row,JSON.stringify(this.status(),null,2))
         else {
           const result=this.store.transaction(()=>{
             const reply=batch.length===1?command(row.text,this.store,row.id):null
@@ -197,18 +203,39 @@ export class Runtime {
           if(result===null) {
             const prepared=await this.batcher.prepare(batch,this.media,this.workspace)
             const analysis=await this.model.analyze(prepared.text,this.store,Date.now(),{runner:this.tools,rowId:row.id,assets:prepared.assets,hasMedia:prepared.hasMedia,workspace:this.workspace,batchIds:batch.map(r=>r.id),directTexts:batch.map(r=>r.text)})
-            applyAnalysis(this.store,row,analysis,{batchIds:batch.map(r=>r.id)});this.store.set('model_health',{ok:true,at:Date.now()})
+            applyAnalysis(this.store,row,analysis,{batchIds:this.batcher.members(row.id).map(r=>r.id)});this.store.set('model_health',{ok:true,at:Date.now()})
           }
         }
       } catch(e) {
-        this.batcher.fail(batch,e)
-      }
+        this.batcher.fail(this.batcher.members(row.id),e)
+      } finally {this.activeBatch=null;this.store.set('conversation_finished_at',Date.now())}
     }
     schedule(this.store)
     if(this.store.get('wechat')?.token&&this.store.get('context_token'))await deliverOne(this.store,(text,key,kind)=>this.send(text,key,kind))
     const date=localParts().date
     if(this.store.get('backup_date')!==date){this.backup();this.store.set('backup_date',date)}
-    // Automatic context pressure and transcript compaction belong to DSH's native preset.
+    const job=this.maintenance.next()
+    if(job&&this.model.maintain)await this.maintenance.run(job)
+  }
+
+  async waitForMore(reason,signal) {
+    const batch=this.activeBatch
+    if(!batch)throw Error('只能在微信消息处理回合等待补充')
+    if(typeof reason!=='string'||!reason.trim())throw Error('需要说明等待原因')
+    if(batch.waits>=3)return {received:0,limitReached:true,message:'已等待三轮，请继续处理已有内容。'}
+    batch.waits++
+    const before=this.store.inputContext(batch.anchor)??{}
+    this.store.setInputContext(batch.anchor,{...before,nativeRequest:{...before.nativeRequest,waits:batch.waits}})
+    this.store.audit('inbox.agent_wait',{anchor:batch.anchor,reason:reason.slice(0,300),round:batch.waits})
+    await delay(this.config.agentWaitMs??5000,undefined,{signal})
+    signal.throwIfAborted()
+    const rows=this.store.db.prepare("SELECT i.* FROM inbox i LEFT JOIN inbox_batch_members b ON b.inbox_id=i.id WHERE i.id>? AND i.state='pending' AND i.sender=? AND i.attempts=0 AND i.next_at<=? AND b.batch_id IS NULL ORDER BY i.id LIMIT ?").all(batch.anchor,batch.sender,Date.now(),this.batcher.maxMessages)
+    if(!rows.length)return {received:0,message:'本次五秒等待没有新消息，继续已有任务。'}
+    this.batcher.claim(rows,batch.anchor)
+    const prepared=await this.batcher.prepare(rows,this.media,this.workspace)
+    const context=this.store.inputContext(batch.anchor)??{},request=context.nativeRequest??{}
+    this.store.setInputContext(batch.anchor,{...context,nativeRequest:{...request,batchIds:[...new Set([...(request.batchIds??[batch.anchor]),...rows.map(r=>r.id)])],directTexts:[...(request.directTexts??[]),...rows.map(r=>r.text)],hasMedia:request.hasMedia||prepared.hasMedia}})
+    return {received:rows.length,text:prepared.text,assets:prepared.assets,messageIds:rows.map(r=>r.id)}
   }
 
   finishCommand(row,reply) {this.store.db.prepare("UPDATE inbox SET state='done',result=?,error=NULL WHERE id=?").run(JSON.stringify({reply}),row.id);this.store.enqueue('reply:'+row.id,'reply',reply)}
@@ -235,7 +262,7 @@ export class Runtime {
       await ilink.sendMedia({baseUrl:safeBase(c.base),token:c.token,to,contextToken,item,clientId:'life-'+createHash('sha256').update(key).digest('hex').slice(0,32)})
       return
     }
-    const parts=[];for(let i=0;i<text.length;i+=1400)parts.push(text.slice(i,i+1400))
+    const parts=markdownChunks(text)
     for(let i=0;i<parts.length;i++) {
       const chunkKey=`sent-chunk:${key}:${i}`
       if(this.store.get(chunkKey))continue

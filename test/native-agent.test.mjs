@@ -7,13 +7,13 @@ import { Runtime } from '../src/runtime.mjs'
 import { nativeOutcome } from '../src/native-agent.mjs'
 
 function nativeHost(){
-  const events=[],prompts=[],registered=new Map();let agent,turn=0,fail=false,compacted=0
+  const events=[],prompts=[],registered=new Map();let agent,turn=0,fail=false,compacted=0,onTurn=null
   const ctx={
     systemPrompt:{section(){return ()=>{}},context(){return ()=>{}},variable(){return ()=>{}}},
     tools:{register(def){registered.set(def.name,def);return ()=>registered.delete(def.name)}},
     workspaceController:{async create({path}){return {workspace:{workspaceId:'workspace',path}}}},
     sessionController:{
-      async create({sessionId,workspaceId,cwd}){assert.ok(!(workspaceId&&cwd));agent??={id:sessionId,session:{id:sessionId},status:'idle',cancel(){},async whenIdle(){const pending=events.at(-1);if(pending?.type==='user/message'){events.push({type:'assistant/message',data:{turn,message:{content:[{type:'text',text:'已由原生 Agent 整批处理'}]}}},{type:'turn/end',data:{turn,reason:fail?{kind:'error',error:{message:'native failure'}}:{kind:'completed'}}})}}};return {sessionId}},
+      async create({sessionId,workspaceId,cwd}){assert.ok(!(workspaceId&&cwd));agent??={id:sessionId,session:{id:sessionId},status:'idle',cancel(){},async whenIdle(){const pending=events.at(-1);if(pending?.type==='user/message'){if(onTurn)await onTurn(agent);events.push({type:'assistant/message',data:{turn,message:{content:[{type:'text',text:'已由原生 Agent 整批处理'}]}}},{type:'turn/end',data:{turn,reason:fail?{kind:'error',error:{message:'native failure'}}:{kind:'completed'}}})}}};return {sessionId}},
       async resolveAgent(){return {agent}},async selectModel(){},async rename(){},
       async inspect(){return {events:structuredClone(events)}},
       async prompt(request){prompts.push(request);turn++;events.push({type:'turn/start',data:{turn}},{type:'user/message',data:{id:request.requestId,source:{kind:'user',rpcId:request.requestId},content:request.content}});return {accepted:true}},
@@ -21,7 +21,7 @@ function nativeHost(){
     sessions:{async flush(){}},agentPresets:{serviceFor(){return {async compactNow(){compacted++;return {ok:true}}}}},
   }
   Object.defineProperty(ctx,'llm',{get(){throw Error('Direct LLM calls are forbidden in this test')}})
-  return {ctx,events,prompts,registered,get agent(){return agent},fail:value=>{fail=value},get compacted(){return compacted}}
+  return {ctx,events,prompts,registered,onTurn:fn=>{onTurn=fn},get agent(){return agent},fail:value=>{fail=value},get compacted(){return compacted}}
 }
 function fixture(t){const dir=mkdtempSync(join(tmpdir(),'life-native-')),host=nativeHost(),runtime=new Runtime({stateDir:dir,nativeContext:host.ctx});t.after(async()=>{await runtime.stop();rmSync(dir,{recursive:true,force:true})});return {dir,host,runtime}}
 function options(id=1){return {rowId:id,batchIds:[id],directTexts:['请在明天交表']}}
@@ -76,4 +76,46 @@ test('a later native UI turn cannot overwrite the WeChat request result',()=>{
 test('missing native services fail clearly without falling back to a handwritten loop',async t=>{
   const dir=mkdtempSync(join(tmpdir(),'life-no-native-')),runtime=new Runtime({stateDir:dir});t.after(async()=>{await runtime.stop();rmSync(dir,{recursive:true,force:true})})
   await assert.rejects(()=>runtime.model.analyze('hello',runtime.store,Date.now(),options()),/不会回退/)
+})
+
+
+test('native wait joins later messages atomically, keeps evidence, and sends one final reply',async t=>{
+  const {runtime,host}=fixture(t);runtime.running=true;runtime.config.agentWaitMs=1
+  runtime.store.ingest('first','owner','我还有资料，等一下',Date.now()-6000)
+  host.onTurn(async agent=>{
+    runtime.store.ingest('late','owner','我在三班，偏好直接说结果',Date.now())
+    const tool=host.registered.get('life_wait'),exec={agent,callId:'wait-1',signal:runtime.abort.signal}
+    const result=await tool.execute({reason:'用户表示还有资料'},exec)
+    assert.equal(result.received,1);assert.match(result.text,/偏好直接说结果/)
+    const cached=await tool.execute({reason:'用户表示还有资料'},exec);assert.deepEqual(cached,result)
+    const record=host.registered.get('life_memory')
+    await record.execute({upserts:[{body:'用户在三班',sources:[{id:2,quote:'我在三班'}]}]},{...exec,callId:'remember-late'})
+  })
+  await runtime.tick()
+  assert.equal(host.prompts.length,1);assert.equal(runtime.store.snapshot().outbox.length,1)
+  assert.ok(runtime.store.snapshot().inbox.every(row=>row.state==='done'));assert.equal(runtime.store.memories().length,1)
+  assert.equal(runtime.store.inputContext(1).nativeRequest.waits,1)
+})
+test('background native turns leave a trace but do not enqueue a WeChat response or execute ordinary tools',async t=>{
+  const {runtime,host}=fixture(t);runtime.store.ingest('m','owner','我喜欢简短回复');runtime.store.db.exec("UPDATE inbox SET state='done'")
+  host.onTurn(async agent=>{
+    await assert.rejects(()=>host.registered.get('life_send_file').execute({path:'test.md'},{agent,callId:'no-send',signal:runtime.abort.signal}),/后台整理/)
+    await host.registered.get('life_memory').execute({upserts:[{body:'用户偏好简短回复',sources:[{id:1,quote:'我喜欢简短回复'}]}]},{agent,callId:'memory',signal:runtime.abort.signal})
+  })
+  const job={kind:'idle',through_id:1,request_id:'maintenance:test:1'}
+  await runtime.model.maintain(job,[{id:1,direct_text:'我喜欢简短回复'}]);await runtime.model.maintain(job,[])
+  assert.equal(host.prompts.length,1);assert.equal(runtime.store.snapshot().outbox.length,0);assert.equal(runtime.store.memories().length,1);assert.equal(runtime.model.maintenanceJob,null)
+})
+test('native waits are bounded and a new round with no supplement leaves messages available',async t=>{
+  const {runtime,host}=fixture(t);runtime.running=true;runtime.config.agentWaitMs=1
+  runtime.store.ingest('first','owner','等我补充资料',Date.now()-6000)
+  host.onTurn(async agent=>{
+    const tool=host.registered.get('life_wait')
+    for(let i=0;i<4;i++){
+      const result=await tool.execute({reason:'等待补充资料'},{agent,callId:'wait-'+i,signal:runtime.abort.signal})
+      assert.equal(result.received,0);assert.equal(!!result.limitReached,i===3)
+    }
+  })
+  await runtime.tick();assert.equal(runtime.store.inputContext(1).nativeRequest.waits,3)
+  assert.equal(runtime.store.snapshot().outbox.length,1)
 })

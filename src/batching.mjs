@@ -9,8 +9,8 @@ export function standaloneCommand(text) {
 export class Batcher {
   constructor(store,config={}) {
     this.store=store
-    this.quietMs=Math.max(1000,Math.min(60000,Number(config.batchQuietMs)||15000))
-    this.maxWaitMs=Math.max(this.quietMs,Math.min(300000,Number(config.batchMaxWaitMs)||60000))
+    this.quietMs=Math.max(1000,Math.min(60000,Number(config.batchWindowMs??config.batchQuietMs)||5000))
+    this.maxWaitMs=this.quietMs
     this.maxMessages=Math.floor(Math.max(1,Math.min(50,Number(config.batchMaxMessages)||20)))
   }
   members(id) {
@@ -21,18 +21,17 @@ export class Batcher {
     const first=this.store.db.prepare("SELECT i.*,b.batch_id FROM inbox i LEFT JOIN inbox_batch_members b ON b.inbox_id=i.id WHERE i.state='pending' AND i.next_at<=? AND (b.batch_id IS NULL OR b.batch_id=i.id) ORDER BY i.id LIMIT 1").get(now)
     if(!first)return null
     if(first.batch_id)return this.members(first.id)
-    if(first.attempts||this.store.inputContext(first.id)?.agentFinal||standaloneCommand(first.text))return [first]
+    if(first.attempts||this.store.inputContext(first.id)?.agentFinal)return [first]
     const candidates=this.store.db.prepare('SELECT i.*,b.batch_id FROM inbox i LEFT JOIN inbox_batch_members b ON b.inbox_id=i.id WHERE i.id>=? ORDER BY i.id LIMIT ?').all(first.id,this.maxMessages+1)
     const rows=[];let closed=false
     for(const row of candidates) {
-      if(row.state!=='pending'||row.next_at>now||row.batch_id||row.sender!==first.sender||row.attempts||this.store.inputContext(row.id)?.agentFinal||standaloneCommand(row.text)||(rows.length&&row.received_at-rows.at(-1).received_at>this.quietMs)){closed=true;break}
+      if(row.state!=='pending'||row.next_at>now||row.batch_id||row.sender!==first.sender||row.attempts||this.store.inputContext(row.id)?.agentFinal||row.received_at>=first.received_at+this.quietMs){closed=true;break}
       rows.push(row)
       if(rows.length>=this.maxMessages){closed=true;break}
     }
-    return rows.length&&(closed||now>=Math.min(rows.at(-1).received_at+this.quietMs,first.received_at+this.maxWaitMs))?rows:null
+    return rows.length&&now>=first.received_at+this.quietMs?rows:null
   }
-  claim(rows) {
-    const anchor=rows[0].id
+  claim(rows,anchor=rows[0].id) {
     this.store.transaction(()=>{
       for(const row of rows) {
         this.store.db.prepare('INSERT OR IGNORE INTO inbox_batch_members VALUES (?,?)').run(row.id,anchor)

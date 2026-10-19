@@ -13,28 +13,27 @@ const analysis={reply:'统一整理完成',tasks:[],updates:[],ignored:[],explic
 function fixture(t){const dir=mkdtempSync(join(tmpdir(),'life-batch-')),path=join(dir,'db.sqlite'),store=new Store(path),resources=[];t.after(()=>{for(const r of resources)r.close();try{store.close()}catch{}rmSync(dir,{recursive:true,force:true})});return {dir,path,store,batcher:new Batcher(store),track:r=>{resources.push(r);return r}}}
 function add(store,text,at,owner='owner'){store.ingest('message-'+store.db.prepare('SELECT count(*) n FROM inbox').get().n,owner,text,at)}
 
-test('a burst waits for silence and late text extends the same batch',t=>{
+test('a fixed five-second window does not extend when more material arrives',t=>{
   const {store,batcher}=fixture(t)
   add(store,'[文件] 通知.pdf',start)
-  assert.equal(batcher.ready(start+14000),null)
-  add(store,'我是计算机三班，这是我们的通知',start+12000)
-  assert.equal(batcher.ready(start+16000),null)
-  assert.equal(batcher.ready(start+26999),null)
-  assert.deepEqual(batcher.ready(start+27000).map(r=>r.id),[1,2])
+  assert.equal(batcher.ready(start+4999),null)
+  add(store,'我是计算机三班，这是我们的通知',start+4500)
+  add(store,'下一窗口的消息',start+5000)
+  assert.deepEqual(batcher.ready(start+5000).map(r=>r.id),[1,2])
 })
-test('continuous messages flush after a minute or the batch size limit',t=>{
+test('continuous messages flush every window and respect the batch size limit',t=>{
   const {store,batcher}=fixture(t)
-  for(let i=0;i<7;i++)add(store,'资料'+i,start+i*10000)
-  assert.equal(batcher.ready(start+59999),null)
-  assert.equal(batcher.ready(start+60000).length,7)
-  assert.equal(new Batcher(store,{batchMaxMessages:3}).ready(start+60000).length,3)
+  for(let i=0;i<7;i++)add(store,'资料'+i,start+i*1000)
+  assert.equal(batcher.ready(start+4999),null)
+  assert.equal(batcher.ready(start+5000).length,5)
+  assert.equal(new Batcher(store,{batchMaxMessages:3}).ready(start+5000).length,3)
 })
-test('separate bursts and explicit commands preserve message order without merging',t=>{
+test('commands and followup text within a window enter one native request',t=>{
   const {store,batcher}=fixture(t)
   add(store,'前一批',start);add(store,'后一批',start+20000);add(store,'/todo',start+21000)
   const first=batcher.ready(start+21000);assert.deepEqual(first.map(r=>r.id),[1]);batcher.claim(first);applyAnalysis(store,first[0],analysis)
-  const second=batcher.ready(start+21000);assert.deepEqual(second.map(r=>r.id),[2]);batcher.claim(second);applyAnalysis(store,second[0],analysis)
-  assert.deepEqual(batcher.ready(start+21000).map(r=>r.id),[3])
+  assert.equal(batcher.ready(start+24999),null)
+  const second=batcher.ready(start+25000);assert.deepEqual(second.map(r=>r.id),[2,3])
 })
 test('messages from different owners never share a batch',t=>{
   const {store,batcher}=fixture(t);add(store,'甲的资料',start,'a');add(store,'乙的资料',start+1000,'b')

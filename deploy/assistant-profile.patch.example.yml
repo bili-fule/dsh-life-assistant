@@ -29,6 +29,7 @@
     port: 3180
     provider: xuanluo
     model: cn:deepseek-v4.1-flash
-    batchQuietMs: 15000
-    batchMaxWaitMs: 60000
+    batchWindowMs: 5000
     batchMaxMessages: 20
+    memoryIdleMs: 300000
+    maintenanceHour: 3
