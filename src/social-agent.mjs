@@ -162,6 +162,14 @@ export class SocialAgent {
         if(!this.qq)throw Error('QQ 未配置')
         const row=this.data.db.prepare('SELECT * FROM yoyo_events WHERE id=? AND target=?').get(args.message,view.focus)
         let segment=row?JSON.parse(row.segments)[args.segment??0]:null
+        if(segment?.type==='forward'&&args.document===undefined){
+          const url='onebot-forward:'+row.id+':'+String(segment.data.id)
+          let doc=this.data.db.prepare('SELECT id,body FROM yoyo_documents WHERE url=? AND scope=? ORDER BY id DESC LIMIT 1').get(url,target.scope)
+          if(!doc){const result=await this.qq.call('get_forward_msg',{id:String(segment.data.id)},exec.signal),body=JSON.stringify(result),id=Number(this.data.db.prepare('INSERT INTO yoyo_documents(url,body,scope,created_at) VALUES(?,?,?,?)').run(url,body,target.scope,Date.now()).lastInsertRowid);doc={id,body}}
+          const candidates=[];for(const [node,value] of (JSON.parse(doc.body).messages??[]).entries())for(const [index,item] of (value.message??value.content??[]).entries())if(['image','file'].includes(item.type))candidates.push({node,segment:index,type:item.type,item})
+          if(candidates.length!==1)return {forwarded:true,document:doc.id,files:[],images:[],attachments:candidates.map(({item,...entry})=>entry),message:'合并转发包含多份附件或没有图片/文件。请指定 document、node、segment；正文用 yoyo_forward 分页读取。'}
+          segment=candidates[0].item
+        }
         if(args.document!==undefined){const doc=this.data.db.prepare('SELECT body,url,scope FROM yoyo_documents WHERE id=?').get(args.document);if(!row||!doc||doc.scope!==target.scope||!doc.url.startsWith('onebot-forward:'+row.id+':'))throw Error('转发附件不在当前原消息范围');const node=JSON.parse(doc.body).messages?.[args.node??0];segment=(node?.message??node?.content)?.[args.segment??0]}
         if(!segment||!['image','file'].includes(segment.type))throw Error('指定消息片段不是图片或文件')
         let url=segment.data.url,name=segment.data.name??segment.data.file_name??'attachment.bin'

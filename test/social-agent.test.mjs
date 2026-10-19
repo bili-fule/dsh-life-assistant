@@ -131,3 +131,12 @@ test('merged forward pages preserve the full original and cannot use another win
  const other=agent.data.ingest({target:b.handle,sender:'456',externalId:'other',text:'[forward]',segments:[{type:'forward',data:{id:'other-forward'}}]})
  await assert.rejects(()=>tools.get('yoyo_attachment').execute({message:other.id,document:first.document,node:0,segment:0},{...exec,callId:'3'}),/当前原消息范围/)
 })
+
+
+test('attachment tool lists merged forward children instead of treating the whole forward as a file',async t=>{
+ const {agent,tools,target,exec}=fixture(t),a=target('123');agent.activeView=agent.data.open(a.handle)
+ const original=agent.data.ingest({target:a.handle,sender:'123',externalId:'forward-children',segments:[{type:'forward',data:{id:'children'}}]})
+ agent.qq={async call(){return {messages:[{message:[{type:'image',data:{url:'https://multimedia.nt.qq.com.cn/a'}}]},{message:[{type:'file',data:{file_id:'b'}}]}]}}}
+ const result=await tools.get('yoyo_attachment').execute({message:original.id},exec)
+ assert.equal(result.forwarded,true);assert.deepEqual(result.attachments,[{node:0,segment:0,type:'image'},{node:1,segment:0,type:'file'}]);assert.ok(result.document)
+})
