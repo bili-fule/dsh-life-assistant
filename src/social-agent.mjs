@@ -243,8 +243,9 @@ export class SocialAgent {
     const due=this.data.db.prepare("SELECT id,view_id FROM yoyo_plans WHERE state='open' AND not_before IS NOT NULL AND not_before<=? ORDER BY not_before LIMIT 10").all(now)
     for(const plan of due){try{const v=this.data.view(plan.view_id);this.duePlan=plan.id;return v.focus??(v.scopes.length===1?'public':'overview')}catch{/* Revoked work does not wake the agent. */}}
     const a=this.data.activity(),inbox=this.data.inbox().filter(t=>t.unread&&now-t.oldest>=this.config.quietMs&&this.data.db.prepare('SELECT max(id) n FROM yoyo_events WHERE target=?').get(t.handle).n>this.store.get('yoyo_alerted_event',0))
-    if(a.state==='sleeping'&&(a.wake_at===null||a.wake_at>now)&&!inbox.some(t=>t.mentioned||t.platform==='wechat'))return null
+    if(a.state==='sleeping'&&(a.wake_at===null||a.wake_at>now)&&!inbox.some(t=>t.mentioned||t.kind==='private'||t.platform==='wechat'))return null
     if(a.wake_at!==null&&a.wake_at<=now)return this.store.get('yoyo_last_focus','overview')
+    const privateMessage=inbox.find(t=>t.kind==='private');if(privateMessage)return privateMessage.handle
     const previous=this.store.get('yoyo_last_wake',0)
     const ownerMessage=inbox.find(t=>t.platform==='wechat')
     if(ownerMessage&&now-previous>=this.config.attentionMs&&!this.store.get('yoyo_settings',{}).dailySteps)return ownerMessage.handle

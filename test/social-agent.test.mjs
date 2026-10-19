@@ -70,11 +70,11 @@ test('already alerted unread messages do not repeatedly wake the social agent',t
  const {agent,store,target}=fixture(t),a=target('123'),now=Date.now()
  store.set('yoyo_started',true);store.set('yoyo_settings',{dailySteps:20})
  agent.data.ingest({target:a.handle,sender:'123',externalId:'first',text:'hello',receivedAt:now-300000})
- assert.equal(agent.choose(now),'overview')
+ assert.equal(agent.choose(now),a.handle)
  store.set('yoyo_alerted_event',agent.data.db.prepare('SELECT max(id) n FROM yoyo_events').get().n)
  assert.equal(agent.choose(now+300000),null)
  agent.data.ingest({target:a.handle,sender:'123',externalId:'second',text:'new message',receivedAt:now})
- assert.equal(agent.choose(now+300000),'overview')
+ assert.equal(agent.choose(now+300000),a.handle)
 })
 
 
@@ -85,4 +85,17 @@ test('separate social agent creates and reuses its own native session and worksp
  social.ctx={workspaceController:{async create({path}){assert.equal(path,join(root,'qq-social'));return {workspace:{workspaceId:'social-workspace'}}}},sessionController:{async create(args){created.push(args)},async selectModel(){},async rename(){},async resolveAgent(id){return {agent:{id}}}}}
  const first=await social.ensureAgent(),second=await social.ensureAgent()
  assert.equal(first.id,second.id);assert.notEqual(first.id,'private-session');assert.equal(created[0].workspaceId,'social-workspace')
+})
+
+
+test('new private messages wake a sleeping agent after the five-second batch window',t=>{
+ const {agent,store,target}=fixture(t),a=target('123'),now=Date.now()
+ agent.activeView=agent.data.open(a.handle)
+ agent.data.saveActivity(agent.activeView.id,{state:'sleeping',description:'等新消息',wakeAt:null})
+ store.set('yoyo_started',true);store.set('yoyo_last_wake',now);store.set('yoyo_settings',{dailySteps:100})
+ agent.data.ingest({target:a.handle,sender:'123',externalId:'wake',text:'在吗',receivedAt:now})
+ assert.equal(agent.choose(now+4999),null)
+ assert.equal(agent.choose(now+5000),a.handle)
+ store.set('yoyo_alerted_event',agent.data.db.prepare('SELECT max(id) n FROM yoyo_events').get().n)
+ assert.equal(agent.choose(now+10000),null)
 })
