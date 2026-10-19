@@ -1,10 +1,11 @@
-import { mkdirSync,writeFileSync,readFileSync } from 'node:fs'
+import { mkdirSync,renameSync,unlinkSync,readFileSync,statSync } from 'node:fs'
 import { join,extname,basename,relative } from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash,randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { XMLParser } from 'fast-xml-parser'
-import { boundedDownload,processRun,workspacePath } from './tools.mjs'
-import { parseAesKey,decryptAesEcb,sniffImageMime,CDN_BASE_URL } from './ilink.mjs'
+import { processRun,workspacePath } from './tools.mjs'
+import { downloadMediaFile } from './download.mjs'
+import { parseAesKey,sniffImageMime,CDN_BASE_URL } from './ilink.mjs'
 
 const IMAGE=/\.(png|jpe?g|webp|gif)$/i
 export function safeFilename(name) {return basename(String(name??'attachment.bin').replaceAll('\\','/')).replace(/[^\p{L}\p{N} ._()（）-]/gu,'_').slice(-180)||'attachment.bin'}
@@ -49,16 +50,16 @@ export class Media {
     const m=data?.media
     if(!m)throw Error('微信未下发该附件的下载信息')
     const url=m.full_url||`${CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(m.encrypt_query_param??'')}`
-    const response=await boundedDownload(url,{limit:32*1024*1024,signal:this.signal,media:true,fetchImpl:this.config.mediaFetch??fetch})
     const key=data.aeskey?Buffer.from(data.aeskey,'hex').toString('base64'):m.aes_key
-    const bytes=key?decryptAesEcb(response.data,parseAesKey(key)):response.data
-    if(data.md5&&createHash('md5').update(bytes).digest('hex')!==data.md5.toLowerCase())throw Error('微信附件 MD5 校验失败')
-    const mime=sniffImageMime(bytes)
+    const temporary=join(directory,'.download-'+randomUUID())
+    const received=await downloadMediaFile(url,temporary,{limit:128*1024*1024,signal:this.signal,key:key?parseAesKey(key):undefined,fetchImpl:this.config.mediaFetch??fetch})
+    if(data.md5&&received.md5!==data.md5.toLowerCase()){unlinkSync(temporary);throw Error('微信附件 MD5 校验失败')}
+    const mime=sniffImageMime(received.prefix)
     const defaultName=item.image_item?`image-${index}.${mime.split('/')[1]}`:item.voice_item?`voice-${index}.silk`:item.video_item?`video-${index}.mp4`:'attachment.bin'
     const name=safeFilename(data.file_name??defaultName)
-    const path=join(directory,createHash('sha256').update(bytes).digest('hex').slice(0,10)+'-'+name)
-    writeFileSync(path,bytes,{mode:0o600})
-    return {name,path,bytes:bytes.length}
+    const path=join(directory,received.sha256.slice(0,10)+'-'+name)
+    renameSync(temporary,path)
+    return {name,path,bytes:received.bytes}
   }
   async read(path,{depth=0,budget={count:0},assets=[],question,signal=this.signal}={}) {
     signal?.throwIfAborted()
@@ -87,12 +88,19 @@ export class Media {
     }
     return {text,assets}
   }
+  async stage(path,assets) {
+    path=workspacePath(this.workspace,path)
+    if(IMAGE.test(path))return this.read(path,{assets})
+    const name=basename(path),local=relative(this.workspace,path),bytes=statSync(path).size
+    assets.push({name,path:local,kind:'file',bytes})
+    return {text:`[文件已保存：${name}；${bytes} 字节；工作目录路径：${local}]\n文件尚未打开。请由 DSH 原生 Agent 根据任务使用 Shell、原生文件工具或 life_read_file 按需检查、解压及处理；ZIP 先列目录，不要把整个数据集塞入上下文。`,assets}
+  }
   async prepare(row) {
     const existing=this.store.inputContext(row.id)
     if(existing?.prepared)return existing
     if(existing?.localFiles) {
       const texts=[],assets=[]
-      for(const path of existing.localFiles){const result=await this.read(path,{assets});texts.push(result.text)}
+      for(const path of existing.localFiles){const result=await this.stage(path,assets);texts.push(result.text)}
       const context={...existing,prepared:true,text:texts.join('\n\n'),assets,hasMedia:true,preparedAt:Date.now()};this.store.setInputContext(row.id,context);return context
     }
     const wire=this.store.db.prepare('SELECT payload FROM wire_messages WHERE external_id=?').get(row.external_id)
@@ -105,8 +113,10 @@ export class Media {
       if(item.voice_item?.text)texts.push(item.voice_item.text)
       if(item.image_item||item.file_item||item.video_item||(item.voice_item&&!item.voice_item.text)) {
         hasMedia=true
-        const file=await this.download(item,dir,++index)
-        const parsed=await this.read(file.path,{assets});texts.push(parsed.text)
+        try {
+          const file=await this.download(item,dir,++index)
+          const staged=await this.stage(file.path,assets);texts.push(staged.text)
+        }catch(e){this.signal?.throwIfAborted();texts.push(`[附件 ${safeFilename(item.file_item?.file_name??'媒体')} 接收或载入失败：${e.message}。该附件尚不可读，不能声称已处理；继续处理本批其他资料，并告知用户此附件需要重新发送。]`)}
       }
       if(item.ref_msg)texts.push('[引用资料]\n'+inboundLabel({item_list:[item.ref_msg.message_item??item.ref_msg]}))
     }
