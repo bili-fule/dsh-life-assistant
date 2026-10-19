@@ -67,7 +67,7 @@ export class Runtime {
       provider:this.config.provider,model:this.config.model,timezone:'Asia/Shanghai',engine:'DSH native Agent',nativeSessionId:this.store.get('native_session_id'),
       batching:{quietSeconds:this.batcher.quietMs/1000,maxWaitSeconds:this.batcher.maxWaitMs/1000,maxMessages:this.batcher.maxMessages},
       maintenance:this.maintenance.status(),markdown:true,communication:communicationState(this.store,{all:true}),contextPolicy:{configuredTriggerTokens:263000,declaredModelWindow:1000000,retainTokens:65536,summaryMaxTokens:8192},
-      capabilities:{shell:true,links:true,browser:true,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true},workspaceFiles:this.workspaceFiles(),
+      capabilities:{shell:true,links:true,browser:true,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true,messageSending:true},workspaceFiles:this.workspaceFiles(),
       persona:this.store.get('persona','你是一位贴心但不啰嗦的中文事务助理，说话自然，判断谨慎，帮用户把事情理清楚。'),
       styleLearning:this.store.get('style_learning',true),learnedStyle:this.store.get('learned_style',{}),styleCounts:this.store.get('style_counts',{}),
       quiet:this.store.get('quiet',{start:22,end:8}),digestHour:this.store.get('digest_hour',9),deliveryError:this.store.get('delivery_error'),pollError:this.store.get('poll_error'),lastInbound:this.store.get('last_inbound'),modelHealth:this.store.get('model_health')}
@@ -246,6 +246,12 @@ export class Runtime {
     const walk=(dir,depth=0)=>{if(depth>5||files.length>=150)return;for(const e of readdirSync(dir,{withFileTypes:true})){if(files.length>=150)break;const path=join(dir,e.name);if(e.isSymbolicLink())continue;if(e.isDirectory())walk(path,depth+1);else if(e.isFile()){const s=statSync(path);files.push({name:e.name,path:relative(this.workspace,path),bytes:s.size,updatedAt:s.mtimeMs})}}}
     try{walk(this.workspace)}catch{}
     return files.sort((a,b)=>b.updatedAt-a.updatedAt)
+  }
+  enqueueMessage(text,key) {
+    if(typeof text!=='string'||!text.trim()||text.length>20000)throw Error('微信消息应为 1 至 20000 字的非空文本')
+    if(!this.store.get('wechat')?.token||!this.store.get('owner'))throw Error('请先绑定微信')
+    this.store.enqueue('message:'+key,'reply',text.trim())
+    return {queued:true,message:'文字已加入绑定微信发送队列，不代表已送达；平台拒收时保留重试，发送状态可在管理页查看。'}
   }
   enqueueFile(path,key) {
     if(statSync(path).size>20*1024*1024)throw Error('微信回传文件最大 20MiB')

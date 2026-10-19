@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Runtime } from '../src/runtime.mjs'
 import { nativeOutcome } from '../src/native-agent.mjs'
+import { deliverOne } from '../src/assistant.mjs'
 
 function nativeHost(){
   const events=[],prompts=[],registered=new Map();let agent,turn=0,fail=false,compacted=0,onTurn=null
@@ -62,6 +63,35 @@ test('manual compaction delegates to native preset service and retains archived 
   const {runtime,host}=fixture(t);runtime.store.ingest('m','owner','归档原文')
   await runtime.model.compact();assert.equal(host.compacted,1);assert.equal(runtime.store.search('归档原文').length,1)
 })
+
+test('a native UI turn can queue Markdown to the bound WeChat without an inbox message; retries reuse one queue entry',async t=>{
+  const {runtime,host}=fixture(t);await runtime.model.ensure()
+  runtime.store.set('owner','bound-owner');runtime.store.set('wechat',{token:'test-token'})
+  host.events.push({type:'turn/start',data:{turn:1}},{type:'user/message',data:{source:{kind:'user'},content:[{type:'text',text:'把结果发到我的微信'}]}})
+  const tool=host.registered.get('life_send_message'),exec={agent:host.agent,callId:'ui-send',signal:runtime.abort.signal}
+  assert.deepEqual(Object.keys(tool.parameters.properties),['text']);assert.equal(tool.parameters.additionalProperties,false)
+  const result=await tool.execute({text:'**完成**\n\n[结果](https://example.com)'},exec)
+  assert.equal(result.queued,true);assert.deepEqual(await tool.execute({text:'**完成**\n\n[结果](https://example.com)'},exec),result)
+  assert.equal(runtime.store.snapshot().inbox.length,0)
+  const rows=runtime.store.db.prepare('SELECT * FROM outbox').all();assert.equal(rows.length,1);assert.match(rows[0].body,/\*\*完成\*\*/)
+  runtime.store.set('quiet',{start:0,end:23})
+  const now=new Date('2026-10-19T01:00:00Z').getTime()
+  assert.equal(await deliverOne(runtime.store,async()=>{throw Error('platform rejected')},now),false)
+  assert.equal(runtime.store.db.prepare('SELECT state FROM outbox').get().state,'pending')
+  const due=runtime.store.db.prepare('SELECT next_at FROM outbox').get().next_at
+  assert.equal(await deliverOne(runtime.store,async text=>assert.equal(text,rows[0].body),due),true)
+  assert.equal(runtime.store.db.prepare('SELECT state FROM outbox').get().state,'sent')
+})
+
+test('message sending rejects unbound accounts, invalid content and unrelated sessions',async t=>{
+  const {runtime,host}=fixture(t);await runtime.model.ensure()
+  const tool=host.registered.get('life_send_message'),exec={agent:host.agent,callId:'unbound',signal:runtime.abort.signal}
+  await assert.rejects(()=>tool.execute({text:'hello'},exec),/先绑定/)
+  runtime.store.set('owner','bound-owner');runtime.store.set('wechat',{token:'test-token'})
+  for(const [i,text] of [null,'   ','x'.repeat(20001)].entries())await assert.rejects(()=>tool.execute({text},{...exec,callId:'invalid-'+i}),/非空文本/)
+  await assert.rejects(()=>tool.execute({text:'hello'},{...exec,agent:{id:'other-session'}}),/绑定用户的会话/)
+  assert.equal(runtime.store.snapshot().outbox.length,0)
+})
 test('a provider reusing call IDs on a later native turn cannot receive stale state',async t=>{
   const {runtime,host}=fixture(t);runtime.store.ingest('a','owner','第一次消息');await runtime.model.analyze('第一次消息',runtime.store,Date.now(),options())
   const tool=host.registered.get('life_state'),exec={agent:host.agent,callId:'reused-id',signal:runtime.abort.signal}
@@ -100,6 +130,7 @@ test('background native turns leave a trace but do not enqueue a WeChat response
   const {runtime,host}=fixture(t);runtime.store.ingest('m','owner','我喜欢简短回复');runtime.store.db.exec("UPDATE inbox SET state='done'")
   host.onTurn(async agent=>{
     await assert.rejects(()=>host.registered.get('life_send_file').execute({path:'test.md'},{agent,callId:'no-send',signal:runtime.abort.signal}),/后台整理/)
+    await assert.rejects(()=>host.registered.get('life_send_message').execute({text:'不应发送'},{agent,callId:'no-text-send',signal:runtime.abort.signal}),/后台整理/)
     await host.registered.get('life_memory').execute({upserts:[{body:'用户偏好简短回复',sources:[{id:1,quote:'我喜欢简短回复'}]}]},{agent,callId:'memory',signal:runtime.abort.signal})
   })
   const job={kind:'idle',through_id:1,request_id:'maintenance:test:1'}
