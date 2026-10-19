@@ -87,7 +87,7 @@ dsh --profile assistant --no-open --port 3080
 
 原生 DSH 界面与微信插件运行在同一个 profile / 进程，原生端口默认 3080，事务管理页默认 3180；均只监听本机。原生界面使用 DSH 自带的启动链接和浏览器登录 Cookie；首次通过服务日志中的认证链接进入。管理页密钥首次生成在 `$DSH_LIFE_DATA/admin-token`，也可用 `DSH_LIFE_ADMIN_TOKEN` 指定。
 
-通过 SSH 转发两个端口访问，勿把管理服务直接暴露到公网。若本地映射端口不同，使用原生 Web 的 `--trusted-host` 声明实际本地访问地址。部署参考 `deploy/dsh-life-assistant.service`。
+通过 SSH 转发两个端口访问，勿把管理服务直接暴露到公网。若本地映射端口不同，使用原生 Web 的 `--trusted-host` 声明实际本地访问地址。部署参考 `deploy/dsh-life-assistant.service`。常驻服务示例关闭文件热重载（`hmr`），配置修改通过重启生效；微信、原生界面、工具与存储照常工作。
 
 ## 数据、恢复与迁移
 

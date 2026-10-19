@@ -33,3 +33,7 @@
     batchMaxMessages: 20
     memoryIdleMs: 300000
     maintenanceHour: 3
+
+# Long-running service: apply configuration changes through a restart.
+- id: hmr
+  disabled: true
