@@ -35,7 +35,7 @@ export class NativeAgent {
   get sessionId(){return this.store.get('native_session_id')}
   register() {
     const {ctx}=this
-    this.disposers.push(ctx.systemPrompt.section({name:'life-assistant:policy',order:10210,interpolate:false,text:({agent})=>agent?.id===this.sessionId&&(!this.runtime.autonomy?.enabled||this.runtime.autonomy.isOwner())?POLICY:''}))
+    this.disposers.push(ctx.systemPrompt.section({name:'life-assistant:policy',order:10210,interpolate:false,text:({agent})=>agent?.id===this.sessionId&&(!this.runtime.autonomy?.enabled||this.runtime.autonomy.separate||this.runtime.autonomy.isOwner())?POLICY:''}))
     this.disposers.push(ctx.systemPrompt.variable('life_assistant_state',()=>JSON.stringify(this.state())))
     this.disposers.push(ctx.systemPrompt.context({name:'life-assistant:state',order:900,text:({agent})=>agent?.id===this.sessionId?'{{life_assistant_state}}':''}))
     const define=(name,description,parameters,execute,render)=>this.disposers.push(ctx.tools.register({name,description,parameters,output:{schema:{type:'object',additionalProperties:true},render:render??((args,value)=>[{type:'text',text:JSON.stringify(value)}])},execute:async(args,exec)=>{
@@ -127,6 +127,7 @@ export class NativeAgent {
       await this.ctx.sessionController.rename({sessionId:id,title:'微信事务助手'})
       this.store.set('native_initialized',true)
     }
+    if(this.runtime.autonomy?.separate&&this.store.get('yoyo_legacy_labelled')&&!this.store.get('private_view_restored')){const session=result.agent.session;session.append('request/view',{viewId:'private-restored-'+randomUUID(),visibleSeqs:[...session.surface.nodes],scopes:['private-owner'],authorizationVersion:null});this.store.set('private_view_restored',true)}
     const policy=this.ctx.agentPresets.serviceFor(result.agent,'compaction')?.config?.modelPolicies?.find(p=>p.provider===this.config.provider&&p.model===this.config.model)
     if(policy)this.store.set('context_policy',{configuredTriggerTokens:Math.floor(1000000*policy.thresholdRatio),declaredModelWindow:1000000,retainTokens:policy.retainTokens,summaryMaxTokens:policy.maxTokens})
     return result.agent

@@ -40,7 +40,7 @@ export class Runtime {
     this.media=new Media({store:this.store,workspace:this.workspace,attachments:config.attachments,signal:this.abort.signal,config})
     this.tools=new BrowserTools({workspace:this.workspace,signal:this.abort.signal,config})
     this.model=config.agentDriver??new NativeAgent(config.nativeContext,this,this.config)
-    this.autonomy=new SocialAgent(this,config.nativeContext,config.autonomy??{})
+    this.autonomy=new SocialAgent(this,config.nativeContext,{separateSession:true,...config.autonomy})
     this.maintenance=new Maintenance(this,config)
     this.running=false;this.working=null;this.polling=null;this.login=null;this.pollGeneration=0
     const tokenPath=join(this.stateDir,'admin-token')
@@ -70,8 +70,8 @@ export class Runtime {
       provider:this.config.provider,model:this.config.model,timezone:'Asia/Shanghai',engine:'DSH native Agent',nativeSessionId:this.store.get('native_session_id'),
       batching:{quietSeconds:this.batcher.quietMs/1000,maxWaitSeconds:this.batcher.maxWaitMs/1000,maxMessages:this.batcher.maxMessages},
       maintenance:this.maintenance.status(),markdown:true,communication:communicationState(this.store,{all:true}),contextPolicy:{configuredTriggerTokens:263000,declaredModelWindow:1000000,retainTokens:65536,summaryMaxTokens:8192},
-      capabilities:{shell:!this.autonomy.enabled||!!this.autonomy.executor,links:true,browser:!this.autonomy.enabled,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true,messageSending:true},workspaceFiles:this.workspaceFiles(),
-      autonomy:{enabled:this.autonomy.enabled,nativeReady:this.autonomy.nativeReady,...this.autonomy.data.snapshot(),persona:this.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同边界。'),self:this.store.get('yoyo_self',{mood:'calm',energy:'steady'}),plans:this.store.db.prepare('SELECT id,title,progress,state,not_before,scopes FROM yoyo_plans ORDER BY updated_at DESC LIMIT 30').all(),settings:this.store.get('yoyo_settings',{observeOnly:true,paused:false,dailySteps:0}),qqConfigured:!!this.autonomy.qq},
+      capabilities:{shell:!this.autonomy.enabled||this.autonomy.separate||!!this.autonomy.executor,links:true,browser:!this.autonomy.enabled||this.autonomy.separate,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true,messageSending:true},workspaceFiles:this.workspaceFiles(),
+      autonomy:{enabled:this.autonomy.enabled,separateSession:this.autonomy.separate,sessionId:this.autonomy.sessionId,nativeReady:this.autonomy.nativeReady,...this.autonomy.data.snapshot(),persona:this.autonomy.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同边界。'),self:this.autonomy.store.get('yoyo_self',{mood:'calm',energy:'steady'}),plans:this.autonomy.store.db.prepare('SELECT id,title,progress,state,not_before,scopes FROM yoyo_plans ORDER BY updated_at DESC LIMIT 30').all(),settings:this.autonomy.store.get('yoyo_settings',{observeOnly:true,paused:false,dailySteps:0}),qqConfigured:!!this.autonomy.qq},
       persona:this.store.get('persona','你是一位贴心但不啰嗦的中文事务助理，说话自然，判断谨慎，帮用户把事情理清楚。'),
       styleLearning:this.store.get('style_learning',true),learnedStyle:this.store.get('learned_style',{}),styleCounts:this.store.get('style_counts',{}),
       quiet:this.store.get('quiet',{start:22,end:8}),digestHour:this.store.get('digest_hour',9),deliveryError:this.store.get('delivery_error'),pollError:this.store.get('poll_error'),lastInbound:this.store.get('last_inbound'),modelHealth:this.store.get('model_health')}
@@ -98,18 +98,18 @@ export class Runtime {
     if(req.method!=='POST')return json(res,{error:'没有这个操作'},404)
     const data=await body(req,url.pathname==='/api/upload'?44*1024*1024:100000)
     if(url.pathname==='/api/yoyo/settings') {
-      const current=this.store.get('yoyo_settings',{observeOnly:true,paused:false,dailySteps:0})
+      const current=this.autonomy.store.get('yoyo_settings',{observeOnly:true,paused:false,dailySteps:0})
       if(Object.keys(data).some(k=>!['observeOnly','paused','dailySteps','persona'].includes(k)))throw Error('设置项无效')
       for(const k of ['observeOnly','paused'])if(k in data&&typeof data[k]!=='boolean')throw Error('开关设置无效')
       if('dailySteps' in data&&(!Number.isSafeInteger(data.dailySteps)||data.dailySteps<0||data.dailySteps>100000))throw Error('每日预算无效')
-      if('persona' in data){if(typeof data.persona!=='string'||!data.persona.trim()||data.persona.length>2000)throw Error('人设无效');this.store.set('yoyo_persona',data.persona)}
-      const {persona,...settings}=data;this.store.set('yoyo_settings',{...current,...settings})
+      if('persona' in data){if(typeof data.persona!=='string'||!data.persona.trim()||data.persona.length>2000)throw Error('人设无效');this.autonomy.store.set('yoyo_persona',data.persona)}
+      const {persona,...settings}=data;this.autonomy.store.set('yoyo_settings',{...current,...settings})
       if(data.observeOnly===true||data.paused===true)this.autonomy.data.db.prepare("UPDATE yoyo_outbox SET state='cancelled',error='已暂停发言' WHERE state IN ('queued','retry_wait') AND (?=1 OR target IN (SELECT handle FROM yoyo_targets WHERE platform='qq'))").run(data.paused===true?1:0)
-      if(data.paused===true&&this.model.sessionId){const result=await this.config.nativeContext?.sessionController.resolveAgent(this.model.sessionId);result?.agent?.cancel({kind:'hook',reason:'用户暂停自主活动'})}
+      if(data.paused===true&&this.autonomy.sessionId){const result=await this.config.nativeContext?.sessionController.resolveAgent(this.autonomy.sessionId);result?.agent?.cancel({kind:'hook',reason:'用户暂停自主活动'})}
       return json(res,{ok:true})
     }
     if(url.pathname==='/api/yoyo/approve')return json(res,{target:this.autonomy.data.approve(data.target,data.approved)})
-    if(url.pathname==='/api/yoyo/wake') {const target=data.target??'overview';if(!['overview','public'].includes(target))this.autonomy.data.target(target,{approved:true});this.store.set('yoyo_next_focus',target);return json(res,{ok:true})}
+    if(url.pathname==='/api/yoyo/wake') {const target=data.target??'overview';if(!['overview','public'].includes(target))this.autonomy.data.target(target,{approved:true});this.autonomy.store.set('yoyo_next_focus',target);return json(res,{ok:true})}
     if(url.pathname==='/api/yoyo/qq-check') {if(!this.autonomy.qq)throw Error('QQ 未配置');return json(res,await this.autonomy.qq.health(this.abort.signal))}
     if(url.pathname==='/api/yoyo/forget')return json(res,{forgotten:this.autonomy.data.forget(data.id)})
     if(url.pathname==='/api/upload') {
@@ -215,12 +215,13 @@ export class Runtime {
   }
   async tick() {
     if(!this.running)return
-    if(this.autonomy.enabled){
+    if(this.autonomy.enabled&&!this.autonomy.separate){
       await this.autonomy.tick();schedule(this.store);await this.deliveryTick()
       const date=localParts().date;if(this.store.get('backup_date')!==date){this.backup();this.store.set('backup_date',date)}
-      const job=this.maintenance.next();if(job&&this.model.maintain&&!this.store.get('yoyo_next_focus'))await this.maintenance.run(job)
+      const job=this.maintenance.next();if(job&&this.model.maintain&&!this.autonomy.store.get('yoyo_next_focus'))await this.maintenance.run(job)
       return
     }
+    if(this.autonomy.enabled&&this.autonomy.separate){void this.socialTick()}
     const batch=this.batcher.ready(),row=batch?.[0]
     if(row) {
       this.batcher.claim(batch)
@@ -250,6 +251,7 @@ export class Runtime {
     const job=this.maintenance.next()
     if(job&&this.model.maintain)await this.maintenance.run(job)
   }
+  async socialTick(){if(this.socialWorking)return;this.socialWorking=true;try{await this.autonomy.tick()}catch(e){this.log('social.tick',e)}finally{this.socialWorking=false}}
   async deliveryTick() {
     if(this.delivering)return this.delivering
     this.delivering=(async()=>{

@@ -54,3 +54,25 @@ test('revoked views fail at actual native execution even if a schema was previou
   await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name:'yoyo_read'},async()=>{executed=true}),/授权/)
   assert.equal(executed,false)
 })
+
+
+test('separate social storage cannot discover the WeChat owner or private memories',t=>{
+ const root=mkdtempSync(join(tmpdir(),'separate-yoyo-')),store=new Store(join(root,'private.sqlite'))
+ store.set('owner','PRIVATE_OWNER');store.set('persona','PRIVATE_PERSONA');store.set('native_session_id','private-session')
+ const social=new SocialAgent({store,workspace:root,model:{sessionId:'private-session'}},null,{separateSession:true})
+ t.after(()=>{social.stop();store.close();rmSync(root,{recursive:true,force:true})})
+ assert.equal(social.ownerTarget(),null);assert.equal(social.store.get('owner'),null);assert.equal(social.store.get('persona'),null)
+ social.store.set('social_session_id','social-session');assert.equal(social.sessionId,'social-session');assert.equal(store.get('native_session_id'),'private-session')
+ assert.notEqual(social.runtime.workspace,root)
+})
+
+test('already alerted unread messages do not repeatedly wake the social agent',t=>{
+ const {agent,store,target}=fixture(t),a=target('123'),now=Date.now()
+ store.set('yoyo_started',true);store.set('yoyo_settings',{dailySteps:20})
+ agent.data.ingest({target:a.handle,sender:'123',externalId:'first',text:'hello',receivedAt:now-300000})
+ assert.equal(agent.choose(now),'overview')
+ store.set('yoyo_alerted_event',agent.data.db.prepare('SELECT max(id) n FROM yoyo_events').get().n)
+ assert.equal(agent.choose(now+300000),null)
+ agent.data.ingest({target:a.handle,sender:'123',externalId:'second',text:'new message',receivedAt:now})
+ assert.equal(agent.choose(now+300000),'overview')
+})

@@ -1,6 +1,8 @@
 import { randomUUID,createHash } from 'node:crypto'
 import { mkdirSync,writeFileSync } from 'node:fs'
 import { join,relative } from 'node:path'
+import { Store } from './store.mjs'
+import { NativeAgent,nativeOutcome } from './native-agent.mjs'
 import { SocialStore } from './social-store.mjs'
 import { SnowLuma } from './snowluma.mjs'
 import { localParts } from './time.mjs'
@@ -25,17 +27,28 @@ const POLICY=`你是 yoyo，一个有连续经历、兴趣、关系和当前打�
 
 export class SocialAgent {
   constructor(runtime,ctx,config={}) {
-    this.runtime=runtime;this.ctx=ctx;this.store=runtime.store;this.data=new SocialStore(this.store)
+    this.separate=!!config.separateSession
+    if(this.separate){const workspace=join(runtime.workspace,'qq-social');mkdirSync(workspace,{recursive:true,mode:0o700});this.store=new Store(join(workspace,'social.sqlite'));this.runtime={...runtime,workspace}}else{this.store=runtime.store;this.runtime=runtime}
+    this.ctx=ctx;this.data=new SocialStore(this.store)
     this.config={enabled:false,quietMs:5000,attentionMs:30000,ordinaryMs:120000,maxSteps:20,turnMs:300000,...config}
-    this.enabled=!!this.config.enabled;this.activeView=null;this.disposers=[];this.currentRequest=null;this.ownerSources=[]
+    this.enabled=!!this.config.enabled;this.activeView=this.separate?this.data.publicView():null;this.disposers=[];this.currentRequest=null;this.ownerSources=[]
     this.qq=config.qq?new SnowLuma({...config.qq,token:process.env[config.qq.tokenEnv??'SNOWLUMA_TOKEN'],eventToken:process.env[config.qq.eventTokenEnv??'SNOWLUMA_EVENT_TOKEN'],eventSecret:process.env[config.qq.eventSecretEnv??'SNOWLUMA_EVENT_SECRET']}):null
     this.executor=config.executor?new Executor(config.executor):null
     if(ctx&&typeof ctx.on==='function')this.register()
     else if(this.enabled)throw Error('自主模式需要 DSH 原生事件服务')
   }
-  get sessionId(){return this.runtime.model.sessionId}
+  get sessionId(){return this.separate?this.store.get('social_session_id'):this.runtime.model.sessionId}
+  async ensureAgent(){
+    if(!this.separate)return this.runtime.model.ensure()
+    let id=this.sessionId;if(!id){id=randomUUID();this.store.set('social_session_id',id)}
+    const {workspace}=await this.ctx.workspaceController.create({path:this.runtime.workspace})
+    await this.ctx.sessionController.create({sessionId:id,workspaceId:workspace.workspaceId,agentPreset:'standard'})
+    if(!this.store.get('social_initialized')){await this.ctx.sessionController.selectModel({sessionId:id,provider:this.runtime.config.provider,model:this.runtime.config.model});await this.ctx.sessionController.rename({sessionId:id,title:'yoyo · QQ 社交'});this.store.set('social_initialized',true)}
+    const result=await this.ctx.sessionController.resolveAgent(id);if(result.error)throw Error(result.error.message);return result.agent
+  }
   get nativeReady(){return this.ctx?.sessions?.requestViewVersion===1&&this.ctx?.tokenMeter?.requestViewVersion===1&&!!this.boundAgent&&this.ctx.agentPresets.serviceFor(this.boundAgent,'compaction')?.requestViewVersion===1}
   ownerTarget() {
+    if(this.separate)return null
     const owner=this.store.get('owner');if(!owner)return null
     for(const old of this.data.db.prepare("SELECT handle FROM yoyo_targets WHERE platform='wechat' AND kind='owner' AND peer<>? AND approved=1").all(String(owner)))this.data.approve(old.handle,false)
     const target=this.data.discover({platform:'wechat',account:'bound',kind:'owner',peer:owner,label:'你的微信'})
@@ -60,17 +73,18 @@ export class SocialAgent {
     session.append('request/view',{viewId:view.id,visibleSeqs:visible,scopes:view.scopes,authorizationVersion:view.authorizationVersion})
     this.appliedView={session,id:view.id}
   }
-  toolsAllowed(){const names=new Set(COMMON_TOOLS);if(this.executor){names.add('yoyo_execute');names.add('yoyo_job')}if(this.isOwner())for(const n of OWNER_TOOLS)names.add(n);return names}
+  toolsAllowed(){const names=new Set(COMMON_TOOLS);if(this.separate)names.delete('life_context');if(this.executor){names.add('yoyo_execute');names.add('yoyo_job')}if(this.isOwner())for(const n of OWNER_TOOLS)names.add(n);return names}
   register() {
     const ctx=this.ctx
-    this.disposers.push(ctx.systemPrompt.section({name:'yoyo:agency',order:10220,interpolate:false,text:({agent})=>this.enabled&&agent?.id===this.sessionId?POLICY:''}))
+    if(this.separate)this.disposers.push(ctx.systemPrompt.context({name:'yoyo:state',order:900,text:({agent})=>agent?.id===this.sessionId?JSON.stringify(this.state()):''}))
+    this.disposers.push(ctx.systemPrompt.section({name:'yoyo:agency',order:10220,interpolate:false,text:({agent})=>this.enabled&&agent?.id===this.sessionId?(this.separate?POLICY.replace('微信、QQ 群、QQ 私聊和 DSH','QQ 群、QQ 私聊和社交 DSH 会话').replace('微信图片文件用 yoyo_attachment','QQ 图片文件用 yoyo_attachment'):POLICY):''}))
     this.disposers.push(ctx.on('system-prompt/assemble',async(assembly,context,next)=>{
       const result=await next();if(!this.enabled||context.agent?.id!==this.sessionId)return result
       const allowed=this.toolsAllowed(),tools=result.tools.filter(t=>allowed.has(t.name))
       if(this.isOwner())return {...result,tools}
       // Owner workspace instructions, deployment persona and arbitrary plugin
       // contexts are private too, even when the historical messages are hidden.
-      return {...result,tools,sections:result.sections.filter(s=>['harness:identity','yoyo:agency'].includes(s.name)),contexts:result.contexts.filter(c=>c.name==='life-assistant:state'),variables:{life_assistant_state:JSON.stringify(this.state())}}
+      return {...result,tools,sections:result.sections.filter(s=>['harness:identity','yoyo:agency'].includes(s.name)),contexts:result.contexts.filter(c=>['life-assistant:state','yoyo:state'].includes(c.name)),variables:{life_assistant_state:JSON.stringify(this.state())}}
     }))
     this.disposers.push(ctx.on('tools/pre-execute',async(exec,next)=>{
       if(this.enabled&&exec.agent?.id===this.sessionId){this.currentView();if(this.store.get('yoyo_settings',{}).paused)throw Error('主体已暂停');if(!this.toolsAllowed().has(exec.name))throw Error('此活动未获该工具的资源权限')}
@@ -86,7 +100,7 @@ export class SocialAgent {
       this.boundAgent=payload.agent
       if(!this.nativeReady)throw Error('自主模式需要配套的原生请求视图、计量与压缩扩展')
       const direct=payload.messages.some(m=>m.source?.kind==='user'&&m.source?.rpcId!==this.currentRequest)
-      if(direct){const owner=this.ownerTarget();if(!owner)throw Error('请先绑定私人入口');this.activeView=this.data.open(owner.handle)}
+      if(direct&&!this.separate){const owner=this.ownerTarget();if(!owner)throw Error('请先绑定私人入口');this.activeView=this.data.open(owner.handle)}
       this.applyView(payload.agent)
       const day=localParts().date,usage=this.data.db.prepare('SELECT steps FROM yoyo_usage WHERE day=?').get(day)?.steps??0
       const budget=this.store.get('yoyo_settings',{}).dailySteps??0
@@ -98,7 +112,7 @@ export class SocialAgent {
       this.disposers.push(ctx.tools.register({name,description,parameters:{type:'object',properties,required,additionalProperties:false},output:{schema:{type:'object',additionalProperties:true},render:render??((_,value)=>[{type:'text',text:JSON.stringify(value)}])},execute:async(args,exec)=>{
         if(!this.enabled||exec.agent?.id!==this.sessionId)throw Error('只能由 yoyo 主体调用')
         const view=this.currentView()
-        return this.runtime.model.receipt(name,args,exec,key=>execute(args,exec,key,view))
+        return (this.separate?NativeAgent.prototype.receipt.call({ctx:this.ctx,store:this.store},name,args,exec,key=>execute(args,exec,key,view)):this.runtime.model.receipt(name,args,exec,key=>execute(args,exec,key,view)))
       }}))
     }
     define('yoyo_inbox','查看已授权窗口的新动静。跨窗口查看先回到总览，发言前打开目标窗口。',{},[],async(args,exec,key,view)=>{
@@ -228,7 +242,7 @@ export class SocialAgent {
     const next=this.store.get('yoyo_next_focus');if(next)return next
     const due=this.data.db.prepare("SELECT id,view_id FROM yoyo_plans WHERE state='open' AND not_before IS NOT NULL AND not_before<=? ORDER BY not_before LIMIT 10").all(now)
     for(const plan of due){try{const v=this.data.view(plan.view_id);this.duePlan=plan.id;return v.focus??(v.scopes.length===1?'public':'overview')}catch{/* Revoked work does not wake the agent. */}}
-    const a=this.data.activity(),inbox=this.data.inbox().filter(t=>t.unread&&now-t.oldest>=this.config.quietMs)
+    const a=this.data.activity(),inbox=this.data.inbox().filter(t=>t.unread&&now-t.oldest>=this.config.quietMs&&this.data.db.prepare('SELECT max(id) n FROM yoyo_events WHERE target=?').get(t.handle).n>this.store.get('yoyo_alerted_event',0))
     if(a.state==='sleeping'&&(a.wake_at===null||a.wake_at>now)&&!inbox.some(t=>t.mentioned||t.platform==='wechat'))return null
     if(a.wake_at!==null&&a.wake_at<=now)return this.store.get('yoyo_last_focus','overview')
     const previous=this.store.get('yoyo_last_wake',0)
@@ -242,20 +256,22 @@ export class SocialAgent {
   async tick() {
     if(!this.enabled)return
     await this.migrateInbox()
-    const agent=await this.runtime.model.ensure()
+    if(this.separate&&!this.qq&&!this.store.get('social_initialized'))return
+    const agent=await this.ensureAgent()
     this.boundAgent=agent
     if(agent.status==='running')return
     await agent.whenIdle()
     const unfinished=this.data.db.prepare("SELECT request_id FROM yoyo_turns WHERE state='running'").all()
     if(unfinished.length){
       const info=await this.ctx.sessionController.inspect(agent.id,this.runtime.abort.signal)
-      for(const row of unfinished){const result=this.runtime.model.outcome(info.events,row.request_id);this.data.db.prepare('UPDATE yoyo_turns SET state=?,finished_at=?,error=? WHERE request_id=?').run(result.reason?.kind==='completed'?'done':'interrupted',Date.now(),result.reason?.kind==='completed'?null:'重启后已核对原生轨迹，未重复提交原请求',row.request_id)}
+      for(const row of unfinished){const result=nativeOutcome(info.events,row.request_id);this.data.db.prepare('UPDATE yoyo_turns SET state=?,finished_at=?,error=? WHERE request_id=?').run(result.reason?.kind==='completed'?'done':'interrupted',Date.now(),result.reason?.kind==='completed'?null:'重启后已核对原生轨迹，未重复提交原请求',row.request_id)}
     }
     const target=this.choose();if(!target)return
+    const pending=this.data.activity();if(pending.wake_at!==null&&pending.wake_at<=Date.now())this.data.db.prepare('UPDATE yoyo_activity SET wake_at=NULL WHERE id=1').run()
     if(!this.nativeReady)throw Error('尚未安装配套的原生资料视图、计量及压缩扩展，自主模式未运行')
     const view=target==='overview'?this.data.planningView():target==='public'?this.data.publicView():this.data.open(target)
     this.activeView=view;this.steps=0
-    if(!this.store.get('yoyo_legacy_labelled')){
+    if(!this.separate&&!this.store.get('yoyo_legacy_labelled')){
       const owner=this.ownerTarget()
       if(!owner)throw Error('先绑定微信私人入口')
       const existing=await this.ctx.sessionController.inspect(agent.id,this.runtime.abort.signal)
@@ -265,20 +281,20 @@ export class SocialAgent {
     // Apply at true idle, before the native pressure hook can compact the old view.
     this.applyView(agent)
     const requestId='yoyo-'+randomUUID();this.currentRequest=requestId
-    this.store.set('yoyo_next_focus',null);this.store.set('yoyo_last_focus',target);this.store.set('yoyo_last_wake',Date.now());this.store.set('yoyo_started',true)
+    this.store.set('yoyo_alerted_event',this.data.db.prepare('SELECT coalesce(max(id),0) n FROM yoyo_events').get().n);this.store.set('yoyo_next_focus',null);this.store.set('yoyo_last_focus',target);this.store.set('yoyo_last_wake',Date.now());this.store.set('yoyo_started',true)
     this.data.db.prepare("INSERT INTO yoyo_turns VALUES(?,?,'running',?,NULL,NULL)").run(requestId,view.id,Date.now())
-    const prompt=target==='overview'?'有新的关注机会。你可以查看收件箱，也可以继续自己的打算或休息。没有必须逐条回答的消息。':'你刚才选择了这个窗口。根据需要阅读前后文、做事、回复、返回总览或休息。'
+    const prompt='[调度事件] '+(target==='overview'?'收件箱或计划有新动静。':'继续当前活动。')+' 自行决定阅读、处理或休息；无需回复此提示。'
     const timer=setTimeout(()=>agent.cancel({kind:'hook',reason:'本轮活动预算到期，稍后继续'}),this.config.turnMs)
     try{
       await this.ctx.sessionController.prompt({sessionId:agent.id,requestId,mode:'queue',clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:prompt}]},this.runtime.abort.signal)
       if(this.duePlan){this.data.db.prepare('UPDATE yoyo_plans SET not_before=NULL WHERE id=?').run(this.duePlan);this.duePlan=null}
       await agent.whenIdle();await this.ctx.sessions.flush(agent.session)
       const info=await this.ctx.sessionController.inspect(agent.id,this.runtime.abort.signal)
-      const result=this.runtime.model.outcome(info.events,requestId)
+      const result=nativeOutcome(info.events,requestId)
       if(result.reason?.kind!=='completed')throw Error('自主活动未完成：'+(result.reason?.kind??'未取得回执'))
       this.data.db.prepare("UPDATE yoyo_turns SET state='done',finished_at=? WHERE request_id=?").run(Date.now(),requestId)
     }catch(e){this.data.db.prepare("UPDATE yoyo_turns SET state='failed',error=?,finished_at=? WHERE request_id=?").run(String(e.message).slice(0,300),Date.now(),requestId);throw e}
-    finally{clearTimeout(timer);this.currentRequest=null;this.store.set('conversation_finished_at',Date.now());const a=this.data.activity();if(a.state==='working'&&!a.wake_at)this.data.db.prepare('UPDATE yoyo_activity SET wake_at=? WHERE id=1').run(Date.now()+60000)}
+    finally{clearTimeout(timer);this.currentRequest=null;this.store.set('conversation_finished_at',Date.now())}
   }
   async deliver() {
     const settings=this.store.get('yoyo_settings',{});if(settings.paused)return false
@@ -291,5 +307,5 @@ export class SocialAgent {
       throw Error('发件平台未配置')
     },Date.now(),{ownerOnly:settings.observeOnly!==false})
   }
-  stop(){for(const d of this.disposers.splice(0).reverse())d()}
+  stop(){for(const d of this.disposers.splice(0).reverse())d();if(this.separate)this.store.close()}
 }
