@@ -1,16 +1,15 @@
 import { createServer,request } from 'node:http'
-import { createHash,timingSafeEqual } from 'node:crypto'
+import { authorizedEvent } from './onebot-auth.mjs'
 
 const token=process.env.SNOWLUMA_EVENT_TOKEN
 if(typeof token!=='string'||token.length<24)throw Error('OneBot 上报密钥未配置')
-const digest=value=>createHash('sha256').update(value).digest()
 const server=createServer(async(req,res)=>{
   try{
     if(req.method!=='POST'||req.url!=='/onebot/event'){res.writeHead(404);return res.end()}
-    if(!timingSafeEqual(digest(String(req.headers.authorization??'')),digest('Bearer '+token))){res.writeHead(401);return res.end()}
     const chunks=[];let size=0
     for await(const chunk of req){size+=chunk.length;if(size>1024*1024){res.writeHead(413);res.end();req.destroy();return}chunks.push(chunk)}
     const body=Buffer.concat(chunks)
+    if(!authorizedEvent(req.headers,body,token)){res.writeHead(401);return res.end()}
     const upstream=request({host:'127.0.0.1',port:Number(process.env.YOYO_ASSISTANT_PORT??3180),path:'/onebot/event',method:'POST',headers:{'content-type':'application/json','content-length':body.length,authorization:'Bearer '+token,...(req.headers['x-signature']?{'x-signature':req.headers['x-signature']}:{})}},reply=>{
       res.writeHead(reply.statusCode,{'content-type':'application/json'});reply.pipe(res)
     })
