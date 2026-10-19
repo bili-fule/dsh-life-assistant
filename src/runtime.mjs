@@ -71,7 +71,7 @@ export class Runtime {
       batching:{quietSeconds:this.batcher.quietMs/1000,maxWaitSeconds:this.batcher.maxWaitMs/1000,maxMessages:this.batcher.maxMessages},
       maintenance:this.maintenance.status(),markdown:true,communication:communicationState(this.store,{all:true}),contextPolicy:{configuredTriggerTokens:263000,declaredModelWindow:1000000,retainTokens:65536,summaryMaxTokens:8192},
       capabilities:{shell:!this.autonomy.enabled||this.autonomy.separate||!!this.autonomy.executor,links:true,browser:!this.autonomy.enabled||this.autonomy.separate,images:!!this.config.attachments,files:true,mergedArchives:true,fileSending:true,messageSending:true},workspaceFiles:this.workspaceFiles(),
-      autonomy:{enabled:this.autonomy.enabled,separateSession:this.autonomy.separate,sessionId:this.autonomy.sessionId,nativeReady:this.autonomy.nativeReady,...this.autonomy.data.snapshot(),persona:this.autonomy.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同边界。'),self:this.autonomy.store.get('yoyo_self',{mood:'calm',energy:'steady'}),plans:this.autonomy.store.db.prepare('SELECT id,title,progress,state,not_before,scopes FROM yoyo_plans ORDER BY updated_at DESC LIMIT 30').all(),settings:this.autonomy.store.get('yoyo_settings',{observeOnly:true,paused:false,dailySteps:0}),qqConfigured:!!this.autonomy.qq},
+      autonomy:{enabled:this.autonomy.enabled,usage:this.autonomy.data.db.prepare('SELECT steps,tokens FROM yoyo_usage WHERE day=?').get(localParts().date)??{steps:0,tokens:0},recentActivity:this.autonomy.data.db.prepare('SELECT state,body,created_at FROM yoyo_activity_log ORDER BY id DESC LIMIT 12').all().map(r=>({...r,body:JSON.parse(r.body)})),personaVersions:this.autonomy.data.db.prepare('SELECT id,body,created_at FROM yoyo_persona_versions ORDER BY id DESC LIMIT 5').all(),memoryMaintenance:this.autonomy.memoryMaintenance.status(),separateSession:this.autonomy.separate,sessionId:this.autonomy.sessionId,nativeReady:this.autonomy.nativeReady,...this.autonomy.data.snapshot(),persona:this.autonomy.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同边界。'),self:this.autonomy.store.get('yoyo_self',{mood:'calm',energy:'steady'}),plans:this.autonomy.store.db.prepare('SELECT id,title,progress,state,not_before,scopes FROM yoyo_plans ORDER BY updated_at DESC LIMIT 30').all(),settings:this.autonomy.store.get('yoyo_settings',{observeOnly:true,paused:false,dailySteps:0}),qqConfigured:!!this.autonomy.qq},
       persona:this.store.get('persona','你是一位贴心但不啰嗦的中文事务助理，说话自然，判断谨慎，帮用户把事情理清楚。'),
       styleLearning:this.store.get('style_learning',true),learnedStyle:this.store.get('learned_style',{}),styleCounts:this.store.get('style_counts',{}),
       quiet:this.store.get('quiet',{start:22,end:8}),digestHour:this.store.get('digest_hour',9),deliveryError:this.store.get('delivery_error'),pollError:this.store.get('poll_error'),lastInbound:this.store.get('last_inbound'),modelHealth:this.store.get('model_health')}
@@ -85,7 +85,7 @@ export class Runtime {
       const qq=this.autonomy.qq;if(!qq)return json(res,{error:'QQ 未配置'},404)
       let size=0;const parts=[];for await(const chunk of req){size+=chunk.length;if(size>1024*1024)throw Error('消息过大');parts.push(chunk)}
       const bytes=Buffer.concat(parts);if(!qq.authorizedEvent(req.headers,bytes))return json(res,{error:'上报认证失败'},401)
-      qq.ingest(this.autonomy.data,JSON.parse(bytes.toString()));return json(res,{ok:true})
+      const event=JSON.parse(bytes.toString());qq.ingest(this.autonomy.data,event);this.autonomy.interruptMemory(event);return json(res,{ok:true})
     }
     const assets={'/':['../public/index.html','text/html; charset=utf-8'],'/app.js':['../public/app.js','text/javascript; charset=utf-8'],'/app.css':['../public/app.css','text/css; charset=utf-8']}
     if(req.method==='GET' && assets[url.pathname]) {const [file,type]=assets[url.pathname];res.writeHead(200,{'content-type':type,'cache-control':'no-store'});return res.end(readFileSync(new URL(file,import.meta.url)))}
@@ -102,7 +102,7 @@ export class Runtime {
       if(Object.keys(data).some(k=>!['observeOnly','paused','dailySteps','persona'].includes(k)))throw Error('设置项无效')
       for(const k of ['observeOnly','paused'])if(k in data&&typeof data[k]!=='boolean')throw Error('开关设置无效')
       if('dailySteps' in data&&(!Number.isSafeInteger(data.dailySteps)||data.dailySteps<0||data.dailySteps>100000))throw Error('每日预算无效')
-      if('persona' in data){if(typeof data.persona!=='string'||!data.persona.trim()||data.persona.length>2000)throw Error('人设无效');this.autonomy.store.set('yoyo_persona',data.persona)}
+      if('persona' in data){if(typeof data.persona!=='string'||!data.persona.trim()||data.persona.length>2000)throw Error('人设无效');this.autonomy.store.set('yoyo_persona',data.persona);this.autonomy.data.db.prepare('INSERT INTO yoyo_persona_versions(body,created_at) VALUES(?,?)').run(data.persona,Date.now())}
       const {persona,...settings}=data;this.autonomy.store.set('yoyo_settings',{...current,...settings})
       if(data.observeOnly===true||data.paused===true)this.autonomy.data.db.prepare("UPDATE yoyo_outbox SET state='cancelled',error='已暂停发言' WHERE state IN ('queued','retry_wait') AND (?=1 OR target IN (SELECT handle FROM yoyo_targets WHERE platform='qq'))").run(data.paused===true?1:0)
       if(data.paused===true&&this.autonomy.sessionId){const result=await this.config.nativeContext?.sessionController.resolveAgent(this.autonomy.sessionId);result?.agent?.cancel({kind:'hook',reason:'用户暂停自主活动'})}
@@ -110,7 +110,9 @@ export class Runtime {
     }
     if(url.pathname==='/api/yoyo/approve')return json(res,{target:this.autonomy.data.approve(data.target,data.approved)})
     if(url.pathname==='/api/yoyo/wake') {const target=data.target??'overview';if(!['overview','public'].includes(target))this.autonomy.data.target(target,{approved:true});this.autonomy.store.set('yoyo_next_focus',target);return json(res,{ok:true})}
+    if(url.pathname==='/api/yoyo/qq-discover'){if(!this.autonomy.qq)throw Error('QQ 未配置');return json(res,await this.autonomy.qq.discoverWindows(this.autonomy.data,this.abort.signal))}
     if(url.pathname==='/api/yoyo/qq-check') {if(!this.autonomy.qq)throw Error('QQ 未配置');return json(res,await this.autonomy.qq.health(this.abort.signal))}
+    if(url.pathname==='/api/yoyo/memory-retry')return json(res,this.autonomy.memoryMaintenance.retry(data.id))
     if(url.pathname==='/api/yoyo/forget')return json(res,{forgotten:this.autonomy.data.forget(data.id)})
     if(url.pathname==='/api/upload') {
       if(typeof data.data!=='string'||data.data.length>43*1024*1024)throw Error('文件过大')

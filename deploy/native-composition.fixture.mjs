@@ -14,7 +14,7 @@ import { mkdtempSync,rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { MockAdapter,toolCallResponse } from '../../agent-loop/tests/mock-adapter.ts'
+import { MockAdapter,toolCallResponse,textResponse } from '../../agent-loop/tests/mock-adapter.ts'
 
 it('runs yoyo across attention changes through one real native DSH Agent',async()=>{
  const root=mkdtempSync(join(tmpdir(),'native-yoyo-')),ctx=new Context()
@@ -52,4 +52,40 @@ it('runs yoyo across attention changes through one real native DSH Agent',async(
   expect(native.id).toBe('one-yoyo')
   expect(native.session.snapshotEvents().filter(e=>e.type==='request/view')).toHaveLength(2)
  }finally{social?.stop();await ctx.fiber.dispose();store?.close();rmSync(root,{recursive:true,force:true})}
+})
+
+
+it('keeps QQ in its own real native agent and denies outbound actions during memory review',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'separate-native-yoyo-')),ctx=new Context(),agents=new Map()
+ let store,social
+ try{
+  const base=process.env.YOYO_PLUGIN_ROOT
+  const {Store}=await import(pathToFileURL(join(base,'src/store.mjs')).href)
+  const {SocialAgent}=await import(pathToFileURL(join(base,'src/social-agent.mjs')).href)
+  for(const plugin of [LlmRuntime,SessionStore,SessionProjectionRegistry,SystemPrompt,ToolRuntime,AgentRegistry,TokenMeter])await ctx.plugin(plugin)
+  await ctx.plugin(AgentLoop,{agents:[]});await ctx.plugin(BasicCompactionEngine,{auto:false});await ctx.plugin(ToolResultPruner)
+  ctx.agentPresets={serviceFor(){return ctx.compaction}}
+  const privateAgent=await ctx.agentLoop.create(SessionId('private-native'),{provider:'mock',model:'mock'})
+  privateAgent.session.append('user/message',createUserMessage({content:[{type:'text',text:'PRIVATE_OWNER_CANARY_a7d0'}],source:{kind:'user'}}),{surfaceOp:'append'})
+  ctx.workspaceController={async create(){return {workspace:{workspaceId:'social-workspace'}}}}
+  ctx.sessionController={
+   async create({sessionId}){if(!agents.has(sessionId))agents.set(sessionId,await ctx.agentLoop.create(SessionId(sessionId),{provider:'mock',model:'mock'}))},
+   async selectModel(){},async rename(){},async resolveAgent(id){return {agent:agents.get(id)}},
+   async inspect(id){return {events:agents.get(id).session.snapshotEvents()}},
+   async prompt(r){agents.get(r.sessionId).followup(createUserMessage({content:r.content,source:{kind:'user',rpcId:r.requestId}}));return {accepted:true}}
+  }
+  store=new Store(join(root,'private.sqlite'));store.set('owner','private-owner')
+  social=new SocialAgent({store,workspace:root,config:{provider:'mock',model:'mock'},abort:new AbortController(),model:{sessionId:privateAgent.id,ensure(){throw Error('must not use private agent')}}},ctx,{enabled:true,separateSession:true})
+  social.store.set('yoyo_settings',{observeOnly:false,dailySteps:30})
+  const target=social.data.discover({platform:'qq',account:'10001',kind:'private',peer:'22222'})
+  social.data.approve(target.handle,true);const message=social.data.ingest({target:target.handle,sender:'22222',externalId:'a',text:'hello friend',receivedAt:Date.now()-300000})
+  const adapter=new MockAdapter([toolCallResponse('read','yoyo_read',{}),toolCallResponse('send','yoyo_send',{text:'hello back'}),toolCallResponse('sleep','yoyo_sleep',{until:null,reason:'等消息'}),toolCallResponse('blocked-send','yoyo_send',{text:'MUST_NOT_SEND'}),toolCallResponse('memory','yoyo_memory',{kind:'episodes',body:'打过招呼',sources:[{id:message.id,quote:'hello friend'}],confidence:'observed'}),textResponse('已完成后台整理，无对外动作。')])
+  ctx.llm.registerAdapter(['mock'],adapter);social.store.set('yoyo_next_focus',target.handle)
+  await social.tick();social.memoryMaintenance.config.idleMs=0;await social.tick()
+  expect(social.sessionId).not.toBe(privateAgent.id);expect(JSON.stringify(adapter.requests)).not.toContain('PRIVATE_OWNER_CANARY_a7d0')
+  expect(social.memoryMaintenance.status().jobs).toMatchObject([{state:'done'}])
+  expect(social.data.snapshot().outbox).toHaveLength(1)
+  expect(social.data.recall(social.activeView.id)).toMatchObject([{body:'打过招呼'}])
+  expect(adapter.requests.at(-1).toolHistory.tools.map(t=>t.name)).not.toContain('yoyo_send')
+ }finally{await ctx.fiber.dispose();social?.stop();store?.close();rmSync(root,{recursive:true,force:true})}
 })

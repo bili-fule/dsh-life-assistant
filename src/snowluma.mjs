@@ -2,7 +2,7 @@ import { createHash,timingSafeEqual,createHmac } from 'node:crypto'
 import { identityPart } from './scope.mjs'
 
 const READ_ACTIONS=new Set(['get_login_info','get_status','get_group_list','get_friend_list','get_group_msg_history','get_friend_msg_history','get_msg','get_forward_msg','get_group_member_info','get_group_info','get_image','get_record','get_file','get_group_file_url','get_private_file_url'])
-const WRITE_ACTIONS=new Set(['send_group_msg','send_private_msg'])
+const WRITE_ACTIONS=new Set(['send_group_msg','send_private_msg','upload_group_file','upload_private_file'])
 function equal(a,b){return timingSafeEqual(createHash('sha256').update(a).digest(),createHash('sha256').update(b).digest())}
 function numberId(value){const text=identityPart(value);if(!/^\d+$/.test(text)||!Number.isSafeInteger(Number(text)))throw Error('QQ 编号无效');return Number(text)}
 export function oneBotText(segments) {
@@ -70,6 +70,25 @@ export class SnowLuma {
     let added=0
     for(const raw of rows){const peer=t.kind==='group'?raw.group_id:raw.user_id;if(String(peer)!==t.peer)throw Error('QQ 历史返回了其他聊天的数据');const r=this.ingest(social,{...raw,post_type:'message',message_type:t.kind,self_id:this.account},{historical:true});if(r.inserted)added++}
     return {added,count:rows.length}
+  }
+  async discoverWindows(social,signal){
+    await this.health(signal)
+    const groups=await this.call('get_group_list',{},signal),friends=await this.call('get_friend_list',{},signal)
+    if(!Array.isArray(groups)||!Array.isArray(friends)||groups.length+friends.length>10000)throw Error('QQ 通讯录格式或数量无效')
+    for(const g of groups)social.discover({platform:'qq',account:this.account,kind:'group',peer:numberId(g.group_id),label:String(g.group_name??'')})
+    for(const f of friends)social.discover({platform:'qq',account:this.account,kind:'private',peer:numberId(f.user_id),label:String(f.remark||f.nickname||'')})
+    return {groups:groups.length,friends:friends.length,approvedAutomatically:false}
+  }
+  async sendAsset(target,content,bytes,signal,authorize=()=>{}) {
+    if(target.platform!=='qq'||target.account!==this.account||!Buffer.isBuffer(bytes)||bytes.length!==content.bytes||bytes.length>8*1024*1024||createHash('sha256').update(bytes).digest('hex')!==content.sha256)throw Error('QQ 附件或发件账号校验失败')
+    await this.health(signal);authorize()
+    const group=target.kind==='group',peer={[group?'group_id':'user_id']:numberId(target.peer)},file='base64://'+bytes.toString('base64')
+    if(content.kind==='image'){
+      const data=await this.call(group?'send_group_msg':'send_private_msg',{...peer,message:[{type:'image',data:{file}}]},signal,{write:true})
+      return {messageId:data?.message_id??null}
+    }
+    const data=await this.call(group?'upload_group_file':'upload_private_file',{...peer,file,name:content.name,upload_file:true},signal,{write:true})
+    return {messageId:data?.file_id?'file:'+data.file_id:null}
   }
   async send(target,text,key,signal,authorize=()=>{}) {
     if(target.platform!=='qq'||target.account!==this.account)throw Error('QQ 发件账号不匹配')

@@ -44,11 +44,13 @@ function renderYoyo(){
  const y=state.autonomy;if(!y)return
  if(document.activeElement!==$('#yoyo-persona'))$('#yoyo-persona').value=y.persona||''
  const plans=$('#yoyo-plans');plans.replaceChildren();for(const p of y.plans??[])plans.append(el('div','#'+p.id+' · '+p.title+' · '+({open:'进行中',waiting:'等待',done:'完成',cancelled:'已取消'}[p.state]||p.state)+(p.progress?'\n'+p.progress:''),'card text-block'));if(!plans.children.length)empty(plans,'还没有保存自己的打算。')
- $('#yoyo-status').textContent=!y.enabled?'自主模式尚未启用，微信事务仍正常工作。':!y.nativeReady?'原生资料视图尚未就绪，自主活动不会运行。':y.settings.paused?'yoyo 已暂停。':y.settings.observeOnly?'正在观察，会记录打算但不发送消息。':'自主活动已开启。'
+ $('#yoyo-status').textContent=!y.enabled?'自主模式尚未启用，微信事务仍正常工作。':!y.nativeReady?'原生资料视图尚未就绪，自主活动不会运行。':y.settings.paused?'yoyo 已暂停。':y.settings.observeOnly?'正在观察，会记录打算但不发送消息。':'自主活动已开启，今日已用 '+(y.usage?.steps??0)+' / '+y.settings.dailySteps+' 个模型步骤。'
  $('#yoyo-activity').textContent=[y.activity?.body?.description,y.activity?.body?.next?'下一步：'+y.activity.body.next:'',y.activity?.wake_at?'下次关注：'+format(y.activity.wake_at):''].filter(Boolean).join('\n')||'暂时没有正在进行的打算。'
  if(document.activeElement!==$('#yoyo-budget'))$('#yoyo-budget').value=y.settings.dailySteps??0
  $('#yoyo-observe').checked=y.settings.observeOnly!==false
  $('#yoyo-pause').textContent=y.settings.paused?'继续活动':'暂停活动'
+ const memoryJobs=$('#yoyo-memory-jobs');memoryJobs.replaceChildren();for(const r of y.memoryMaintenance?.jobs??[]){const card=el('div','#'+r.id+' · '+({idle:'空闲整理',night:'夜间整理'}[r.kind]||r.kind)+' · 原文至 #'+r.through_id+' · '+({running:'整理中',done:'已完成',failed:'未完成',interrupted:'已中断'}[r.state]||r.state)+(r.error?' · '+r.error:''),'card');if(['failed','interrupted'].includes(r.state))card.append(button('重试本次整理',()=>action('/api/yoyo/memory-retry',{id:r.id},'已安排重试'),'secondary'));memoryJobs.append(card)}if(!memoryJobs.children.length)empty(memoryJobs,'没有待展示的后台整理。')
+ const activityLog=$('#yoyo-activity-log');activityLog.replaceChildren();for(const r of y.recentActivity??[])activityLog.append(el('div',format(r.created_at)+' · '+(r.body.description||r.state)+(r.body.next?'\n下一步：'+r.body.next:''),'card text-block'));if(!activityLog.children.length)empty(activityLog,'尚无活动记录。')
  $('#yoyo-qq').textContent=y.qqConfigured?'已配置 QQ 接入，可检查登录账号。':'尚未配置 QQ 接入。'
  const targets=$('#yoyo-targets');targets.replaceChildren()
  for(const t of y.targets){const row=el('div',null,'card row');row.append(el('span',(t.label||'未命名窗口')+' · '+t.platform+' / '+t.kind+' · '+t.peer),button(t.approved?'撤销授权':'允许浏览和聊天',()=>action('/api/yoyo/approve',{target:t.handle,approved:!t.approved},'授权已更新'),t.approved?'danger':'secondary'));targets.append(row)}
@@ -61,3 +63,5 @@ $('#yoyo-persona-form').onsubmit=e=>{e.preventDefault();action('/api/yoyo/settin
 $('#yoyo-wake').onclick=()=>action('/api/yoyo/wake',{},'已安排一次关注机会。')
 $('#yoyo-pause').onclick=()=>action('/api/yoyo/settings',{paused:!state.autonomy.settings.paused},'活动状态已更新。')
 $('#yoyo-qq-check').onclick=async()=>{try{const r=await api('/api/yoyo/qq-check',{});toast('QQ 已连接：'+r.account)}catch(e){toast(e.message)}}
+
+$('#yoyo-qq-discover').onclick=async()=>{try{const r=await api('/api/yoyo/qq-discover',{});toast('已同步 '+r.groups+' 个群、'+r.friends+' 个好友；请逐个选择授权。');await refresh()}catch(e){toast(e.message)}}

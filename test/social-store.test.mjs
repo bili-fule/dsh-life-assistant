@@ -96,3 +96,28 @@ test('own plans and web-supported knowledge inherit host visibility',t=>{
   data.remember(publicView.id,{kind:'knowledge',body:'public learned fact',sources:[{document,quote:'public source'}]})
   assert.equal(data.recall(bv.id)[0].body,'public learned fact')
 })
+
+
+test('attention batches are fixed at five seconds and acknowledging one window preserves another',t=>{
+ const {data,target}=fixture(t),a=target('123'),b=target('456'),start=Date.now()
+ const put=(chat,id,delta)=>data.ingest({target:chat.handle,sender:chat.peer,externalId:id,text:id,receivedAt:start+delta})
+ put(a,'a1',0);put(a,'a2',4000);put(a,'a3',5100);put(b,'b1',1000)
+ const batches=data.attention(start+5000,5000),av=batches.find(v=>v.handle===a.handle)
+ assert.equal(av.ready,true);assert.equal(av.count,2);assert.equal(batches.find(v=>v.handle===b.handle).ready,false)
+ data.acknowledgeAttention([av])
+ assert.equal(data.attention(start+5100,5000).find(v=>v.handle===a.handle).ready,false)
+ assert.equal(data.attention(start+6000,5000).find(v=>v.handle===b.handle).ready,true)
+ assert.equal(data.attention(start+10100,5000).find(v=>v.handle===a.handle).count,1)
+})
+test('asset outbox pins the original payload and rechecks target revocation before sending',async t=>{
+ const {data,target}=fixture(t),a=target('123'),b=target('456'),av=data.open(a.handle),bv=data.open(b.handle)
+ data.db.prepare('INSERT INTO yoyo_assets VALUES(?,?,?,?,?)').run('asset-a','image.png',JSON.stringify(av.scopes),'image.png',Date.now())
+ const content={assetId:'asset-a',kind:'image',bytes:10,sha256:'a'.repeat(64)}
+ assert.throws(()=>data.enqueueAsset(bv.id,b.handle,content,'wrong-scope'),/资料范围/)
+ const queued=data.enqueueAsset(av.id,a.handle,content,'asset-send')
+ assert.throws(()=>data.enqueueAsset(av.id,a.handle,{...content,sha256:'b'.repeat(64)},'asset-send'),/更换附件/)
+ assert.equal(JSON.parse(data.db.prepare('SELECT content FROM yoyo_outbox WHERE id=?').get(queued.id).content).sha256,content.sha256)
+ data.approve(a.handle,false);let sent=false
+ await data.deliver(async()=>{sent=true;return {messageId:'should-not-send'}})
+ assert.equal(sent,false);assert.equal(data.db.prepare('SELECT state FROM yoyo_outbox WHERE id=?').get(queued.id).state,'cancelled')
+})

@@ -10,12 +10,15 @@ export class SocialStore {
       CREATE TABLE IF NOT EXISTS yoyo_events(id INTEGER PRIMARY KEY,external_key TEXT NOT NULL UNIQUE,target TEXT NOT NULL REFERENCES yoyo_targets(handle),sender TEXT NOT NULL,scope TEXT NOT NULL,kind TEXT NOT NULL,text TEXT NOT NULL,segments TEXT NOT NULL DEFAULT '[]',received_at INTEGER NOT NULL,mentioned INTEGER NOT NULL DEFAULT 0,read_at INTEGER,source_inbox INTEGER UNIQUE);
       CREATE INDEX IF NOT EXISTS yoyo_events_target ON yoyo_events(target,id);
       CREATE TABLE IF NOT EXISTS yoyo_views(id TEXT PRIMARY KEY,focus TEXT,scopes TEXT NOT NULL,authorization_version INTEGER,created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_activity_log(id INTEGER PRIMARY KEY,state TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_persona_versions(id INTEGER PRIMARY KEY,body TEXT NOT NULL,created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_activity(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'idle',body TEXT NOT NULL DEFAULT '{}',scopes TEXT NOT NULL DEFAULT '["public"]',wake_at INTEGER,updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_turns(request_id TEXT PRIMARY KEY,view_id TEXT NOT NULL REFERENCES yoyo_views(id),state TEXT NOT NULL,created_at INTEGER NOT NULL,finished_at INTEGER,error TEXT);
       CREATE TABLE IF NOT EXISTS yoyo_event_scopes(session_id TEXT NOT NULL,seq INTEGER NOT NULL,scopes TEXT NOT NULL,PRIMARY KEY(session_id,seq));
       CREATE TABLE IF NOT EXISTS yoyo_memories(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,sources TEXT NOT NULL,confidence TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER,active INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS yoyo_retirements(memory_id INTEGER PRIMARY KEY,through_id INTEGER NOT NULL,forgotten_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_outbox(id INTEGER PRIMARY KEY,run_key TEXT NOT NULL UNIQUE,target TEXT NOT NULL REFERENCES yoyo_targets(handle),authorization_version INTEGER NOT NULL,view_id TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,remote_id TEXT,error TEXT,sent_at INTEGER);
+      CREATE TABLE IF NOT EXISTS yoyo_attention(target TEXT PRIMARY KEY,cursor INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS yoyo_usage(day TEXT PRIMARY KEY,steps INTEGER NOT NULL DEFAULT 0,tokens INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS yoyo_jobs(id TEXT PRIMARY KEY,run_key TEXT NOT NULL UNIQUE,scopes TEXT NOT NULL,created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_documents(id INTEGER PRIMARY KEY,url TEXT NOT NULL,body TEXT NOT NULL,scope TEXT NOT NULL,created_at INTEGER NOT NULL);
@@ -23,6 +26,7 @@ export class SocialStore {
       CREATE TABLE IF NOT EXISTS yoyo_plans(id INTEGER PRIMARY KEY,title TEXT NOT NULL,progress TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT 'open',scopes TEXT NOT NULL,view_id TEXT NOT NULL,not_before INTEGER,updated_at INTEGER NOT NULL);
       INSERT OR IGNORE INTO yoyo_activity(id,updated_at) VALUES(1,0);
     `)
+    if(!this.db.prepare('PRAGMA table_info(yoyo_outbox)').all().some(c=>c.name==='content'))this.db.exec('ALTER TABLE yoyo_outbox ADD COLUMN content TEXT')
     // A lost response can mean an actual sent message. Never blindly resend it.
     this.db.prepare("UPDATE yoyo_outbox SET state='uncertain',error='进程重启前未取得确定回执' WHERE state='sending'").run()
   }
@@ -65,6 +69,18 @@ export class SocialStore {
     this.db.prepare('INSERT INTO yoyo_views VALUES(?,?,?,?,?)').run(view.id,null,JSON.stringify(view.scopes),null,view.createdAt)
     return view
   }
+  attention(now=Date.now(),quietMs=5000) {
+    const rows=[]
+    for(const t of this.db.prepare('SELECT * FROM yoyo_targets WHERE approved=1').all()){
+      const cursor=this.db.prepare('SELECT cursor FROM yoyo_attention WHERE target=?').get(t.handle)?.cursor??0
+      const first=this.db.prepare("SELECT id,received_at FROM yoyo_events WHERE target=? AND id>? AND kind='message' AND read_at IS NULL ORDER BY id LIMIT 1").get(t.handle,cursor)
+      if(!first)continue
+      const readyAt=first.received_at+quietMs,batch=this.db.prepare("SELECT max(id) through_id,count(*) count,max(mentioned) mentioned FROM yoyo_events WHERE target=? AND id>? AND kind='message' AND read_at IS NULL AND received_at<=?").get(t.handle,cursor,readyAt)
+      rows.push({handle:t.handle,platform:t.platform,kind:t.kind,label:t.label,readyAt,ready:now>=readyAt,throughId:batch.through_id,count:batch.count,mentioned:!!batch.mentioned})
+    }
+    return rows
+  }
+  acknowledgeAttention(batches){for(const b of batches)this.db.prepare('INSERT INTO yoyo_attention VALUES(?,?) ON CONFLICT(target) DO UPDATE SET cursor=max(cursor,excluded.cursor)').run(b.handle,b.throughId)}
   planningView() {
     const scopes=[PUBLIC_SCOPE,...this.db.prepare('SELECT scope FROM yoyo_targets WHERE approved=1 ORDER BY handle').all().map(t=>t.scope)]
     const view={id:randomUUID(),focus:null,scopes,authorizationVersion:null,createdAt:Date.now()}
@@ -79,12 +95,12 @@ export class SocialStore {
     for(const scope of scopes)if(scope!==PUBLIC_SCOPE&&!this.db.prepare('SELECT 1 FROM yoyo_targets WHERE scope=? AND approved=1').get(scope))throw Error('资料视图授权已失效')
     return {id:row.id,focus:row.focus,scopes,authorizationVersion:row.authorization_version,createdAt:row.created_at}
   }
-  read(viewId,{after,limit=30,query=''}={}) {
+  read(viewId,{after,before=Number.MAX_SAFE_INTEGER,limit=30,query=''}={}) {
     const view=this.view(viewId)
     if(!view.focus)throw Error('请先选择要阅读的聊天窗口')
-    if(after!==undefined&&(!Number.isInteger(after)||after<0)||!Number.isInteger(limit)||limit<1||limit>50||typeof query!=='string'||query.length>300)throw Error('读取范围无效')
+    if(!Number.isSafeInteger(before)||before<0||after!==undefined&&(!Number.isInteger(after)||after<0)||!Number.isInteger(limit)||limit<1||limit>50||typeof query!=='string'||query.length>300)throw Error('读取范围无效')
     if(after===undefined){const first=this.db.prepare('SELECT min(id) n FROM yoyo_events WHERE target=? AND read_at IS NULL').get(view.focus).n;after=first?Math.max(0,first-4):Math.max(0,(this.db.prepare('SELECT max(id) n FROM yoyo_events WHERE target=?').get(view.focus).n??0)-limit)}
-    return this.db.prepare('SELECT id,sender,kind,text,segments,received_at,mentioned,source_inbox FROM yoyo_events WHERE target=? AND id>? AND instr(lower(text),lower(?))>0 ORDER BY id LIMIT ?').all(view.focus,after,query,limit).map(r=>({...r,segments:JSON.parse(r.segments)}))
+    return this.db.prepare('SELECT id,sender,kind,text,segments,received_at,mentioned,source_inbox FROM yoyo_events WHERE target=? AND id>? AND id<=? AND instr(lower(text),lower(?))>0 ORDER BY id LIMIT ?').all(view.focus,after,before,query,limit).map(r=>({...r,segments:JSON.parse(r.segments)}))
   }
   markRead(viewId,ids) {
     const v=this.view(viewId);if(!Array.isArray(ids)||ids.length>50||ids.some(id=>!Number.isSafeInteger(id)||id<1))throw Error('原文编号无效')
@@ -102,8 +118,10 @@ export class SocialStore {
     const view=this.view(viewId)
     if(!['idle','working','sleeping','waiting','paused'].includes(state)||typeof description!=='string'||description.length>1000||typeof next!=='string'||next.length>1000||wakeAt!==null&&(!Number.isSafeInteger(wakeAt)||wakeAt<Date.now()||wakeAt>Date.now()+30*86400000))throw Error('活动或唤醒时间无效')
     this.db.prepare('UPDATE yoyo_activity SET revision=revision+1,state=?,body=?,scopes=?,wake_at=?,updated_at=? WHERE id=1').run(state,JSON.stringify({description,next}),JSON.stringify(view.scopes),wakeAt,Date.now())
+    this.db.prepare('INSERT INTO yoyo_activity_log(state,body,scopes,created_at) VALUES(?,?,?,?)').run(state,JSON.stringify({description,next}),JSON.stringify(view.scopes),Date.now())
     return this.activity(viewId)
   }
+  activityHistory(viewId){const view=this.view(viewId);return this.db.prepare("SELECT state,body,created_at FROM yoyo_activity_log l WHERE NOT EXISTS(SELECT 1 FROM json_each(l.scopes) s WHERE s.value NOT IN(SELECT value FROM json_each(?))) ORDER BY id DESC LIMIT 20").all(JSON.stringify(view.scopes)).map(r=>({...r,body:JSON.parse(r.body)}))}
   remember(viewId,{kind='episodes',body,sources=[],confidence='observed',expiresAt=null}) {
     const view=this.view(viewId);body=boundedText(body,2000)
     if(!['episodes','profile','relations','knowledge','procedures','intention','communication'].includes(kind)||!['observed','hypothesis','self_report'].includes(confidence)||!Array.isArray(sources)||!sources.length||sources.length>10||expiresAt!==null&&(!Number.isSafeInteger(expiresAt)||expiresAt<=Date.now()))throw Error('记忆类型或来源无效')
@@ -111,6 +129,11 @@ export class SocialStore {
       if(!s||typeof s!=='object'||!Number.isSafeInteger(s.document??s.id)||s.document!==undefined&&s.id!==undefined)throw Error('原文来源编号无效')
       const row=s.document!==undefined?this.db.prepare('SELECT body text,scope FROM yoyo_documents WHERE id=?').get(s.document):this.db.prepare('SELECT text,scope FROM yoyo_events WHERE id=?').get(s.id)
       if(!row||!mayRead(view,row.scope)||typeof s.quote!=='string'||!s.quote.trim()||!row.text.includes(s.quote))throw Error('记忆必须有当前可见原文的逐字证据')
+    }
+    if(kind==='communication'){
+      const direct=sources.filter(s=>s.id!==undefined).map(s=>this.db.prepare('SELECT id,sender,kind,segments FROM yoyo_events WHERE id=?').get(s.id)).filter(r=>r?.kind==='message'&&!JSON.parse(r.segments).some(s=>s.type==='forward'))
+      if(!direct.length||new Set(direct.map(r=>r.sender)).size!==1)throw Error('语言习惯须有同一实际发送者的直接原文，不能混合人物或转发')
+      if(confidence==='observed'&&new Set(direct.map(r=>r.id)).size<2)throw Error('稳定语言观察至少需要两条独立原文；单次原因推断请标 hypothesis，明确自述标 self_report')
     }
     const forgotten=this.db.prepare('SELECT r.through_id FROM yoyo_memories m JOIN yoyo_retirements r ON r.memory_id=m.id WHERE m.body=?').all(body)
     if(forgotten.some(r=>sources.every(s=>s.document!==undefined||s.id<=r.through_id)))throw Error('不能从旧原文重新学习已忘记的内容')
@@ -165,6 +188,18 @@ export class SocialStore {
     if(row.body!==text||row.target!==target)throw Error('同一原生调用不能更换收件人或正文')
     return {id:row.id,state:row.state,queued:row.state==='queued',delivered:row.state==='sent'}
   }
+  enqueueAsset(viewId,target,content,runKey,now=Date.now()) {
+    const view=this.view(viewId),asset=this.db.prepare('SELECT * FROM yoyo_assets WHERE id=?').get(content?.assetId)
+    if(!asset||!JSON.parse(asset.scopes).every(s=>mayRead(view,s)))throw Error('文件不在当前资料范围')
+    assertPublish(JSON.parse(asset.scopes),this.target(target,{approved:true}).scope)
+    if(!['image','file'].includes(content.kind)||!Number.isSafeInteger(content.bytes)||content.bytes<1||content.bytes>8*1024*1024||!/^([a-f0-9]{64})$/.test(content.sha256))throw Error('发送文件元数据无效')
+    return this.store.transaction(()=>{
+      const result=this.enqueue(viewId,target,'['+(content.kind==='image'?'图片':'文件')+'] '+asset.name,runKey,now)
+      const encoded=JSON.stringify({...content,name:asset.name}),old=this.db.prepare('SELECT content FROM yoyo_outbox WHERE id=?').get(result.id)
+      if(old.content&&old.content!==encoded)throw Error('同一动作不能更换附件')
+      this.db.prepare('UPDATE yoyo_outbox SET content=? WHERE id=?').run(encoded,result.id);return result
+    })
+  }
   async deliver(send,now=Date.now(),{ownerOnly=false}={}) {
     const row=this.db.prepare("SELECT * FROM yoyo_outbox WHERE state IN ('queued','retry_wait') AND next_at<=? AND (?=0 OR target IN (SELECT handle FROM yoyo_targets WHERE platform='wechat' AND kind='owner')) ORDER BY id LIMIT 1").get(now,ownerOnly?1:0)
     if(!row)return false
@@ -173,7 +208,7 @@ export class SocialStore {
     catch(e){this.db.prepare("UPDATE yoyo_outbox SET state='cancelled',error=? WHERE id=?").run(e.message,row.id);return false}
     this.db.prepare("UPDATE yoyo_outbox SET state='sending',attempts=attempts+1 WHERE id=?").run(row.id)
     try{
-      const result=await send(this.target(row.target),row.body,'yoyo-'+createHash('sha256').update(row.run_key).digest('hex').slice(0,24),authorize)
+      const result=await send(this.target(row.target),row.body,'yoyo-'+createHash('sha256').update(row.run_key).digest('hex').slice(0,24),authorize,row.content?JSON.parse(row.content):null)
       if(!result?.messageId)throw Error('发送接口未提供确定回执')
       this.store.transaction(()=>{
         this.db.prepare("UPDATE yoyo_outbox SET state='sent',remote_id=?,sent_at=?,error=NULL WHERE id=?").run(String(result.messageId),now,row.id)

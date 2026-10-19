@@ -71,7 +71,7 @@ test('already alerted unread messages do not repeatedly wake the social agent',t
  store.set('yoyo_started',true);store.set('yoyo_settings',{dailySteps:20})
  agent.data.ingest({target:a.handle,sender:'123',externalId:'first',text:'hello',receivedAt:now-300000})
  assert.equal(agent.choose(now),a.handle)
- store.set('yoyo_alerted_event',agent.data.db.prepare('SELECT max(id) n FROM yoyo_events').get().n)
+ agent.data.acknowledgeAttention(agent.data.attention(now+300000,5000))
  assert.equal(agent.choose(now+300000),null)
  agent.data.ingest({target:a.handle,sender:'123',externalId:'second',text:'new message',receivedAt:now})
  assert.equal(agent.choose(now+300000),a.handle)
@@ -96,6 +96,13 @@ test('new private messages wake a sleeping agent after the five-second batch win
  agent.data.ingest({target:a.handle,sender:'123',externalId:'wake',text:'在吗',receivedAt:now})
  assert.equal(agent.choose(now+4999),null)
  assert.equal(agent.choose(now+5000),a.handle)
- store.set('yoyo_alerted_event',agent.data.db.prepare('SELECT max(id) n FROM yoyo_events').get().n)
+ agent.data.acknowledgeAttention(agent.data.attention(now+300000,5000))
  assert.equal(agent.choose(now+10000),null)
+})
+
+
+test('memory maintenance blocks message sending and execution at actual native tool dispatch',async t=>{
+ const {agent,hooks,target}=fixture(t),a=target('123');agent.activeView=agent.data.open(a.handle);agent.maintenanceJob={after:0,through:10}
+ for(const name of ['yoyo_send','yoyo_send_file','yoyo_execute','yoyo_open','yoyo_web','yoyo_activity'])await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name},async()=>{throw Error('must not execute')}),/未获/)
+ assert.equal(agent.toolsAllowed().has('yoyo_memory'),true)
 })

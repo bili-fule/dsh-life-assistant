@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createHmac } from 'node:crypto'
+import { createHmac,createHash } from 'node:crypto'
 import { SnowLuma } from '../src/snowluma.mjs'
 
 const config={token:'interface-token-at-least-16',eventToken:'event-token-at-least-24-characters',account:'10001'}
@@ -33,4 +33,15 @@ test('explicit OneBot failure is definite while transport failure remains uncert
   await assert.rejects(()=>qq.call('send_private_msg',{},undefined,{write:true}),e=>e.definitelyNotSent===true)
   const lost=new SnowLuma({...config,fetchImpl:async()=>{throw Error('connection lost')}})
   await assert.rejects(()=>lost.call('send_private_msg',{},undefined,{write:true}),e=>!e.definitelyNotSent)
+})
+
+
+test('QQ image and file delivery use bounded bytes and fixed current-window destinations',async()=>{
+ const calls=[],qq=new SnowLuma({...config,fetchImpl:async(url,args)=>{calls.push({url,args:JSON.parse(args.body)});return url.endsWith('get_login_info')?response({user_id:10001}):response({message_id:42,file_id:'file-42'})}})
+ const bytes=Buffer.from('image-data'),content={kind:'image',bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex'),name:'test.png'},target={platform:'qq',account:'10001',peer:'123',kind:'private'}
+ assert.equal((await qq.sendAsset(target,content,bytes)).messageId,42)
+ assert.equal(calls.at(-1).args.user_id,123);assert.equal(calls.at(-1).args.message[0].data.file,'base64://'+bytes.toString('base64'))
+ assert.equal((await qq.sendAsset(target,{...content,kind:'file',name:'test.txt'},bytes)).messageId,'file:file-42')
+ assert.ok(calls.at(-1).url.endsWith('upload_private_file'))
+ const count=calls.length;await assert.rejects(()=>qq.sendAsset(target,content,Buffer.from('changed')),/校验/);assert.equal(calls.length,count)
 })

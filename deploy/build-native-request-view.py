@@ -21,7 +21,7 @@ pnpm=shutil.which('pnpm.cmd' if os.name=='nt' else 'pnpm')
 if not pnpm:raise SystemExit('pnpm is required')
 run([pnpm,'install','--frozen-lockfile','--ignore-scripts'])
 run([pnpm,'exec','tsc','-b','packages/core/session','packages/llm/token-meter','packages/compaction/compaction-basic','packages/compaction/compaction-tool-result-pruner','packages/typert/generator','--pretty','false'])
-run([pnpm,'exec','vitest','run','packages/core/session/tests/request-view.spec.ts','packages/core/session/tests/surface.spec.ts','packages/core/session/tests/message-projections.spec.ts','packages/llm/token-meter/tests'])
+run([pnpm,'exec','vitest','run','packages/core/session/tests/request-view.spec.ts','packages/core/session/tests/surface.spec.ts','packages/core/session/tests/message-projections.spec.ts','packages/llm/token-meter/tests','packages/compaction/compaction-basic/tests','packages/compaction/compaction-tool-result-pruner/tests'])
 fixture=root/'packages/core/session/tests/yoyo-composition.local.spec.ts'
 if fixture.exists():raise SystemExit('Temporary composition test path already exists')
 previous=os.environ.get('YOYO_PLUGIN_ROOT')
