@@ -29,6 +29,7 @@ export class SocialStore {
       CREATE TABLE IF NOT EXISTS yoyo_memories(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,sources TEXT NOT NULL,confidence TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER,active INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS yoyo_retirements(memory_id INTEGER PRIMARY KEY,through_id INTEGER NOT NULL,forgotten_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_outbox(id INTEGER PRIMARY KEY,run_key TEXT NOT NULL UNIQUE,target TEXT NOT NULL REFERENCES yoyo_targets(handle),authorization_version INTEGER NOT NULL,view_id TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,remote_id TEXT,error TEXT,sent_at INTEGER);
+      CREATE TABLE IF NOT EXISTS yoyo_navigation(target TEXT PRIMARY KEY,last_opened INTEGER,last_read INTEGER,read_count INTEGER NOT NULL DEFAULT 0,last_message INTEGER);
       CREATE TABLE IF NOT EXISTS yoyo_notices(target TEXT PRIMARY KEY,through_id INTEGER NOT NULL,notified_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_attention_policies(target TEXT PRIMARY KEY,body TEXT NOT NULL DEFAULT '{}',last_at INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS yoyo_attention(target TEXT PRIMARY KEY,cursor INTEGER NOT NULL DEFAULT 0);
@@ -139,6 +140,10 @@ export class SocialStore {
     }
     return rows
   }
+  navigation() {
+    return this.db.prepare('SELECT t.handle,t.kind,t.label,n.last_opened,n.last_read,n.read_count,n.last_message FROM yoyo_navigation n JOIN yoyo_targets t ON t.handle=n.target WHERE t.approved=1 ORDER BY coalesce(n.last_read,n.last_opened) DESC LIMIT 30').all()
+  }
+  recordFocus(handle){this.target(handle,{approved:true});this.db.prepare('INSERT INTO yoyo_navigation(target,last_opened) VALUES(?,?) ON CONFLICT(target) DO UPDATE SET last_opened=excluded.last_opened').run(handle,Date.now())}
   pendingNotices() {
     return this.db.prepare(`SELECT t.handle,t.kind,t.label,count(e.id) unread,max(e.id) latest,n.notified_at FROM yoyo_notices n JOIN yoyo_targets t ON t.handle=n.target JOIN yoyo_events e ON e.target=t.handle AND e.id<=n.through_id AND e.read_at IS NULL AND e.kind='message' WHERE t.approved=1 AND t.muted=0 GROUP BY t.handle`).all()
   }
@@ -173,7 +178,9 @@ export class SocialStore {
   }
   markRead(viewId,ids) {
     const v=this.view(viewId);if(!Array.isArray(ids)||ids.length>50||ids.some(id=>!Number.isSafeInteger(id)||id<1))throw Error('原文编号无效')
-    this.store.transaction(()=>{for(const id of ids){
+    this.store.transaction(()=>{
+      if(ids.length&&v.focus)this.db.prepare('INSERT INTO yoyo_navigation(target,last_read,read_count,last_message) VALUES(?,?,?,?) ON CONFLICT(target) DO UPDATE SET last_read=excluded.last_read,read_count=read_count+excluded.read_count,last_message=max(coalesce(last_message,0),excluded.last_message)').run(v.focus,Date.now(),ids.length,Math.max(...ids))
+      for(const id of ids){
       this.db.prepare('UPDATE yoyo_events SET read_at=? WHERE target=? AND id=? AND read_at IS NULL').run(Date.now(),v.focus,id)
       this.db.prepare("UPDATE inbox SET state='done',result=coalesce(result,?) WHERE id IN (SELECT source_inbox FROM yoyo_events WHERE target=? AND id=?) AND state='pending'").run(JSON.stringify({mode:'autonomous',decision:'read'}),v.focus,id)
     }})

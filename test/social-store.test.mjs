@@ -257,3 +257,14 @@ test('presented attention survives window switches until read or deliberately di
  data.dismissNotice(a.handle);assert.deepEqual(data.pendingNotices(),[])
  assert.equal(data.inbox()[0].unread,1)
 })
+
+
+test('navigation retains content-free read evidence across windows and hides revoked targets',t=>{
+ const {data,target}=fixture(t),a=target('123','group'),b=target('456')
+ data.ingest({target:a.handle,sender:'123',externalId:'g',text:'SECRET_GROUP_TEXT'})
+ const view=data.open(a.handle);data.recordFocus(a.handle);data.markRead(view.id,data.read(view.id).map(r=>r.id))
+ assert.equal(data.navigation()[0].read_count,1)
+ assert.equal(JSON.stringify(data.navigation()).includes('SECRET_GROUP_TEXT'),false)
+ data.open(b.handle);assert.equal(data.navigation()[0].handle,a.handle)
+ data.approve(a.handle,false);assert.deepEqual(data.navigation(),[])
+})

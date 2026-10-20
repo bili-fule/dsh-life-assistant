@@ -79,7 +79,9 @@ it('keeps QQ in its own real native agent and denies outbound actions during mem
   social.store.set('yoyo_settings',{observeOnly:false,dailySteps:30})
   const target=social.data.discover({platform:'qq',account:'10001',kind:'private',peer:'22222'})
   social.data.approve(target.handle,true);const message=social.data.ingest({target:target.handle,sender:'22222',externalId:'a',text:'hello friend',receivedAt:Date.now()-300000})
-  const adapter=new MockAdapter([toolCallResponse('read','yoyo_read',{}),toolCallResponse('send','yoyo_send',{text:'hello back'}),toolCallResponse('sleep','yoyo_sleep',{until:null,reason:'等消息'}),toolCallResponse('blocked-send','yoyo_send',{text:'MUST_NOT_SEND'}),toolCallResponse('memory','yoyo_memory',{kind:'episodes',body:'打过招呼',sources:[{id:message.id,quote:'hello friend'}],confidence:'observed'}),textResponse('已完成后台整理，无对外动作。')])
+  const group=social.data.discover({platform:'qq',account:'10001',kind:'group',peer:'33333',label:'test group'});social.data.approve(group.handle,true)
+  social.data.ingest({target:group.handle,sender:'44444',externalId:'g',text:'GROUP_CONTENT_CANARY_723'})
+  const adapter=new MockAdapter([toolCallResponse('read','yoyo_read',{}),toolCallResponse('send','yoyo_send',{text:'hello back'}),toolCallResponse('sleep','yoyo_sleep',{until:null,reason:'等消息'}),toolCallResponse('blocked-send','yoyo_send',{text:'MUST_NOT_SEND'}),toolCallResponse('memory','yoyo_memory',{kind:'episodes',body:'打过招呼',sources:[{id:message.id,quote:'hello friend'}],confidence:'observed'}),textResponse('已完成后台整理，无对外动作。'),toolCallResponse('list-group','yoyo_inbox',{}),toolCallResponse('open-group','yoyo_open',{target:group.handle}),toolCallResponse('read-group','yoyo_read',{}),toolCallResponse('sleep-group','yoyo_sleep',{until:null,reason:'group read'}),toolCallResponse('read-dm-again','yoyo_read',{}),toolCallResponse('sleep-dm','yoyo_sleep',{until:null,reason:'done'})])
   ctx.llm.registerAdapter(['mock'],adapter);social.store.set('yoyo_next_focus',target.handle)
   await social.tick();social.memoryMaintenance.config.idleMs=0;await social.tick()
   expect(social.sessionId).not.toBe(privateAgent.id);expect(JSON.stringify(adapter.requests)).not.toContain('PRIVATE_OWNER_CANARY_a7d0')
@@ -87,6 +89,15 @@ it('keeps QQ in its own real native agent and denies outbound actions during mem
   expect(social.data.snapshot().outbox).toHaveLength(1)
   expect(social.data.recall(social.activeView.id)).toMatchObject([{body:'打过招呼'}])
   expect(adapter.requests.at(-1).toolHistory.tools.map(t=>t.name)).not.toContain('yoyo_send')
+  social.store.set('yoyo_next_focus','overview');await social.tick();await social.tick()
+  expect(social.activeView.focus).toBe(group.handle)
+  expect(social.data.navigation().find(n=>n.handle===group.handle).read_count).toBe(1)
+  expect(JSON.stringify(adapter.requests.at(-1))).toContain('GROUP_CONTENT_CANARY_723')
+  social.store.set('yoyo_next_focus',target.handle);await social.tick()
+  expect(social.activeView.focus).toBe(target.handle)
+  expect(JSON.stringify(adapter.requests.at(-1))).not.toContain('GROUP_CONTENT_CANARY_723')
+  expect(social.state().navigation.some(n=>n.handle===group.handle&&n.read_count===1)).toBe(true)
+
  }finally{await ctx.fiber.dispose();social?.stop();store?.close();rmSync(root,{recursive:true,force:true})}
 })
 
