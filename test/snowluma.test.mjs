@@ -45,3 +45,14 @@ test('QQ image and file delivery use bounded bytes and fixed current-window dest
  assert.ok(calls.at(-1).url.endsWith('upload_private_file'))
  const count=calls.length;await assert.rejects(()=>qq.sendAsset(target,content,Buffer.from('changed')),/校验/);assert.equal(calls.length,count)
 })
+
+
+test('directory access authorizes verified directory entries but preserves explicit revocations',async()=>{
+ const qq=new SnowLuma({...config,fetchImpl:async(url)=>response(url.endsWith('get_login_info')?{user_id:10001}:url.endsWith('get_group_list')?[{group_id:20001,group_name:'group'}]:[{user_id:30001,nickname:'friend'}])})
+ const entries=new Map(),approved=[]
+ const social={store:{get:()=>true},discover(entry){const handle=String(entry.peer);if(!entries.has(handle))entries.set(handle,{handle,approved:false,version:1});return entries.get(handle)},approve(handle){approved.push(handle);entries.set(handle,{handle,approved:true,version:2})}}
+ entries.set('20001',{handle:'20001',approved:false,version:3})
+ assert.equal((await qq.discoverWindows(social)).approvedAutomatically,true)
+ assert.deepEqual(approved,['30001'])
+ await qq.discoverWindows(social);assert.deepEqual(approved,['30001'])
+})

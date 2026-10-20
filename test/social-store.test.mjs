@@ -190,3 +190,17 @@ test('verified procedural memories require real tool receipts and inherit their 
  assert.throws(()=>data.remember(bv.id,proven),/逐字证据/)
  assert.throws(()=>data.remember(av.id,{...proven,sources:[{receipt:'invented',quote:'passed'}]}),/逐字证据/)
 })
+
+
+test('muted windows retain unread and mentions but cannot trigger attention, including after unmute',t=>{
+ const {data,target}=fixture(t),a=target('123','group'),now=Date.now()
+ data.setMuted(a.handle,true)
+ data.ingest({target:a.handle,sender:'456',externalId:'muted',text:'kept',mentioned:true,receivedAt:now-10000})
+ assert.deepEqual(data.attention(now),[])
+ const item=data.inbox().find(t=>t.handle===a.handle)
+ assert.equal(item.muted,1);assert.equal(item.unread,1);assert.equal(item.mentioned,1)
+ assert.equal(data.read(data.open(a.handle).id)[0].text,'kept')
+ data.setMuted(a.handle,false);assert.deepEqual(data.attention(now),[])
+ data.ingest({target:a.handle,sender:'456',externalId:'new',text:'wake',receivedAt:now})
+ assert.equal(data.attention(now+5000)[0].count,1)
+})

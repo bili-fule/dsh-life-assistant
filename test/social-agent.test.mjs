@@ -57,6 +57,9 @@ test('native browser outcomes enter scoped evidence without image bytes or fabri
 test('opening another window concludes a native turn and defers its request view',async t=>{
   const {agent,store,tools,target,exec,prompts}=fixture(t),a=target('123'),b=target('456')
   agent.activeView=agent.data.open(a.handle)
+  await assert.rejects(()=>tools.get('yoyo_open').execute({target:b.handle},exec),/yoyo_inbox/)
+  const list=await tools.get('yoyo_inbox').execute({},exec)
+  assert.equal(list.windows.length,2)
   await tools.get('yoyo_open').execute({target:b.handle},exec)
   assert.equal(store.get('yoyo_next_focus'),b.handle)
   assert.equal(agent.activeView.focus,a.handle)
@@ -98,11 +101,11 @@ test('already alerted unread messages do not repeatedly wake the social agent',t
  const {agent,store,target}=fixture(t),a=target('123'),now=Date.now()
  store.set('yoyo_started',true);store.set('yoyo_settings',{dailySteps:20})
  agent.data.ingest({target:a.handle,sender:'123',externalId:'first',text:'hello',receivedAt:now-300000})
- assert.equal(agent.choose(now),a.handle)
+ assert.equal(agent.choose(now),'overview')
  agent.data.acknowledgeAttention(agent.data.attention(now+300000,5000))
  assert.equal(agent.choose(now+300000),null)
  agent.data.ingest({target:a.handle,sender:'123',externalId:'second',text:'new message',receivedAt:now})
- assert.equal(agent.choose(now+300000),a.handle)
+ assert.equal(agent.choose(now+300000),'overview')
 })
 
 
@@ -123,7 +126,7 @@ test('new private messages wake a sleeping agent after the five-second batch win
  store.set('yoyo_started',true);store.set('yoyo_last_wake',now);store.set('yoyo_settings',{dailySteps:100})
  agent.data.ingest({target:a.handle,sender:'123',externalId:'wake',text:'在吗',receivedAt:now})
  assert.equal(agent.choose(now+4999),null)
- assert.equal(agent.choose(now+5000),a.handle)
+ assert.equal(agent.choose(now+5000),'overview')
  agent.data.acknowledgeAttention(agent.data.attention(now+300000,5000))
  assert.equal(agent.choose(now+10000),null)
 })

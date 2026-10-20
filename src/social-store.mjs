@@ -44,6 +44,7 @@ export class SocialStore {
     if(!this.db.prepare('PRAGMA table_info(yoyo_outbox)').all().some(c=>c.name==='content'))this.db.exec('ALTER TABLE yoyo_outbox ADD COLUMN content TEXT')
     const jobColumns=this.db.prepare('PRAGMA table_info(yoyo_jobs)').all().map(c=>c.name)
     for(const [name,type] of [['view_id','TEXT'],['state',"TEXT NOT NULL DEFAULT 'running'"],['notified','INTEGER NOT NULL DEFAULT 0'],['next_poll','INTEGER NOT NULL DEFAULT 0']])if(!jobColumns.includes(name))this.db.exec('ALTER TABLE yoyo_jobs ADD COLUMN '+name+' '+type)
+    if(!this.db.prepare('PRAGMA table_info(yoyo_targets)').all().some(c=>c.name==='muted'))this.db.exec('ALTER TABLE yoyo_targets ADD COLUMN muted INTEGER NOT NULL DEFAULT 0')
     // A lost response can mean an actual sent message. Never blindly resend it.
     this.db.prepare("UPDATE yoyo_outbox SET state='uncertain',error='进程重启前未取得确定回执' WHERE state='sending'").run()
   }
@@ -73,7 +74,16 @@ export class SocialStore {
     return {inserted:!!result.changes,id:result.changes?Number(result.lastInsertRowid):this.db.prepare('SELECT id FROM yoyo_events WHERE external_key=?').get(key).id}
   }
   inbox() {
-    return this.db.prepare(`SELECT t.handle,t.platform,t.kind,t.label,count(e.id) unread,max(e.mentioned) mentioned,min(e.received_at) oldest,max(e.id) latest FROM yoyo_targets t LEFT JOIN yoyo_events e ON e.target=t.handle AND e.read_at IS NULL WHERE t.approved=1 GROUP BY t.handle ORDER BY mentioned DESC,oldest LIMIT 100`).all()
+    return this.db.prepare(`SELECT t.handle,t.platform,t.kind,t.label,t.muted,count(e.id) unread,max(e.mentioned) mentioned,min(e.received_at) oldest,max(e.id) latest FROM yoyo_targets t LEFT JOIN yoyo_events e ON e.target=t.handle AND e.read_at IS NULL WHERE t.approved=1 GROUP BY t.handle ORDER BY mentioned DESC,oldest LIMIT 100`).all()
+  }
+  setMuted(handle,muted) {
+    this.target(handle,{approved:true})
+    if(typeof muted!=='boolean')throw Error('Invalid mute state')
+    this.db.prepare('UPDATE yoyo_targets SET muted=? WHERE handle=?').run(muted?1:0,handle)
+    const latest=this.db.prepare('SELECT max(id) id FROM yoyo_events WHERE target=?').get(handle).id
+    if(latest)this.acknowledgeAttention([{handle,throughId:latest}])
+    this.store.audit('yoyo.attention_mute',{target:handle,muted})
+    return {target:handle,muted,scope:'agent_attention',retained:true}
   }
   open(handle) {
     const t=this.target(handle,{approved:true})
@@ -88,7 +98,7 @@ export class SocialStore {
   }
   attention(now=Date.now(),quietMs=5000) {
     const rows=[]
-    for(const t of this.db.prepare('SELECT * FROM yoyo_targets WHERE approved=1').all()){
+    for(const t of this.db.prepare('SELECT * FROM yoyo_targets WHERE approved=1 AND muted=0').all()){
       const cursor=this.db.prepare('SELECT cursor FROM yoyo_attention WHERE target=?').get(t.handle)?.cursor??0
       const first=this.db.prepare("SELECT id,received_at FROM yoyo_events WHERE target=? AND id>? AND kind='message' AND read_at IS NULL ORDER BY id LIMIT 1").get(t.handle,cursor)
       if(!first)continue

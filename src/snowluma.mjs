@@ -75,9 +75,11 @@ export class SnowLuma {
     await this.health(signal)
     const groups=await this.call('get_group_list',{},signal),friends=await this.call('get_friend_list',{},signal)
     if(!Array.isArray(groups)||!Array.isArray(friends)||groups.length+friends.length>10000)throw Error('QQ 通讯录格式或数量无效')
-    for(const g of groups)social.discover({platform:'qq',account:this.account,kind:'group',peer:numberId(g.group_id),label:String(g.group_name??'')})
-    for(const f of friends)social.discover({platform:'qq',account:this.account,kind:'private',peer:numberId(f.user_id),label:String(f.remark||f.nickname||'')})
-    return {groups:groups.length,friends:friends.length,approvedAutomatically:false}
+    const directoryAccess=social.store.get('qq_directory_access',false)
+    const discover=(entry)=>{const t=social.discover(entry);if(directoryAccess&&!t.approved&&t.version===1)social.approve(t.handle,true)}
+    for(const g of groups)discover({platform:'qq',account:this.account,kind:'group',peer:numberId(g.group_id),label:String(g.group_name??'')})
+    for(const f of friends)discover({platform:'qq',account:this.account,kind:'private',peer:numberId(f.user_id),label:String(f.remark||f.nickname||'')})
+    return {groups:groups.length,friends:friends.length,approvedAutomatically:directoryAccess}
   }
   async sendAsset(target,content,bytes,signal,authorize=()=>{}) {
     if(target.platform!=='qq'||target.account!==this.account||!Buffer.isBuffer(bytes)||bytes.length!==content.bytes||bytes.length>8*1024*1024||createHash('sha256').update(bytes).digest('hex')!==content.sha256)throw Error('QQ 附件或发件账号校验失败')
