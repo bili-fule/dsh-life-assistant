@@ -29,6 +29,7 @@ export class SocialStore {
       CREATE TABLE IF NOT EXISTS yoyo_memories(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,sources TEXT NOT NULL,confidence TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER,active INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS yoyo_retirements(memory_id INTEGER PRIMARY KEY,through_id INTEGER NOT NULL,forgotten_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_outbox(id INTEGER PRIMARY KEY,run_key TEXT NOT NULL UNIQUE,target TEXT NOT NULL REFERENCES yoyo_targets(handle),authorization_version INTEGER NOT NULL,view_id TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,remote_id TEXT,error TEXT,sent_at INTEGER);
+      CREATE TABLE IF NOT EXISTS yoyo_attention_policies(target TEXT PRIMARY KEY,body TEXT NOT NULL DEFAULT '{}',last_at INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS yoyo_attention(target TEXT PRIMARY KEY,cursor INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS yoyo_usage(day TEXT PRIMARY KEY,steps INTEGER NOT NULL DEFAULT 0,tokens INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS yoyo_jobs(id TEXT PRIMARY KEY,run_key TEXT NOT NULL UNIQUE,scopes TEXT NOT NULL,created_at INTEGER NOT NULL);
@@ -74,7 +75,7 @@ export class SocialStore {
     return {inserted:!!result.changes,id:result.changes?Number(result.lastInsertRowid):this.db.prepare('SELECT id FROM yoyo_events WHERE external_key=?').get(key).id}
   }
   inbox() {
-    return this.db.prepare(`SELECT t.handle,t.platform,t.kind,t.label,t.muted,count(e.id) unread,max(e.mentioned) mentioned,min(e.received_at) oldest,max(e.id) latest FROM yoyo_targets t LEFT JOIN yoyo_events e ON e.target=t.handle AND e.read_at IS NULL WHERE t.approved=1 GROUP BY t.handle ORDER BY mentioned DESC,oldest LIMIT 100`).all()
+    return this.db.prepare(`SELECT t.handle,t.platform,t.kind,t.label,t.muted,count(e.id) unread,max(e.mentioned) mentioned,min(e.received_at) oldest,max(e.id) latest FROM yoyo_targets t LEFT JOIN yoyo_events e ON e.target=t.handle AND e.read_at IS NULL WHERE t.approved=1 GROUP BY t.handle ORDER BY mentioned DESC,oldest LIMIT 100`).all().map(t=>({...t,attentionPolicy:t.kind==='group'?this.attentionPolicy(t.handle):null}))
   }
   setMuted(handle,muted) {
     this.target(handle,{approved:true})
@@ -96,18 +97,53 @@ export class SocialStore {
     this.db.prepare('INSERT INTO yoyo_views VALUES(?,?,?,?,?)').run(view.id,null,JSON.stringify(view.scopes),null,view.createdAt)
     return view
   }
+  attentionPolicy(handle,now=Date.now()) {
+    const target=this.target(handle,{approved:true})
+    const row=this.db.prepare('SELECT body,last_at FROM yoyo_attention_policies WHERE target=?').get(handle)
+    let p=row?JSON.parse(row.body):{}
+    if(p.mode==='realtime'&&p.until<=now)p={}
+    const recent=this.db.prepare("SELECT count(*) n FROM yoyo_events WHERE target=? AND kind='message' AND received_at>? AND received_at<=?").get(handle,now-300000,now).n
+    // A noisy group requires roughly thirty seconds' traffic, with a useful
+    // floor and ceiling. Explicit settings override the adaptive defaults.
+    const mode=p.mode??'auto',realtime=mode==='realtime'
+    return {mode,until:realtime?p.until:null,minMessages:realtime?1:(p.minMessages??Math.min(50,Math.max(3,Math.ceil(recent/10)))),maxWaitMs:realtime?5000:(p.maxWaitMs??120000),minIntervalMs:realtime?0:(p.minIntervalMs??60000),mentionBypass:p.mentionBypass??true,recentMessages:recent,lastNotifiedAt:row?.last_at??0}
+  }
+  setAttentionPolicy(handle,{mode='auto',durationMs=600000,minMessages,maxWaitMs,minIntervalMs,mentionBypass}={}) {
+    if(this.target(handle,{approved:true}).kind!=='group')throw Error('Attention modes apply to groups only')
+    if(!['auto','realtime','custom'].includes(mode))throw Error('Invalid attention mode')
+    for(const [value,min,max] of [[durationMs,30000,3600000],[minMessages,1,1000],[maxWaitMs,5000,86400000],[minIntervalMs,0,86400000]])if(value!==undefined&&(!Number.isSafeInteger(value)||value<min||value>max))throw Error('Invalid attention threshold')
+    if(mentionBypass!==undefined&&typeof mentionBypass!=='boolean')throw Error('Invalid mention policy')
+    const body=mode==='realtime'?{mode,until:Date.now()+durationMs,mentionBypass}:mode==='auto'?{mode,mentionBypass}:{mode,minMessages,maxWaitMs,minIntervalMs,mentionBypass}
+    this.db.prepare('INSERT INTO yoyo_attention_policies(target,body) VALUES(?,?) ON CONFLICT(target) DO UPDATE SET body=excluded.body').run(handle,JSON.stringify(body))
+    this.store.audit('yoyo.attention_policy',{target:handle,...body})
+    return this.attentionPolicy(handle)
+  }
   attention(now=Date.now(),quietMs=5000) {
     const rows=[]
     for(const t of this.db.prepare('SELECT * FROM yoyo_targets WHERE approved=1 AND muted=0').all()){
       const cursor=this.db.prepare('SELECT cursor FROM yoyo_attention WHERE target=?').get(t.handle)?.cursor??0
       const first=this.db.prepare("SELECT id,received_at FROM yoyo_events WHERE target=? AND id>? AND kind='message' AND read_at IS NULL ORDER BY id LIMIT 1").get(t.handle,cursor)
       if(!first)continue
-      const readyAt=first.received_at+quietMs,batch=this.db.prepare("SELECT max(id) through_id,count(*) count,max(mentioned) mentioned FROM yoyo_events WHERE target=? AND id>? AND kind='message' AND read_at IS NULL AND received_at<=?").get(t.handle,cursor,readyAt)
-      rows.push({handle:t.handle,platform:t.platform,kind:t.kind,label:t.label,readyAt,ready:now>=readyAt,throughId:batch.through_id,count:batch.count,mentioned:!!batch.mentioned})
+      let readyAt=first.received_at+quietMs
+      const group=t.kind==='group',policy=group?this.attentionPolicy(t.handle,now):null
+      const batch=this.db.prepare("SELECT max(id) through_id,count(*) count,max(mentioned) mentioned FROM yoyo_events WHERE target=? AND id>? AND kind='message' AND read_at IS NULL AND received_at<=?").get(t.handle,cursor,group?Math.max(first.received_at,now):readyAt)
+      let eligible=true,reason='batch'
+      if(policy){
+        const mention=policy.mentionBypass&&!!batch.mentioned
+        eligible=mention||batch.count>=policy.minMessages||now>=first.received_at+policy.maxWaitMs
+        reason=mention?'mention':batch.count>=policy.minMessages?'volume':'max_wait'
+        readyAt=Math.max(readyAt,policy.lastNotifiedAt+policy.minIntervalMs)
+      }
+      rows.push({handle:t.handle,platform:t.platform,kind:t.kind,label:t.label,readyAt,ready:now>=readyAt&&eligible,throughId:batch.through_id,count:batch.count,mentioned:!!batch.mentioned,reason,...(policy?{policy}:{})})
     }
     return rows
   }
-  acknowledgeAttention(batches){for(const b of batches)this.db.prepare('INSERT INTO yoyo_attention VALUES(?,?) ON CONFLICT(target) DO UPDATE SET cursor=max(cursor,excluded.cursor)').run(b.handle,b.throughId)}
+  acknowledgeAttention(batches,now=Date.now()){
+    for(const b of batches){
+      this.db.prepare('INSERT INTO yoyo_attention VALUES(?,?) ON CONFLICT(target) DO UPDATE SET cursor=max(cursor,excluded.cursor)').run(b.handle,b.throughId)
+      this.db.prepare('INSERT INTO yoyo_attention_policies(target,last_at) VALUES(?,?) ON CONFLICT(target) DO UPDATE SET last_at=max(last_at,excluded.last_at)').run(b.handle,now)
+    }
+  }
   planningView() {
     const scopes=[PUBLIC_SCOPE,...this.db.prepare('SELECT scope FROM yoyo_targets WHERE approved=1 ORDER BY handle').all().map(t=>t.scope)]
     const view={id:randomUUID(),focus:null,scopes,authorizationVersion:null,createdAt:Date.now()}

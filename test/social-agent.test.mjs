@@ -226,3 +226,16 @@ test('native step boundary observes batched changes without switching focus or r
  assert.equal(agent.choose(now),null)
  assert.equal(agent.data.inbox()[0].unread,1)
 })
+
+
+test('realtime group followup wakes at the batch boundary rather than ordinary group cooldown',t=>{
+ const {agent,store}=fixture(t),now=Date.now()
+ const a=agent.data.discover({platform:'qq',account:'1000',kind:'group',peer:'888'})
+ agent.data.approve(a.handle,true);agent.activeView=agent.data.publicView()
+ agent.data.saveActivity(agent.activeView.id,{state:'sleeping',description:'wait for reply',wakeAt:null})
+ store.set('yoyo_started',true);store.set('yoyo_last_wake',now)
+ agent.data.setAttentionPolicy(a.handle,{mode:'realtime'})
+ agent.data.ingest({target:a.handle,sender:'123',externalId:'reply',text:'hi',receivedAt:now})
+ assert.equal(agent.choose(now+4999),null)
+ assert.equal(agent.choose(now+5000),'overview');assert.equal(agent.wakeEvent.kind,'active_conversation')
+})
