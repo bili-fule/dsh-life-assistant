@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch existing renewed TLS certificate for the ledger origin
+
+[Path]
+PathChanged=/etc/hysteria/server.crt
+Unit=yoyo-ledger-cert-refresh.service
+
+[Install]
+WantedBy=multi-user.target

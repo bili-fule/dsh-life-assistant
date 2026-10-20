@@ -40,15 +40,15 @@ test('manual ledger entries require direct owner evidence and repeat imports can
  assert.deepEqual(ledger.summary(),[])
  assert.equal(store.db.prepare('SELECT count(*) n FROM ledger_changes').get().n,3)
 })
-test('public projection includes only fixed monthly ranges, never detailed values or fields',t=>{
+test('public projection includes exact monthly totals, never transaction details',t=>{
  const {ledger,store}=fixture(t);ledger.insert(entry(),'one',{})
  assert.deepEqual(ledger.publicSummary(),{published:false,months:[]})
  store.set('ledger_public_enabled',true)
  const result=ledger.publicSummary(),serialized=JSON.stringify(result)
- for(const secret of ['PRIVATE_','1230','counterparty','account','description','source','count'])assert.equal(serialized.includes(secret),false)
- assert.deepEqual(result.months[0].expense,{lower:0,upper:100000})
+ for(const secret of ['PRIVATE_','counterparty','account','description','source','count'])assert.equal(serialized.includes(secret),false)
+ assert.equal(result.precision,'exact');assert.equal(result.months[0].expense,1230)
  ledger.insert(entry({kind:'refund',amount:'1012.30'}),'refund',{})
- assert.deepEqual(ledger.publicSummary().months[0].expense,{lower:-100000,upper:0})
+ assert.equal(ledger.publicSummary().months[0].expense,-100000)
 })
 test('login sessions are hashed, expire and are revoked by password reset',t=>{
  const {ledger,store}=fixture(t);ledger.setPassword('a-good-password-123')

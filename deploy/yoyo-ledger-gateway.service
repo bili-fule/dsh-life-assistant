@@ -1,0 +1,28 @@
+[Unit]
+Description=Private ledger website HTTPS API gateway
+After=network-online.target dsh-life-assistant.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ledger-web
+Group=ledger-web
+ExecStart=/opt/dsh-life-runtime/node/bin/node /opt/dsh-life-assistant/deploy/ledger-gateway.mjs --serve
+LoadCredential=server.crt:/etc/hysteria/server.crt
+LoadCredential=server.key:/etc/hysteria/server.key
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+InaccessiblePaths=/var/lib/dsh-life
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+MemoryMax=96M
+TasksMax=32
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=Reload ledger TLS credentials after certificate renewal
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl try-restart yoyo-ledger-gateway.service

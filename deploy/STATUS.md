@@ -64,3 +64,5 @@
 ## 0.10.0 微信私人账本
 
 新增 ledger_entries / ledger_changes / ledger_imports / ledger_sessions 表、4 个私人原生工具、微信 XLSX 标准库解析及原始汇总对账。独立页面 /ledger/，服务端密码登录后明细，未登录默认关闭；开放时仅千元区间。网站域名确认前不对公网开放真实数据。修正独立 QQ 模式下微信状态误取 QQ 状态的分支，增加隔离回归测试。
+
+2026-10-20：用户确认 www.xmfu.cn，公开准确月度收支汇总，登录看明细。增加独立 HTTPS 白名单网关、systemd 凭据和证书续期重载，与 EdgeOne 站点同源接口对接。

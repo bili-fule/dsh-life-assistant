@@ -29,7 +29,7 @@ node deploy/import-wechat-bill.mjs /private/assistant.sqlite /private/wechat-bil
 
 ## 页面与登录
 
-`/ledger/` 提供独立展示页。未登录只访问 `/api/ledger/public`，默认不公开；运营者启用后仅返回最近六个有记录月份的收入和净支出千元区间，不返回准确数、笔数、分类、交易对象或任何原文。公开接口不接受缩小时间、商户等查询条件，避免用差分查询拼出明细。
+`/ledger/` 提供独立展示页。未登录只访问 `/api/ledger/public`，默认不公开；运营者启用后仅返回最近六个有记录月份的收入和净支出准确汇总，不返回笔数、分类、交易对象或任何原文。公开接口不接受缩小时间、商户等查询条件，避免用差分查询拼出明细。
 
 登录后 `/api/ledger/details` 返回准确月汇总及明细，支持月份筛选与游标翻页。退出会撤销服务器会话并清空页面明细。认证为独立账本密码（scrypt 存储）及随机会话；数据库只存会话摘要。Cookie 使用 HttpOnly、Secure、SameSite=Strict，七天失效。修改密码使旧会话全部失效；登录限速、JSON 写请求和 Origin 校验在服务端执行。生产网站必须使用 HTTPS，不能只在前端隐藏明细。
 
@@ -39,4 +39,10 @@ node deploy/import-wechat-bill.mjs /private/assistant.sqlite /private/wechat-bil
 
 可以把 `/ledger/`、`/ledger.js`、`/ledger.css` 和 `/api/ledger/` 通过同源反向代理连接到现有网站，后端保持监听 127.0.0.1:3180。代理保留 Host，禁用这些 API 的缓存，公网只暴露所需路径，不能把助手的 `/api/state`、附件下载、Shell 等管理面一起映射出去。原站登录若要复用，需做经过验证的服务端身份衔接，不能接受前端自报“已登录”。
 
-网站域名和公开精度确认前，生产公开开关保持关闭。页面、账本及登录可先在本地隧道使用；账单、数据库、密码和带真实数据的截图不得提交公开仓库。
+公开粒度由用户确认；当前配置为准确月度汇总，对接 www.xmfu.cn。页面、账本及登录可先在本地隧道使用；账单、数据库、密码和带真实数据的截图不得提交公开仓库。
+
+## www.xmfu.cn 接入
+
+Vue 页面 /ledger 使用同源 /api/ledger/*，EdgeOne 的 edge-functions/api/ledger/[[path]].js 仅转发五个固定路由到独立 HTTPS 源站。源站 yoyo-ledger-gateway.service 使用 ledger-web 独立账号，通过 systemd LoadCredential 读取既有 IP 证书，不能读取助手数据目录；仅转发账本 Cookie，不转发管理 Authorization 或网站其他 Cookie。明细仍由私人服务验证会话。公网不提供助手管理接口。
+
+既有证书由原有 ACME cron 续期；yoyo-ledger-cert.path 监控实际安装的 fullchain 更新，重启网关载入新证书，不改动其他服务的续期配置。

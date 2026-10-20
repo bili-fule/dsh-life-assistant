@@ -87,8 +87,7 @@ export class Ledger{
   }
   publicSummary(){
     if(!this.store.get('ledger_public_enabled',false))return {published:false,months:[]}
-    const band=n=>({lower:Math.floor(n/100000)*100000,upper:(Math.floor(n/100000)+1)*100000})
-    return {published:true,currency:'CNY',unit:'cents',precision:'1000-yuan-bands',months:this.summary().slice(-6).map(r=>({month:r.month,income:band(r.income),expense:band(r.netExpense)}))}
+    return {published:true,currency:'CNY',unit:'cents',precision:'exact',months:this.summary().slice(-6).map(r=>({month:r.month,income:r.income,expense:r.netExpense,balance:r.balance}))}
   }
   setPassword(password){
     if(typeof password!=='string'||password.length<12||password.length>200)throw Error('登录密码须为12至200字符')
