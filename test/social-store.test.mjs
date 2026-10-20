@@ -242,3 +242,18 @@ test('temporary real-time attention expires, mentions obey policy and mute alway
  assert.throws(()=>data.setAttentionPolicy(a.handle,{mode:'realtime',durationMs:3600001}),/threshold/)
  assert.throws(()=>data.setAttentionPolicy(target('999').handle,{mode:'auto'}),/groups/)
 })
+
+
+test('presented attention survives window switches until read or deliberately dismissed',t=>{
+ const {data,target}=fixture(t),a=target('123'),now=Date.now()
+ data.ingest({target:a.handle,sender:'123',externalId:'notice',text:'hello',receivedAt:now-10000})
+ data.acknowledgeAttention(data.attention(now),now)
+ assert.deepEqual(data.attention(now),[])
+ assert.equal(data.pendingNotices()[0].unread,1)
+ const view=data.open(a.handle);data.markRead(view.id,data.read(view.id).map(x=>x.id))
+ assert.deepEqual(data.pendingNotices(),[])
+ data.ingest({target:a.handle,sender:'123',externalId:'next',text:'hey',receivedAt:now})
+ data.acknowledgeAttention(data.attention(now+5000),now+5000)
+ data.dismissNotice(a.handle);assert.deepEqual(data.pendingNotices(),[])
+ assert.equal(data.inbox()[0].unread,1)
+})

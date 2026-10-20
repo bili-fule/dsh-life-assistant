@@ -29,6 +29,7 @@ export class SocialStore {
       CREATE TABLE IF NOT EXISTS yoyo_memories(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,sources TEXT NOT NULL,confidence TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER,active INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS yoyo_retirements(memory_id INTEGER PRIMARY KEY,through_id INTEGER NOT NULL,forgotten_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_outbox(id INTEGER PRIMARY KEY,run_key TEXT NOT NULL UNIQUE,target TEXT NOT NULL REFERENCES yoyo_targets(handle),authorization_version INTEGER NOT NULL,view_id TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,remote_id TEXT,error TEXT,sent_at INTEGER);
+      CREATE TABLE IF NOT EXISTS yoyo_notices(target TEXT PRIMARY KEY,through_id INTEGER NOT NULL,notified_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_attention_policies(target TEXT PRIMARY KEY,body TEXT NOT NULL DEFAULT '{}',last_at INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS yoyo_attention(target TEXT PRIMARY KEY,cursor INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS yoyo_usage(day TEXT PRIMARY KEY,steps INTEGER NOT NULL DEFAULT 0,tokens INTEGER NOT NULL DEFAULT 0);
@@ -82,7 +83,7 @@ export class SocialStore {
     if(typeof muted!=='boolean')throw Error('Invalid mute state')
     this.db.prepare('UPDATE yoyo_targets SET muted=? WHERE handle=?').run(muted?1:0,handle)
     const latest=this.db.prepare('SELECT max(id) id FROM yoyo_events WHERE target=?').get(handle).id
-    if(latest)this.acknowledgeAttention([{handle,throughId:latest}])
+    if(latest)this.acknowledgeAttention([{handle,throughId:latest}],Date.now(),false)
     this.store.audit('yoyo.attention_mute',{target:handle,muted})
     return {target:handle,muted,scope:'agent_attention',retained:true}
   }
@@ -138,8 +139,13 @@ export class SocialStore {
     }
     return rows
   }
-  acknowledgeAttention(batches,now=Date.now()){
+  pendingNotices() {
+    return this.db.prepare(`SELECT t.handle,t.kind,t.label,count(e.id) unread,max(e.id) latest,n.notified_at FROM yoyo_notices n JOIN yoyo_targets t ON t.handle=n.target JOIN yoyo_events e ON e.target=t.handle AND e.id<=n.through_id AND e.read_at IS NULL AND e.kind='message' WHERE t.approved=1 AND t.muted=0 GROUP BY t.handle`).all()
+  }
+  dismissNotice(handle){this.target(handle,{approved:true});this.db.prepare('DELETE FROM yoyo_notices WHERE target=?').run(handle);return {target:handle,dismissed:true,markedRead:false}}
+  acknowledgeAttention(batches,now=Date.now(),presented=true){
     for(const b of batches){
+      if(presented)this.db.prepare('INSERT INTO yoyo_notices VALUES(?,?,?) ON CONFLICT(target) DO UPDATE SET through_id=max(through_id,excluded.through_id),notified_at=excluded.notified_at').run(b.handle,b.throughId,now)
       this.db.prepare('INSERT INTO yoyo_attention VALUES(?,?) ON CONFLICT(target) DO UPDATE SET cursor=max(cursor,excluded.cursor)').run(b.handle,b.throughId)
       this.db.prepare('INSERT INTO yoyo_attention_policies(target,last_at) VALUES(?,?) ON CONFLICT(target) DO UPDATE SET last_at=max(last_at,excluded.last_at)').run(b.handle,now)
     }
