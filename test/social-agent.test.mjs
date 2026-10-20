@@ -239,3 +239,16 @@ test('realtime group followup wakes at the batch boundary rather than ordinary g
  assert.equal(agent.choose(now+4999),null)
  assert.equal(agent.choose(now+5000),'overview');assert.equal(agent.wakeEvent.kind,'active_conversation')
 })
+
+test('independent debug completion uses its backend and wakes only the original authorized view',async t=>{
+ const {agent,target,store}=fixture(t),a=target('debug-owner'),b=target('other-chat'),view=agent.data.open(a.handle),id='d'.repeat(64)
+ agent.data.db.prepare('INSERT INTO yoyo_jobs(id,run_key,scopes,created_at,view_id,backend) VALUES(?,?,?,?,?,?)').run(id,'debug-run',JSON.stringify(view.scopes),Date.now(),view.id,'debug')
+ let calls=0;agent.debugHelper={async call(path,args){calls++;assert.equal(path,'/status');assert.equal(args.id,id);return {state:'done',report:'PRIVATE_DEBUG_RESULT'}}}
+ agent.executor={async call(){throw Error('must not send debug tasks to executor')}}
+ agent.activeView=agent.data.open(b.handle);await agent.pollJobs()
+ assert.equal(calls,1);assert.equal(agent.data.db.prepare('SELECT state FROM yoyo_jobs WHERE id=?').get(id).state,'done')
+ assert.equal(JSON.stringify(agent.state()).includes('PRIVATE_DEBUG_RESULT'),false)
+ assert.equal(agent.choose(Date.now()),a.handle)
+ agent.data.db.prepare('UPDATE yoyo_jobs SET notified=1 WHERE id=?').run(id)
+ assert.equal(agent.choose(Date.now()),'overview')
+})

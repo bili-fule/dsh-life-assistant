@@ -13,11 +13,13 @@
 
 ## 原生 Agent 工具
 
-`life_ledger_import` 从工作目录导入微信支付 XLSX；`life_ledger_query` 查询数据库明细和月度汇总；`life_ledger_record` 保存带绑定微信用户直接原文依据的收支；`life_ledger_amend` 按编号、revision 和原因更正或作废。后台记忆整理不能写账，QQ Agent 无权调用这些工具。
+`life_ledger_import` 从工作目录导入微信支付 XLSX 或支付宝交易明细 CSV；`life_ledger_query` 查询数据库明细和月度汇总；`life_ledger_record` 保存带绑定微信用户直接原文依据的收支；`life_ledger_amend` 按编号、revision 和原因更正或作废。后台记忆整理不能写账，QQ Agent 无权调用这些工具。
 
 手动记录必须明确已发生，不将待收款、借款计划或模糊数字猜成收入。DSH 界面可查询及导入现有附件；手动新增工具当前要求已落库的微信直接原文 sourceId/quote。
 
-XLSX 导入使用 Python 标准库，不执行公式或宏，限制文件及解压规模。原文件 SHA-256 防整文件重导，原交易号防交叠账期重复；同号金额、日期或方向冲突拒绝覆盖。每次将原方向的笔数和金额与微信文件顶部的收入、支出、中性交易汇总核对，不一致整批回滚。退款对账时仍归原账单收入方向，展示时单列。
+账单导入使用 Python 标准库，不执行公式或宏，限制文件及解压规模。原文件 SHA-256 防整文件重导，原交易号防交叠账期重复；同号金额、日期或方向冲突拒绝覆盖。微信账单每次将原方向的笔数和金额与文件顶部的收入、支出、中性交易汇总核对，不一致整批回滚；退款对账时仍归原账单收入方向，展示时单列。
+
+支付宝 CSV 按 UTF-8 或 GBK 解码，只入账“交易成功”和“退款成功”，账户存取记为中性划转；“交易关闭”“等待发货”“等待对方确认收货”等没有实际资金变化的行不写入账本，但保留在导入回执的未入账清单里，并核对明细总笔数与页头“共 N 笔记录”。支付宝页头汇总包含关闭和等待中的交易，且其提示明确说明明细累加可能与汇总不一致，因此不做金额强对账，以逐笔成功交易为准。页头数字仍写入回执，供人工核对。
 
 运营者可在停止服务并备份后运行：
 
@@ -25,7 +27,7 @@ XLSX 导入使用 Python 标准库，不执行公式或宏，限制文件及解�
 node deploy/import-wechat-bill.mjs /private/assistant.sqlite /private/wechat-bill.xlsx
 ```
 
-重复的微信口述与另一个平台账单目前不会自动模糊合并；需要按编号核对后作废重复条目。交易号不同的两笔相同金额不能当成重复。
+重复的微信口述与另一个平台账单目前不会自动模糊合并；微信和支付宝的交集（例如同一笔银行卡扣款在两个平台都有记录）也需要按交易号核对后作废重复条目。交易号不同的两笔相同金额不能当成重复。
 
 ## 页面与登录
 
@@ -46,3 +48,12 @@ node deploy/import-wechat-bill.mjs /private/assistant.sqlite /private/wechat-bil
 Vue 页面 /ledger 使用同源 /api/ledger/*，EdgeOne 的 edge-functions/api/ledger/[[path]].js 仅转发五个固定路由到独立 HTTPS 源站。源站 yoyo-ledger-gateway.service 使用 ledger-web 独立账号，通过 systemd LoadCredential 读取既有 IP 证书，不能读取助手数据目录；仅转发账本 Cookie，不转发管理 Authorization 或网站其他 Cookie。明细仍由私人服务验证会话。公网不提供助手管理接口。
 
 既有证书由原有 ACME cron 续期；yoyo-ledger-cert.path 监控实际安装的 fullchain 更新，重启网关载入新证书，不改动其他服务的续期配置。
+
+
+## Agent 分类与账单工作流
+
+金额、日期与原交易号是账目事实；分类是带版本、依据和置信度的可更正判断，不影响总金额。微信私人原生 Agent 使用 `life_ledger_files` 发现最近 XLSX/CSV 附件，`life_ledger_import({path,preview:true})` 预览原始汇总和前八行；去掉 preview 正式导入，按交易号去重，微信核对原文件收入、支出、中性交易控制总数与金额，支付宝核对总笔数并报告未入账行，失败整批回滚。目前自动格式解析支持微信支付官方 XLSX 和支付宝交易明细 CSV；PDF、图片和第三方改写的表格仍需先转换核对，不能谎称自动入账。
+
+导入后用 `life_ledger_query({pending:true,limit:100,after:0})` 分页读取待分类明细，工具同时返回 taxonomy、分类统计与待确认数量。`life_ledger_classify({items:[{id,revision,category,confidence,reason,refundOf?}]})` 每批最多100条，原子更新类别和版本并保存审计，不改金额。置信度不足0.8必须待确认。商品说明足以证明餐饮等用途才归类；个人转账不能凭昵称或金额猜生活费/学费。
+
+大类包括购物、餐饮、学费、网站维护、订阅、交通、居住、医疗、娱乐，以及网站收入、生活费、工资、奖助学金和其他收入/支出。退款要核实原支出并关联 refundOf，沿用其类别，合计不得超原支出；不确定仍待确认。账户划转不计收入和消费。公开接口仅提供白名单类别及最近六个月汇总，未识别的自定义类别统一投影为待确认，分类依据、对方、原文、账户与逐笔明细仍需登录。登录界面可查看每条分类依据和置信度。

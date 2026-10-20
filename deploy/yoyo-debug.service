@@ -1,0 +1,22 @@
+[Unit]
+Description=Independent container DSH debug helper and restricted model proxy
+Requires=yoyo-debug-network.service
+After=yoyo-debug-network.service
+[Service]
+User=root
+Group=dsh-life
+RuntimeDirectory=yoyo-debug
+RuntimeDirectoryMode=0750
+ExecStart=/opt/dsh-life-runtime/node/bin/node /opt/dsh-life-assistant/deploy/debug-helper-broker.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/yoyo-debug /var/lib/yoyo-debug
+InaccessiblePaths=/var/lib/dsh-life
+MemoryMax=160M
+Environment=NODE_OPTIONS=--max-old-space-size=96
+[Install]
+WantedBy=multi-user.target

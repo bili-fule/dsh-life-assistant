@@ -1,0 +1,17 @@
+- id: llm-deepseek
+  disabled: true
+- insert:
+    - id: llm-debug-proxy
+      name: '@deepseek-ai/dsh-llm-pi-ai'
+      config:
+        providers:
+          debug-model:
+            displayName: Isolated debug model
+            api: openai-completions
+            apiKeyEnv: YOYO_DEBUG_MODEL_TOKEN
+            baseURL: http://172.31.254.1:3190/v1
+            models:
+              - id: cn:deepseek-v4.1-flash
+                name: cn:deepseek-v4.1-flash
+                contextWindow: 1000000
+                maxTokens: 16000

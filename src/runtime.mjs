@@ -64,6 +64,8 @@ export class Runtime {
     this.deliveryTimer=setInterval(()=>{void this.deliveryTick().catch(e=>this.log('delivery.error',e))},500)
     this.working=this.tick().catch(e=>this.log('worker.error',e)).finally(()=>{this.working=null})
     this.startPolling()
+    // Restore the existing private Agent after restart so its native UI remains usable before the next WeChat message.
+    if(this.config.nativeContext&&this.model.sessionId)void this.model.ensure().catch(e=>this.log('native.restore.error',e))
     console.log(`[life-assistant] ready on ${this.config.host}:${this.config.port}; private data outside plugin source`)
   }
   log(action,error) {this.store.audit(action,{message:String(error?.message??error).slice(0,300)})}
@@ -109,7 +111,7 @@ export class Runtime {
       }
     }
     if(!authenticated)return json(res,{error:'请先登录'},401)
-    if(req.method==='GET'&&path==='/api/ledger/details')return json(res,{currency:'CNY',unit:'cents',months:this.ledger.summary(url.searchParams.get('month')??undefined),...this.ledger.list({month:url.searchParams.get('month')??undefined,after:Number(url.searchParams.get('after')??0),limit:50})})
+    if(req.method==='GET'&&path==='/api/ledger/details')return json(res,{currency:'CNY',unit:'cents',categories:this.ledger.categories(url.searchParams.get('month')??undefined),pending:this.ledger.pending(),months:this.ledger.summary(url.searchParams.get('month')??undefined),...this.ledger.list({month:url.searchParams.get('month')??undefined,after:Number(url.searchParams.get('after')??0),limit:50})})
     return json(res,{error:'没有这个操作'},404)
   }
   async http(req,res) {

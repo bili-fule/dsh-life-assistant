@@ -1,0 +1,11 @@
+[Unit]
+Description=Independent debug DSH network boundary
+Requires=docker.service
+After=docker.service
+Before=yoyo-debug.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/dsh-life-assistant/deploy/debug-helper-network.py
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
