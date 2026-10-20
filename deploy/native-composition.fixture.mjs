@@ -125,3 +125,39 @@ it('persists a self-chosen concern and resumes it once through the native loop w
   expect(social.data.snapshot().outbox).toHaveLength(0)
  }finally{social?.stop();await ctx.fiber.dispose();store?.close();rmSync(root,{recursive:true,force:true})}
 })
+
+
+it('indexes finalized native browser outcomes for verified procedural memory',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'native-browser-evidence-')),ctx=new Context()
+ let store,social
+ try{
+  const base=process.env.YOYO_PLUGIN_ROOT
+  if(!base)throw Error('YOYO_PLUGIN_ROOT required')
+  const {Store}=await import(pathToFileURL(join(base,'src/store.mjs')).href)
+  const {SocialAgent}=await import(pathToFileURL(join(base,'src/social-agent.mjs')).href)
+  const {NativeAgent,nativeOutcome}=await import(pathToFileURL(join(base,'src/native-agent.mjs')).href)
+  for(const plugin of [LlmRuntime,SessionStore,SessionProjectionRegistry,SystemPrompt,ToolRuntime,AgentRegistry,TokenMeter])await ctx.plugin(plugin)
+  await ctx.plugin(AgentLoop,{agents:[]})
+  await ctx.plugin(BasicCompactionEngine,{auto:false})
+  await ctx.plugin(ToolResultPruner)
+  ctx.agentPresets={serviceFor(){return ctx.compaction}}
+  store=new Store(join(root,'data.sqlite'));store.set('owner','private-owner');store.set('yoyo_legacy_labelled',true);store.set('yoyo_settings',{observeOnly:false,dailySteps:30})
+  const native=await ctx.agentLoop.create(SessionId('one-yoyo'),{provider:'mock',model:'mock'})
+  const runtime={store,workspace:root,abort:new AbortController(),model:null}
+  ctx.sessionController={async inspect(){return {events:native.session.snapshotEvents()}},async prompt(request){native.followup(createUserMessage({content:request.content,source:{kind:'user',rpcId:request.requestId}}));return {accepted:true}}}
+  runtime.model={sessionId:native.id,async ensure(){return native},outcome:nativeOutcome,receipt:NativeAgent.prototype.receipt.bind({ctx,store})}
+  social=new SocialAgent(runtime,ctx,{enabled:true})
+  social.config.publicBrowser=true
+  const browserName='mcp__playwright-mcp__browser_snapshot'
+  ctx.tools.register({name:browserName,description:'Test native browser result',parameters:{type:'object',properties:{}},output:{schema:{type:'object',properties:{title:{type:'string'}},required:['title']},render:(_,value)=>[{type:'text',text:'Page Title: '+value.title}]},async execute(){return {title:'Native verified page'}}})
+  const adapter=new MockAdapter([
+   toolCallResponse('native-dom',browserName,{}),
+   toolCallResponse('evidence','yoyo_evidence',{}),
+   ()=>{const proof=social.data.evidence(social.activeView.id)[0];expect(proof.name).toBe(browserName);return toolCallResponse('remember-native','yoyo_memory',{kind:'procedures',body:'原生浏览器实际返回页面标题',sources:[{receipt:proof.receipt,quote:'Native verified page'}]})},
+   toolCallResponse('rest','yoyo_sleep',{until:null,reason:'verified'})])
+  ctx.llm.registerAdapter(['mock'],adapter);store.set('yoyo_next_focus','public')
+  await social.tick()
+  expect(social.data.recall(social.activeView.id)).toMatchObject([{kind:'procedures',body:'原生浏览器实际返回页面标题'}])
+  expect(social.data.evidence(social.activeView.id)).toHaveLength(1)
+ }finally{social?.stop();await ctx.fiber.dispose();store?.close();rmSync(root,{recursive:true,force:true})}
+})

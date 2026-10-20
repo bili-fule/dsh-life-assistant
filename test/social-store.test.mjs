@@ -20,6 +20,15 @@ test('persistent concerns retain intention and cannot cross private windows',t=>
   assert.throws(()=>data.concern(a.id,{title:'empty'}))
 })
 
+test('self-authored activity cannot prove procedural execution and evidence queries remain bounded',t=>{
+ const {data}=fixture(t),v=data.publicView()
+ data.db.prepare('INSERT INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run('self-report','yoyo_activity',JSON.stringify(v.scopes),'I completed a job',Date.now())
+ assert.throws(()=>data.remember(v.id,{kind:'procedures',body:'execution done',sources:[{receipt:'self-report',quote:'completed'}]}),/自述/)
+ data.remember(v.id,{kind:'episodes',body:'我曾自述完成任务，尚未验证',confidence:'self_report',sources:[{receipt:'self-report',quote:'completed'}]})
+ assert.deepEqual(data.evidence(v.id),[])
+ assert.throws(()=>data.evidence(v.id,{limit:21}),/条数/)
+})
+
 test('feedback distinguishes a self report from scoped tool evidence and review consumption preserves newer decisions',t=>{
  const {data,target}=fixture(t),a=data.open(target('123').handle),b=data.open(target('456').handle),now=Date.now()
  const c=data.concern(a.id,{title:'experiment',why:'question',origin:'experience',next:'run',doneWhen:'measured',stopWhen:'no progress',reviewAt:now+1000})

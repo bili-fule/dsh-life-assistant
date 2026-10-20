@@ -1,0 +1,13 @@
+[Unit]
+Description=Yoyo browser public network boundary
+After=docker.service
+Requires=docker.service
+Before=yoyo-browser.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/dsh-life-assistant/deploy/browser-network.py
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target

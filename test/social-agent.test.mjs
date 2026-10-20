@@ -26,6 +26,34 @@ test('social native assembly filters private instructions, contexts and tool sch
   await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name:'shell'},async()=>({})),/未获/)
 })
 
+test('isolated native browser tools are available only in a pure public view and never during memory maintenance',async t=>{
+ const {agent,hooks,target}=fixture(t),a=target('123'),name='mcp__playwright-mcp__browser_navigate'
+ agent.config.publicBrowser=true;agent.activeView=agent.data.publicView()
+ assert.equal(agent.toolsAllowed().has(name),true)
+ assert.equal(await hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name},async()=>42),42)
+ agent.activeView=agent.data.open(a.handle)
+ assert.equal(agent.toolsAllowed().has(name),false)
+ await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name},async()=>{throw Error('must not execute')}),/未获/)
+ agent.activeView=agent.data.planningView();assert.equal(agent.toolsAllowed().has(name),false)
+ agent.activeView=agent.data.publicView();agent.maintenanceJob={after:0,through:10}
+ assert.equal(agent.toolsAllowed().has(name),false)
+})
+
+test('native browser outcomes enter scoped evidence without image bytes or fabricated success',t=>{
+ const {agent,hooks,target}=fixture(t),a=target('123'),name='mcp__playwright-mcp__browser_snapshot'
+ agent.activeView=agent.data.publicView()
+ const exec={agent:{id:'one-agent',session:{snapshotEvents(){return [{type:'turn/start',data:{turn:7}}]}}},callId:'browser-call',name}
+ hooks.get('tools/result')(exec,{isError:false,content:[{type:'text',text:'Page Title: Verified Page\nSecond line'},{type:'image',data:'MUST_NOT_STORE_BASE64'}]})
+ const e=agent.data.evidence(agent.activeView.id)[0]
+ assert.match(e.receipt,/native-browser:one-agent:7:browser-call/)
+ assert.equal(e.text.includes('MUST_NOT_STORE_BASE64'),false)
+ agent.data.remember(agent.activeView.id,{kind:'procedures',body:'页面读取返回实际标题',sources:[{receipt:e.receipt,quote:'Verified Page\nSecond line'}]})
+ agent.activeView=agent.data.open(a.handle)
+ hooks.get('tools/result')({...exec,callId:'private-synthetic'},{isError:true,content:[{type:'text',text:'PRIVATE_ERROR_CANARY'}]})
+ agent.activeView=agent.data.publicView()
+ assert.equal(JSON.stringify(agent.data.evidence(agent.activeView.id)).includes('PRIVATE_ERROR_CANARY'),false)
+})
+
 test('opening another window concludes a native turn and defers its request view',async t=>{
   const {agent,store,tools,target,exec,prompts}=fixture(t),a=target('123'),b=target('456')
   agent.activeView=agent.data.open(a.handle)

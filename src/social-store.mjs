@@ -1,6 +1,16 @@
 import { randomUUID,createHash } from 'node:crypto'
 import { identityPart,targetKey,sourceScopes,mayRead,assertPublish,boundedText,PUBLIC_SCOPE } from './scope.mjs'
 
+const NARRATIVE_TOOLS=new Set(['yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence','yoyo_activity','yoyo_plan','yoyo_self','yoyo_concern','yoyo_feedback','yoyo_learning','yoyo_sleep','yoyo_wait'])
+function evidenceText(row){
+  const raw=row.result_text??row.text
+  if(row.name?.startsWith('mcp__playwright-mcp__'))try{
+    const value=JSON.parse(raw)
+    if(Array.isArray(value.content))return (value.isError?'[native outcome: error]':'[native outcome: success]')+'\n'+value.content.filter(c=>c.type==='text').map(c=>c.text).join('\n\n')
+  }catch{/* Legacy or unstructured tool results keep their original text. */}
+  return raw
+}
+
 // All identity, visibility and delivery authority is host-owned, not message text.
 export class SocialStore {
   constructor(store) {
@@ -221,12 +231,18 @@ export class SocialStore {
     const view=this.view(viewId)
     return this.db.prepare('SELECT id,concern_id,body,created_at FROM yoyo_concern_feedback f WHERE NOT EXISTS(SELECT 1 FROM json_each(f.scopes) s WHERE s.value NOT IN(SELECT value FROM json_each(?))) ORDER BY id DESC LIMIT 20').all(JSON.stringify(view.scopes)).map(r=>({id:r.id,concern:r.concern_id,...JSON.parse(r.body),at:r.created_at}))
   }
+  evidence(viewId,{limit=10}={}) {
+    const view=this.view(viewId)
+    if(!Number.isInteger(limit)||limit<1||limit>20)throw Error('证据条数无效')
+    return this.db.prepare('SELECT run_key,name,result_text,created_at FROM yoyo_tool_sources r WHERE NOT EXISTS(SELECT 1 FROM json_each(r.scopes) s WHERE s.value NOT IN(SELECT value FROM json_each(?))) AND name NOT IN ('+[...NARRATIVE_TOOLS].map(()=>'?').join(',')+') ORDER BY created_at DESC,rowid DESC LIMIT ?').all(JSON.stringify(view.scopes),...NARRATIVE_TOOLS,limit).map(r=>{const text=evidenceText(r);return {receipt:r.run_key,name:r.name,text:text.slice(0,4000),truncated:text.length>4000,at:r.created_at}})
+  }
   remember(viewId,{kind='episodes',body,sources=[],confidence='observed',expiresAt=null}) {
     const view=this.view(viewId);body=boundedText(body,2000)
     if(!['episodes','profile','relations','knowledge','procedures','intention','communication'].includes(kind)||!['observed','hypothesis','self_report'].includes(confidence)||!Array.isArray(sources)||!sources.length||sources.length>10||expiresAt!==null&&(!Number.isSafeInteger(expiresAt)||expiresAt<=Date.now()))throw Error('记忆类型或来源无效')
     for(const s of sources){
       if(!s||typeof s!=='object'||[s.id,s.document,s.receipt].filter(v=>v!==undefined).length!==1||(s.receipt!==undefined?(typeof s.receipt!=='string'||s.receipt.length>500):!Number.isSafeInteger(s.document??s.id)))throw Error('原文来源编号无效')
-      const row=s.receipt!==undefined?this.db.prepare("SELECT result_text text,scopes FROM yoyo_tool_sources WHERE run_key=? AND name NOT IN ('yoyo_memory','yoyo_forget','yoyo_recall')").get(s.receipt):s.document!==undefined?this.db.prepare('SELECT body text,scope FROM yoyo_documents WHERE id=?').get(s.document):this.db.prepare('SELECT text,scope FROM yoyo_events WHERE id=?').get(s.id)
+      const row=s.receipt!==undefined?this.db.prepare('SELECT name,result_text text,scopes FROM yoyo_tool_sources WHERE run_key=?').get(s.receipt):s.document!==undefined?this.db.prepare('SELECT body text,scope FROM yoyo_documents WHERE id=?').get(s.document):this.db.prepare('SELECT text,scope FROM yoyo_events WHERE id=?').get(s.id)
+      if(s.receipt!==undefined&&row){if(NARRATIVE_TOOLS.has(row.name)&&(confidence!=='self_report'||kind==='procedures'))throw Error('自述只能记录为 self_report，不能作为实际执行证据');row.text=evidenceText(row)}
       if(!row||!(row.scopes?JSON.parse(row.scopes).every(s=>mayRead(view,s)):mayRead(view,row.scope))||typeof s.quote!=='string'||!s.quote.trim()||!row.text.includes(s.quote))throw Error('记忆必须有当前可见原文的逐字证据')
     }
     if(kind==='procedures'&&confidence==='observed'&&!sources.some(s=>s.receipt!==undefined))throw Error('已验证流程需要实际工具回执；未实测的方法请标 hypothesis')

@@ -1,0 +1,25 @@
+[Unit]
+Description=Yoyo isolated Playwright MCP broker
+After=docker.service yoyo-browser-network.service
+Requires=docker.service yoyo-browser-network.service
+
+[Service]
+Type=simple
+User=root
+Group=dsh-life
+RuntimeDirectory=yoyo-browser
+RuntimeDirectoryMode=0750
+UMask=0007
+ExecStart=/opt/dsh-life-runtime/node/bin/node /opt/dsh-life-assistant/deploy/browser-broker.mjs
+Restart=on-failure
+RestartSec=5
+ProtectHome=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/run/yoyo-browser /run/docker.sock
+NoNewPrivileges=true
+MemoryMax=64M
+TasksMax=24
+
+[Install]
+WantedBy=multi-user.target
