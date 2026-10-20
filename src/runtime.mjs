@@ -85,7 +85,7 @@ export class Runtime {
       const qq=this.autonomy.qq;if(!qq)return json(res,{error:'QQ 未配置'},404)
       let size=0;const parts=[];for await(const chunk of req){size+=chunk.length;if(size>1024*1024)throw Error('消息过大');parts.push(chunk)}
       const bytes=Buffer.concat(parts);if(!qq.authorizedEvent(req.headers,bytes))return json(res,{error:'上报认证失败'},401)
-      const event=JSON.parse(bytes.toString());qq.ingest(this.autonomy.data,event);this.autonomy.interruptMemory(event);return json(res,{ok:true})
+      const event=JSON.parse(bytes.toString());qq.ingest(this.autonomy.data,event);return json(res,{ok:true})
     }
     const assets={'/':['../public/index.html','text/html; charset=utf-8'],'/app.js':['../public/app.js','text/javascript; charset=utf-8'],'/app.css':['../public/app.css','text/css; charset=utf-8']}
     if(req.method==='GET' && assets[url.pathname]) {const [file,type]=assets[url.pathname];res.writeHead(200,{'content-type':type,'cache-control':'no-store'});return res.end(readFileSync(new URL(file,import.meta.url)))}

@@ -8,7 +8,7 @@ import { SocialAgent } from '../src/social-agent.mjs'
 
 function fixture(t){
   const root=mkdtempSync(join(tmpdir(),'yoyo-agent-')),store=new Store(join(root,'data.sqlite')),hooks=new Map(),tools=new Map(),prompts=[]
-  const ctx={on(name,fn){hooks.set(name,fn);return ()=>hooks.delete(name)},systemPrompt:{section(){return ()=>{}}},tools:{register(tool){tools.set(tool.name,tool);return ()=>tools.delete(tool.name)}},sessions:{requestViewVersion:1},tokenMeter:{requestViewVersion:1}}
+  const ctx={on(name,fn){hooks.set(name,fn);return ()=>hooks.delete(name)},systemPrompt:{section(){return ()=>{}},context(){return ()=>{}}},tools:{register(tool){tools.set(tool.name,tool);return ()=>tools.delete(tool.name)}},sessions:{requestViewVersion:1},tokenMeter:{requestViewVersion:1}}
   const runtime={store,abort:new AbortController(),workspace:root,model:{sessionId:'one-agent',async receipt(name,args,exec,body){return body('call:'+exec.callId)}}}
   const agent=new SocialAgent(runtime,ctx,{enabled:true})
   t.after(()=>{agent.stop();assert.equal(hooks.size,0);assert.equal(tools.size,0);store.close();rmSync(root,{recursive:true,force:true})})
@@ -139,7 +139,8 @@ test('a chosen concern review restores its original view once and stops after re
  assert.equal(agent.choose(now+999),null)
  assert.equal(agent.choose(now+1000),a.handle)
  assert.equal(agent.wakeView.id,view.id);assert.equal(agent.wakeEvent.concern,c.id)
- assert.ok(agent.decisionPrompt().includes('concern_review_due'))
+ assert.equal(agent.state().environment.wake.kind,'concern_review_due')
+ assert.equal(agent.decisionPrompt().includes('concern_review_due'),false)
  assert.equal(agent.decisionPrompt().includes('继续当前活动'),false)
  agent.data.consumeConcernReview(c.id,fields.reviewAt)
  assert.equal(agent.choose(now+2000),null)
@@ -197,4 +198,31 @@ test('attachment tool lists merged forward children instead of treating the whol
  agent.qq={async call(){return {messages:[{message:[{type:'image',data:{url:'https://multimedia.nt.qq.com.cn/a'}}]},{message:[{type:'file',data:{file_id:'b'}}]}]}}}
  const result=await tools.get('yoyo_attachment').execute({message:original.id},exec)
  assert.equal(result.forwarded,true);assert.deepEqual(result.attachments,[{node:0,segment:0,type:'image'},{node:1,segment:0,type:'file'}]);assert.ok(result.document)
+})
+
+
+test('incoming traffic respects a working activity review time and appears without a prompt',t=>{
+ const {agent,store,target}=fixture(t),a=target('123'),now=Date.now()
+ agent.activeView=agent.data.publicView()
+ agent.data.saveActivity(agent.activeView.id,{state:'working',description:'research',wakeAt:now+60000})
+ store.set('yoyo_started',true)
+ agent.data.ingest({target:a.handle,sender:'123',externalId:'new',text:'hello',mentioned:true,receivedAt:now-10000})
+ assert.equal(agent.choose(now),null)
+ assert.equal(agent.state().attention.length,1)
+ assert.equal(agent.choose(now+60000),'public')
+ assert.equal(agent.wakeEvent.kind,'self_scheduled_review')
+})
+
+test('native step boundary observes batched changes without switching focus or replaying them',async t=>{
+ const {agent,store,target,hooks}=fixture(t),a=target('123'),now=Date.now()
+ agent.activeView=agent.data.publicView();const view=agent.activeView
+ store.set('yoyo_settings',{dailySteps:100});store.set('yoyo_started',true)
+ agent.data.ingest({target:a.handle,sender:'123',externalId:'during-work',text:'hello',receivedAt:now-10000})
+ Object.defineProperty(agent,'nativeReady',{value:true})
+ const session={id:'one-agent',surface:{nodes:[]},append(){}}
+ await hooks.get('agent/pre-step')({agent:{id:'one-agent',session},turn:1,messages:[]},async()=>{})
+ assert.equal(agent.activeView.id,view.id)
+ assert.equal(agent.state().environment.noticed[0].handle,a.handle)
+ assert.equal(agent.choose(now),null)
+ assert.equal(agent.data.inbox()[0].unread,1)
 })

@@ -80,7 +80,7 @@ export class SocialAgent {
   toolsAllowed(){if(this.maintenanceJob)return new Set(['yoyo_read','yoyo_message','yoyo_search','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence']);const names=new Set(COMMON_TOOLS);if(this.separate)names.delete('life_context');if(this.config.publicBrowser&&this.activeView&&this.currentView().scopes.every(s=>s==='public'))for(const n of PUBLIC_BROWSER_TOOLS)names.add(n);if(this.executor){names.add('yoyo_execute');names.add('yoyo_job');names.add('yoyo_projects')}if(this.isOwner())for(const n of OWNER_TOOLS)names.add(n);return names}
   register() {
     const ctx=this.ctx
-    if(this.separate)this.disposers.push(ctx.systemPrompt.context({name:'yoyo:state',order:900,text:({agent})=>agent?.id===this.sessionId?JSON.stringify(this.state()):''}))
+    this.disposers.push(ctx.systemPrompt.context({name:'yoyo:state',order:900,text:({agent})=>agent?.id===this.sessionId?JSON.stringify(this.state()):''}))
     this.disposers.push(ctx.systemPrompt.section({name:'yoyo:agency',order:10220,interpolate:false,text:({agent})=>this.enabled&&agent?.id===this.sessionId?(this.separate?POLICY.replace('微信、QQ 群、QQ 私聊和 DSH','QQ 群、QQ 私聊和社交 DSH 会话').replace('微信图片文件用 yoyo_attachment','QQ 图片文件用 yoyo_attachment'):POLICY):''}))
     this.disposers.push(ctx.on('system-prompt/assemble',async(assembly,context,next)=>{
       const result=await next();if(!this.enabled||context.agent?.id!==this.sessionId)return result
@@ -119,6 +119,13 @@ export class SocialAgent {
       const budget=this.store.get('yoyo_settings',{}).dailySteps??0
       if((this.steps??0)>=this.config.maxSteps||!this.isOwner()&&(!budget||usage>=budget))throw Error('自主活动达到预算，进度已保留')
       this.steps=(this.steps??0)+1;this.data.db.prepare('INSERT INTO yoyo_usage(day,steps) VALUES(?,1) ON CONFLICT(day) DO UPDATE SET steps=steps+1').run(day)
+      // Notice accumulated changes at a native action boundary, never enqueue
+      // a new chat message or cancel the work that is already running.
+      if(!this.maintenanceJob){
+        const batches=this.data.attention(Date.now(),this.config.quietMs).filter(b=>b.ready)
+        this.environmentNotice=batches.map(({handle,kind,label,count,mentioned,throughId})=>({handle,kind,label,count,mentioned,throughId}))
+        this.data.acknowledgeAttention(batches)
+      }
       return next()
     }))
     const define=(name,description,properties,required,execute,render)=>{
@@ -272,7 +279,7 @@ export class SocialAgent {
   }
   state() {
     const view=this.activeView
-    return {engine:'DSH native Agent',persona:this.isOwner()?this.store.get('persona'):this.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同边界。'),self:this.store.get('yoyo_self',{mood:'calm',energy:'steady',satisfied:{}}),activity:view?this.data.activity(view.id):null,plans:view?this.data.plans(view.id):[],concerns:view?this.data.concerns(view.id).filter(c=>['active','waiting'].includes(c.state)).slice(0,8).map(({id,title,why,next,state,reviewAt})=>({id,title,why,next,state,reviewAt})):[],feedback:view?this.data.concernFeedbacks(view.id):[],learning:view?this.data.learning(view.id).slice(0,12).map(({id,trait,state,identity})=>({id,trait,state,identity})):[],focus:view?.focus??null,memories:view?this.data.recall(view.id):[],attention:this.data.attention().map(({handle,kind,label,ready,count,mentioned})=>({handle,kind,label,ready,count,mentioned})),memoryReview:this.maintenanceJob?{after:this.maintenanceJob.after,through:this.maintenanceJob.through,kind:this.maintenanceJob.kind}:null,timezone:'Asia/Shanghai'}
+    return {engine:'DSH native Agent',persona:this.isOwner()?this.store.get('persona'):this.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同边界。'),self:this.store.get('yoyo_self',{mood:'calm',energy:'steady',satisfied:{}}),activity:view?this.data.activity(view.id):null,plans:view?this.data.plans(view.id):[],concerns:view?this.data.concerns(view.id).filter(c=>['active','waiting'].includes(c.state)).slice(0,8).map(({id,title,why,next,state,reviewAt})=>({id,title,why,next,state,reviewAt})):[],feedback:view?this.data.concernFeedbacks(view.id):[],learning:view?this.data.learning(view.id).slice(0,12).map(({id,trait,state,identity})=>({id,trait,state,identity})):[],focus:view?.focus??null,memories:view?this.data.recall(view.id):[],environment:{wake:this.wakeEvent??null,noticed:this.maintenanceJob?[]:(this.environmentNotice??[]),delivery:'state_at_action_boundary',interrupt:false},attention:this.data.attention().map(({handle,kind,label,ready,count,mentioned})=>({handle,kind,label,ready,count,mentioned})),memoryReview:this.maintenanceJob?{after:this.maintenanceJob.after,through:this.maintenanceJob.through,kind:this.maintenanceJob.kind}:null,timezone:'Asia/Shanghai'}
   }
   async migrateInbox() {
     const owner=this.ownerTarget();if(!owner)return
@@ -292,7 +299,6 @@ export class SocialAgent {
     this.readyJob=null
     for(const job of this.data.db.prepare("SELECT id,view_id,state FROM yoyo_jobs WHERE notified=0 AND state IN ('done','failed','timed_out','interrupted') AND view_id IS NOT NULL ORDER BY created_at LIMIT 20").all()){try{const v=this.data.view(job.view_id);this.readyJob=job;return select(v.focus??(v.scopes.length===1?'public':'overview'),{kind:'job_finished',job:job.id,state:job.state},v)}catch{this.data.db.prepare('UPDATE yoyo_jobs SET notified=1 WHERE id=?').run(job.id)}}
     const a=this.data.activity(),inbox=this.data.attention(now,this.config.quietMs).filter(t=>t.ready)
-    const privateMessage=inbox.find(t=>t.kind==='private');if(privateMessage)return select('overview',{kind:'private_message',target:privateMessage.handle,through:privateMessage.throughId,count:privateMessage.count})
     const concern=this.data.dueConcern(now)
     if(concern){this.dueConcern=concern;return select(concern.view.focus??(concern.view.scopes.length===1?'public':'overview'),{kind:'concern_review_due',concern:concern.id,scheduledAt:concern.reviewAt},concern.view)}
     if(a.state==='sleeping'&&(a.wake_at===null||a.wake_at>now)&&!inbox.some(t=>t.mentioned||t.kind==='private'||t.platform==='wechat'))return null
@@ -303,6 +309,11 @@ export class SocialAgent {
         this.data.db.prepare('UPDATE yoyo_activity SET wake_at=NULL WHERE id=1 AND revision=?').run(a.revision)
       }
     }
+    // An activity's own chosen review time is respected. Incoming traffic is
+    // still visible through dynamic state on its next native step.
+    if(['working','waiting'].includes(a.state)&&a.wake_at!==null&&a.wake_at>now)return null
+    const privateMessage=inbox.find(t=>t.kind==='private')
+    if(privateMessage)return select('overview',{kind:'private_message',target:privateMessage.handle,through:privateMessage.throughId,count:privateMessage.count})
     const previous=this.store.get('yoyo_last_wake',0)
     const ownerMessage=inbox.find(t=>t.platform==='wechat')
     if(ownerMessage&&now-previous>=this.config.attentionMs&&!this.store.get('yoyo_settings',{}).dailySteps)return select(ownerMessage.handle,{kind:'owner_message',target:ownerMessage.handle,through:ownerMessage.throughId})
@@ -369,8 +380,9 @@ export class SocialAgent {
     finally{clearTimeout(timer);this.currentRequest=null;this.maintenanceJob=null;this.store.set('conversation_finished_at',Date.now())}
   }
   decisionPrompt() {
-    const event=this.wakeEvent??{kind:'initial_orientation'}
-    return '[环境变化] '+JSON.stringify(event)+'\n这是一条事实通知，无需回复通知。结合已有经历、关切、承诺和当前下一步，判断是否值得改变注意或行动；可以继续、调整、等待或休息，不要求发言。需要核对时按编号取资料，不重读全部上下文。行动有结果后记录反馈；若没有可行下一步，保存等待条件或有理由的复查时间即可。'
+    // Native DSH needs one request anchor to start an idle model. Environment
+    // facts live in dynamic system state, not a stream of simulated user speech.
+    return '自主评估。查看当前动态状态，结合自己的关切、承诺和下一步决定行动或休息；无需回复此调度入口。'
   }
   async pollJobs(now=Date.now()){
     if(!this.executor)return
@@ -379,7 +391,7 @@ export class SocialAgent {
       try{const result=await this.executor.call('/status',{id:row.id},this.runtime.abort.signal);this.data.db.prepare('UPDATE yoyo_jobs SET state=? WHERE id=?').run(result.state,row.id)}catch{this.data.db.prepare("UPDATE yoyo_jobs SET state='unknown',next_poll=? WHERE id=?").run(now+30000,row.id)}
     }
   }
-  interruptMemory(raw){if(this.maintenanceJob&&raw.post_type==='message'&&(raw.message_type==='private'||raw.message?.some?.(s=>s.type==='at'&&String(s.data?.qq)===this.qq?.account)))this.boundAgent?.cancel({kind:'hook',reason:'有新消息，先让出后台整理'})}
+
   async deliver() {
     const settings=this.store.get('yoyo_settings',{});if(settings.paused)return false
     return this.data.deliver(async(target,text,key,authorize,content)=>{
