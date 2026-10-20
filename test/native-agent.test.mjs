@@ -158,3 +158,16 @@ test('context inspection returns lossless JSON using the host token meter',async
   const result=await host.registered.get('life_context').execute({},{agent:host.agent,callId:'context',signal:runtime.abort.signal})
   assert.equal(result.measuredTokens,263050);assert.equal(result.declaredModelWindow,1000000);assert.deepEqual(result,JSON.parse(JSON.stringify(result)))
 })
+
+
+test('WeChat ledger stays in private native state even when separate QQ autonomy is enabled',async t=>{
+ const {runtime,host}=fixture(t);await runtime.model.ensure()
+ runtime.autonomy.enabled=true
+ runtime.ledger.insert({day:'2026-10-20',kind:'income',amount:'12',description:'PRIVATE_LEDGER_CANARY'},'test',{})
+ assert.equal(runtime.model.state().ledger.months[0].income,1200)
+ assert.equal(JSON.stringify(runtime.autonomy.state()).includes('PRIVATE_LEDGER_CANARY'),false)
+ const tool=host.registered.get('life_ledger_query')
+ await assert.rejects(()=>tool.execute({},{agent:{id:'qq-agent'},callId:'private-ledger',signal:runtime.abort.signal}),/绑定用户/)
+ runtime.model.maintenanceJob={through_id:10}
+ await assert.rejects(()=>host.registered.get('life_ledger_record').execute({},{agent:host.agent,callId:'maintenance-write',signal:runtime.abort.signal}),/后台整理/)
+})

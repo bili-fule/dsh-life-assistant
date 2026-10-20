@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>生活账本</title><link rel="stylesheet" href="/ledger.css"><script src="/ledger.js" type="module"></script></head>
+<body><main><header><a class="brand" href="/ledger/">日子有迹 <span>生活账本</span></a><button id="login-toggle">主人登录 ↗</button><button id="logout" hidden>退出登录</button></header>
+<section class="intro"><p class="eyebrow">A LITTLE RECORD OF LIFE</p><h1>钱花到哪里，<br>日子就在哪里</h1><p id="scope">这里分享每月收支的大致范围，具体账目只留给自己</p></section>
+<form id="login" hidden><label for="password">登录后查看完整账本</label><div><input id="password" type="password" autocomplete="current-password" minlength="12" maxlength="200" required placeholder="账本登录密码"><button type="submit">登录</button></div></form>
+<p id="notice" role="status"></p>
+<section id="owner-controls" hidden><label>查看月份 <input id="month" type="month"></label><button id="all-months">全部月份</button></section>
+<section id="months" class="months" aria-label="月度收支"></section>
+<section id="private" hidden><div class="section-title"><h2>每一笔，都在这里</h2><span>仅自己可见</span></div><p class="note">退款按入账月份抵减支出；充值、提现单列，不算收入或消费。收支结余不等于账户余额。本页仅覆盖已导入及手动记录的数据。</p><div class="table-wrap"><table><thead><tr><th>日期</th><th>类型</th><th>金额</th><th>对方 / 内容</th><th>分类</th><th>状态</th></tr></thead><tbody id="entries"></tbody></table></div><button id="more" hidden>继续查看</button></section>
+<footer><span>认真生活，慢慢记录</span><span id="privacy-label">公开的是概况，细节属于自己</span></footer></main></body></html>

@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { createHash,timingSafeEqual,randomBytes } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import qrcode from 'qrcode-generator'
+import { Ledger } from './ledger.mjs'
 import { Store,messageKey } from './store.mjs'
 import { NativeAgent } from './native-agent.mjs'
 import { command,applyAnalysis,schedule,deliverOne } from './assistant.mjs'
@@ -34,6 +35,8 @@ export class Runtime {
     this.stateDir=resolve(config.stateDir??process.env.DSH_LIFE_DATA??join(process.env.DSH_HOME??join(homedir(),'.dsh'),'life-assistant'))
     mkdirSync(this.stateDir,{recursive:true,mode:0o700})
     this.store=new Store(join(this.stateDir,'assistant.sqlite'))
+    this.ledger=new Ledger(this.store)
+    this.ledgerLoginAttempts=new Map()
     this.batcher=new Batcher(this.store,config)
     this.abort=new AbortController()
     this.workspace=resolve(config.workspace??join(this.stateDir,'workspace'))
@@ -76,6 +79,39 @@ export class Runtime {
       styleLearning:this.store.get('style_learning',true),learnedStyle:this.store.get('learned_style',{}),styleCounts:this.store.get('style_counts',{}),
       quiet:this.store.get('quiet',{start:22,end:8}),digestHour:this.store.get('digest_hour',9),deliveryError:this.store.get('delivery_error'),pollError:this.store.get('poll_error'),lastInbound:this.store.get('last_inbound'),modelHealth:this.store.get('model_health')}
   }
+  async ledgerHttp(req,res,url){
+    const path=url.pathname,token=String(req.headers.cookie??'').match(/(?:^|;\s*)ledger_session=([a-f0-9]{64})(?:;|$)/)?.[1]
+    const admin=timingSafeEqual(digest(String(req.headers.authorization??'').replace(/^Bearer /,'')),digest(this.adminToken))
+    const authenticated=admin||this.ledger.authenticated(token)
+    if(req.method==='GET'&&path==='/api/ledger/public')return json(res,this.ledger.publicSummary())
+    if(req.method==='GET'&&path==='/api/ledger/session')return json(res,{authenticated})
+    if(req.method==='POST'){
+      if(!String(req.headers['content-type']??'').startsWith('application/json'))return json(res,{error:'需要 JSON 请求'},415)
+      if(req.headers.origin&&new URL(req.headers.origin).host!==req.headers.host)return json(res,{error:'请求来源不匹配'},403)
+      if(path==='/api/ledger/login'){
+        const now=Date.now(),key=req.socket.remoteAddress??'unknown'
+        for(const [ip,r] of this.ledgerLoginAttempts)if(now-r.start>60000)this.ledgerLoginAttempts.delete(ip)
+        const rate=this.ledgerLoginAttempts.get(key)??{start:now,count:0};rate.count++;this.ledgerLoginAttempts.set(key,rate)
+        if(rate.count>10||this.ledgerLoginAttempts.size>1000)return json(res,{error:'尝试过多，请稍后再试'},429)
+        const data=await body(req,2000),session=this.ledger.login(data.password)
+        if(!session)return json(res,{error:'登录失败'},401)
+        res.setHeader('set-cookie','ledger_session='+session+'; HttpOnly; Secure; SameSite=Strict; Path=/api/ledger/; Max-Age=604800')
+        return json(res,{authenticated:true})
+      }
+      if(!authenticated)return json(res,{error:'请先登录'},401)
+      if(path==='/api/ledger/logout'){this.ledger.logout(token);res.setHeader('set-cookie','ledger_session=; HttpOnly; Secure; SameSite=Strict; Path=/api/ledger/; Max-Age=0');return json(res,{ok:true})}
+      if(path==='/api/ledger/amend')return json(res,this.ledger.amend(await body(req,10000)))
+      if(admin&&path==='/api/ledger/settings'){
+        const data=await body(req,2000)
+        if(data.password!==undefined)this.ledger.setPassword(data.password)
+        if(data.published!==undefined){if(typeof data.published!=='boolean')throw Error('公开开关无效');this.store.set('ledger_public_enabled',data.published)}
+        return json(res,{ok:true})
+      }
+    }
+    if(!authenticated)return json(res,{error:'请先登录'},401)
+    if(req.method==='GET'&&path==='/api/ledger/details')return json(res,{currency:'CNY',unit:'cents',months:this.ledger.summary(url.searchParams.get('month')??undefined),...this.ledger.list({month:url.searchParams.get('month')??undefined,after:Number(url.searchParams.get('after')??0),limit:50})})
+    return json(res,{error:'没有这个操作'},404)
+  }
   async http(req,res) {
     const url=new URL(req.url,'http://localhost')
     res.setHeader('x-content-type-options','nosniff');res.setHeader('referrer-policy','no-referrer');res.setHeader('x-frame-options','DENY')
@@ -87,7 +123,8 @@ export class Runtime {
       const bytes=Buffer.concat(parts);if(!qq.authorizedEvent(req.headers,bytes))return json(res,{error:'上报认证失败'},401)
       const event=JSON.parse(bytes.toString());qq.ingest(this.autonomy.data,event);return json(res,{ok:true})
     }
-    const assets={'/':['../public/index.html','text/html; charset=utf-8'],'/app.js':['../public/app.js','text/javascript; charset=utf-8'],'/app.css':['../public/app.css','text/css; charset=utf-8']}
+    if(url.pathname.startsWith('/api/ledger/'))return this.ledgerHttp(req,res,url)
+    const assets={'/ledger/':['../public/ledger.html','text/html; charset=utf-8'],'/ledger.js':['../public/ledger.js','text/javascript; charset=utf-8'],'/ledger.css':['../public/ledger.css','text/css; charset=utf-8'],'/':['../public/index.html','text/html; charset=utf-8'],'/app.js':['../public/app.js','text/javascript; charset=utf-8'],'/app.css':['../public/app.css','text/css; charset=utf-8']}
     if(req.method==='GET' && assets[url.pathname]) {const [file,type]=assets[url.pathname];res.writeHead(200,{'content-type':type,'cache-control':'no-store'});return res.end(readFileSync(new URL(file,import.meta.url)))}
     const token=String(req.headers.authorization??'').replace(/^Bearer /,'')
     if(!timingSafeEqual(digest(token),digest(this.adminToken)))return json(res,{error:'请输入管理密钥'},401)
