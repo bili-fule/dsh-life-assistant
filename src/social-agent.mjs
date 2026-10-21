@@ -16,6 +16,7 @@ import { workspacePath } from './tools.mjs'
 import { DebugHelper } from './debug-helper.mjs'
 import { TeamHost,TEAM_TOOLS,TEAM_POLICY } from './team-host.mjs'
 import { Motivation,MOTIVATION_TOOLS,MOTIVATION_POLICY } from './motivation.mjs'
+import { MemoryLayer,MEMORY_TOOLS,MEMORY_POLICY } from './memory-layer.mjs'
 
 const COMMON_TOOLS=new Set(['yoyo_evidence','yoyo_learning','yoyo_feedback','yoyo_concern','yoyo_inbox','yoyo_mute','yoyo_attention','yoyo_dismiss','yoyo_open','yoyo_read','yoyo_message','yoyo_search','yoyo_send','yoyo_send_file','yoyo_delivery','yoyo_activity','yoyo_plan','yoyo_self','yoyo_sleep','yoyo_wait','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_web','yoyo_forward','yoyo_attachment','yoyo_file','life_context'])
 const PUBLIC_BROWSER_TOOLS=new Set(['close','resize','console_messages','handle_dialog','evaluate','file_upload','drop','find','fill_form','press_key','type','navigate','navigate_back','network_requests','network_request','run_code_unsafe','take_screenshot','snapshot','click','drag','hover','select_option','tabs','wait_for'].map(n=>'mcp__playwright-mcp__browser_'+n))
@@ -43,6 +44,7 @@ export class SocialAgent {
     this.executor=config.executor?new Executor(config.executor):null
     this.debugHelper=config.debugHelper?new DebugHelper(this,config.debugHelper):null
     this.motivation=config.motivation?.enabled?new Motivation(this.data,config.motivation):null
+    this.memoryLayer=config.memory?.enabled?new MemoryLayer(this.data,config.memory):null
     this.team=config.team?.enabled?new TeamHost(this,config.team):null
     if(ctx&&typeof ctx.on==='function')this.register()
     else if(this.enabled)throw Error('自主模式需要 DSH 原生事件服务')
@@ -84,11 +86,11 @@ export class SocialAgent {
     this.appliedView={session,id:view.id}
     if(view.focus)this.data.recordFocus(view.focus)
   }
-  toolsAllowed(){if(this.maintenanceJob)return new Set(['yoyo_read','yoyo_message','yoyo_search','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence']);const names=new Set(COMMON_TOOLS);if(this.team)for(const n of TEAM_TOOLS)names.add(n);if(this.motivation)for(const n of MOTIVATION_TOOLS)names.add(n);if(this.separate)names.delete('life_context');if(this.config.publicBrowser&&this.activeView&&this.currentView().scopes.every(s=>s==='public'))for(const n of PUBLIC_BROWSER_TOOLS)names.add(n);if(this.executor){names.add('yoyo_execute');names.add('yoyo_job');names.add('yoyo_projects')}if(this.debugHelper)for(const n of ['yoyo_debug','yoyo_debug_status','yoyo_debug_patch'])names.add(n);if(this.isOwner())for(const n of OWNER_TOOLS)names.add(n);return names}
+  toolsAllowed(){if(this.maintenanceJob){const names=new Set(['yoyo_read','yoyo_message','yoyo_search','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence']);if(this.memoryLayer)for(const n of ['memory_recall','memory_inspect','memory_propose'])names.add(n);return names}const names=new Set(COMMON_TOOLS);if(this.team)for(const n of TEAM_TOOLS)names.add(n);if(this.motivation)for(const n of MOTIVATION_TOOLS)names.add(n);if(this.memoryLayer)for(const n of MEMORY_TOOLS)names.add(n);if(this.separate)names.delete('life_context');if(this.config.publicBrowser&&this.activeView&&this.currentView().scopes.every(s=>s==='public'))for(const n of PUBLIC_BROWSER_TOOLS)names.add(n);if(this.executor){names.add('yoyo_execute');names.add('yoyo_job');names.add('yoyo_projects')}if(this.debugHelper)for(const n of ['yoyo_debug','yoyo_debug_status','yoyo_debug_patch'])names.add(n);if(this.isOwner())for(const n of OWNER_TOOLS)names.add(n);return names}
   register() {
     const ctx=this.ctx
     this.disposers.push(ctx.systemPrompt.context({name:'yoyo:state',order:900,text:({agent})=>agent?.id===this.sessionId?JSON.stringify(this.state()):''}))
-    this.disposers.push(ctx.systemPrompt.section({name:'yoyo:agency',order:10220,interpolate:false,text:({agent})=>this.enabled&&agent?.id===this.sessionId?((this.separate?POLICY.replace('微信、QQ 群、QQ 私聊和 DSH','QQ 群、QQ 私聊和社交 DSH 会话').replace('微信图片文件用 yoyo_attachment','QQ 图片文件用 yoyo_attachment'):POLICY)+(this.team?'\n'+TEAM_POLICY:'')+(this.motivation?'\n'+MOTIVATION_POLICY:'')):''}))
+    this.disposers.push(ctx.systemPrompt.section({name:'yoyo:agency',order:10220,interpolate:false,text:({agent})=>this.enabled&&agent?.id===this.sessionId?((this.separate?POLICY.replace('微信、QQ 群、QQ 私聊和 DSH','QQ 群、QQ 私聊和社交 DSH 会话').replace('微信图片文件用 yoyo_attachment','QQ 图片文件用 yoyo_attachment'):POLICY)+(this.team?'\n'+TEAM_POLICY:'')+(this.motivation?'\n'+MOTIVATION_POLICY:'')+(this.memoryLayer?'\n'+MEMORY_POLICY:'')):''}))
     this.disposers.push(ctx.on('system-prompt/assemble',async(assembly,context,next)=>{
       const result=await next();if(!this.enabled||context.agent?.id!==this.sessionId)return result
       const allowed=this.toolsAllowed(),tools=result.tools.filter(t=>allowed.has(t.name))
@@ -145,6 +147,7 @@ export class SocialAgent {
     }
     this.team?.register(define)
     this.motivation?.register(define)
+    this.memoryLayer?.register(define)
     if(this.debugHelper){
       define('yoyo_debug','将故障交给独立容器中的另一套 DSH 原生 Agent。仅提交必要问题描述，自动附脱敏诊断；源码副本内可用 Git、Shell 和测试，不能改生产。后台返回任务编号，切勿粘贴整个聊天或凭据。',{problem:{type:'string',minLength:1,maxLength:12000}},['problem'],(args,exec,key,view)=>this.debugHelper.start(args,view,key,exec.signal))
       define('yoyo_debug_status','查询当前资料范围内排障任务的报告、Git 提交、补丁摘要和状态。done 代表排障完成，不代表已部署；等待期间可继续活动，避免反复轮询。',{id:{type:'string'}},['id'],(args,exec,key,view)=>this.debugHelper.status(args,view,exec.signal))
@@ -298,7 +301,7 @@ export class SocialAgent {
   }
   state() {
     const view=this.activeView
-    return {navigation:this.data.navigation(),navigationAuthority:'Host metadata only: a past read proves that window was readable then, not current permission or knowledge of its content here. Check currentWindow and fresh tool results; historical activity descriptions are not live diagnostics.',engine:'DSH native Agent',persona:this.isOwner()?this.store.get('persona'):this.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同边界。'),self:this.store.get('yoyo_self',{mood:'calm',energy:'steady',satisfied:{}}),motivation:view&&this.motivation?this.motivation.summary(view):null,activity:view?this.data.activity(view.id):null,plans:view?this.data.plans(view.id):[],concerns:view?this.data.concerns(view.id).filter(c=>['active','waiting'].includes(c.state)).slice(0,8).map(({id,title,why,next,state,reviewAt})=>({id,title,why,next,state,reviewAt})):[],feedback:view?this.data.concernFeedbacks(view.id):[],learning:view?this.data.learning(view.id).slice(0,12).map(({id,trait,state,identity})=>({id,trait,state,identity})):[],focus:view?.focus??null,currentWindow:view?.focus?this.data.inbox().find(t=>t.handle===view.focus)??null:null,memories:view?this.data.recall(view.id):[],environment:{pending:this.maintenanceJob?[]:this.data.pendingNotices(),wake:this.wakeEvent??null,noticed:this.maintenanceJob?[]:(this.environmentNotice??[]),delivery:'state_at_action_boundary',interrupt:false},attention:this.data.attention().filter(t=>t.ready).map(({handle,kind,label,ready,count,mentioned})=>({handle,kind,label,ready,count,mentioned})),memoryReview:this.maintenanceJob?{after:this.maintenanceJob.after,through:this.maintenanceJob.through,kind:this.maintenanceJob.kind}:null,timezone:'Asia/Shanghai'}
+    return {navigation:this.data.navigation(),navigationAuthority:'Host metadata only: a past read proves that window was readable then, not current permission or knowledge of its content here. Check currentWindow and fresh tool results; historical activity descriptions are not live diagnostics.',engine:'DSH native Agent',persona:this.isOwner()?this.store.get('persona'):this.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同边界。'),self:this.store.get('yoyo_self',{mood:'calm',energy:'steady',satisfied:{}}),motivation:view&&this.motivation?this.motivation.summary(view):null,memoryLayer:view&&this.memoryLayer?this.memoryLayer.summary(view):null,activity:view?this.data.activity(view.id):null,plans:view?this.data.plans(view.id):[],concerns:view?this.data.concerns(view.id).filter(c=>['active','waiting'].includes(c.state)).slice(0,8).map(({id,title,why,next,state,reviewAt})=>({id,title,why,next,state,reviewAt})):[],feedback:view?this.data.concernFeedbacks(view.id):[],learning:view?this.data.learning(view.id).slice(0,12).map(({id,trait,state,identity})=>({id,trait,state,identity})):[],focus:view?.focus??null,currentWindow:view?.focus?this.data.inbox().find(t=>t.handle===view.focus)??null:null,memories:view?this.data.recall(view.id):[],environment:{pending:this.maintenanceJob?[]:this.data.pendingNotices(),wake:this.wakeEvent??null,noticed:this.maintenanceJob?[]:(this.environmentNotice??[]),delivery:'state_at_action_boundary',interrupt:false},attention:this.data.attention().filter(t=>t.ready).map(({handle,kind,label,ready,count,mentioned})=>({handle,kind,label,ready,count,mentioned})),memoryReview:this.maintenanceJob?{after:this.maintenanceJob.after,through:this.maintenanceJob.through,kind:this.maintenanceJob.kind}:null,timezone:'Asia/Shanghai'}
   }
   async migrateInbox() {
     const owner=this.ownerTarget();if(!owner)return

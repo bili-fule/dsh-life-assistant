@@ -272,3 +272,23 @@ test('the motivation tools exist only when enabled and never certify themselves 
   agent.maintenanceJob={after:0,through:10}
   for(const name of ['self_options','self_choose','self_appraise','self_preferences'])await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name},async()=>{throw Error('must not execute')}),/未获/)
 })
+
+test('memory tools follow their own switch and keep retraction out of maintenance',async t=>{
+  const {agent,hooks,tools,target,exec}=fixture(t,{memory:{enabled:true}}),a=target('123')
+  agent.activeView=agent.data.open(a.handle)
+  const message=agent.data.ingest({target:a.handle,sender:'123',externalId:'mem-1',text:'聊到一部电影'})
+  for(const name of ['memory_recall','memory_inspect','memory_propose','memory_retract'])assert.equal(agent.toolsAllowed().has(name),true)
+  assert.equal(agent.toolsAllowed().has('self_options'),false)
+  const episode=await tools.get('memory_propose').execute({kind:'episode',title:'聊到电影',what:'聊了长镜头',evidence:{messages:[message.id]}},exec)
+  assert.ok(Number.isInteger(episode.id))
+  const recalled=await tools.get('memory_recall').execute({query:'电影'},exec)
+  assert.equal(recalled.results.length,1)
+  assert.equal(agent.state().memoryLayer.episodes,1)
+  // Memory tools are self-authored records, never execution evidence.
+  assert.equal(agent.data.evidence(agent.activeView.id).some(source=>source.name.startsWith('memory_')),false)
+  agent.maintenanceJob={after:0,through:10}
+  for(const name of ['memory_recall','memory_inspect','memory_propose'])assert.equal(agent.toolsAllowed().has(name),true)
+  await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name:'memory_retract'},async()=>{throw Error('must not execute')}),/未获/)
+  await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name:'yoyo_send'},async()=>{throw Error('must not execute')}),/未获/)
+  assert.equal(agent.maintenanceJob&&agent.toolsAllowed().has('self_options'),false)
+})

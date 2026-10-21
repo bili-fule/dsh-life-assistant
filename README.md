@@ -22,6 +22,10 @@ QQ 可选独立排障助手：另一容器中的原生 DSH，以源码副本、G
 
 0.12.0 可选的动机层：`self_options / self_choose / self_appraise / self_preferences` 分别保存候选与期待、事件后的实际感受、以及有界的偏好与修订链。偏好按真实事件更新，同一事件只计一次；自述和执行者转述不提高满足，一次不愉快不会把活动或某人永久判为讨厌，私人经历不改变公开情绪。默认关闭。[字段、规则、防刷分与验证](docs/humanlike-motivation.md)。
 
+## 类人记忆层
+
+0.13.0 可选的记忆层：`memory_recall / memory_inspect / memory_propose / memory_retract` 把经历、主张、来源和修订分开保存。概括不是新的证据来源，转发与引用不能当成本人身份，重复回忆不会把推断升级为观察；淡出、归档、撤回与忘记分开，撤回沿派生关系传播，忘记后的原文不能再重新形成记忆。默认关闭。[来源规则、撤回传播与验证](docs/memory-layer.md)。
+
 ## 原生 DSH 架构
 
 微信 → 持久化收件箱与连续消息合批 → 官方 `SessionController.create / prompt / resolveAgent` → DSH 原生 Agent / 工具调度 / Session JSONL / 自动压缩 → 微信回复队列。

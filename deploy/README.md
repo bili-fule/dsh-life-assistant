@@ -30,6 +30,9 @@ autonomy:
     enabled: false          # 打开后才有 self_options / self_choose / self_appraise / self_preferences
     mode: record            # record 只记录；choose 允许作为选择依据
     maxDeltaPerHour: 0.45   # 单个偏好一小时内允许的变化上限
+  memory:
+    enabled: false          # 打开后才有 memory_recall / memory_inspect / memory_propose / memory_retract
+    recallLimit: 8          # 每次召回最多返回几条概要
   qq:
     endpoint: http://127.0.0.1:3000
     account: '替换为实际机器人QQ号'
@@ -39,7 +42,7 @@ autonomy:
     socketPath: /run/yoyo-executor/runner.sock
 ```
 
-动机层默认关闭；关闭时没有这四个工具，行为与之前相同。打开后它只记录期待、体验与有界偏好，不改变权限、提醒或预算，也不自动创建任务或唤醒。字段、去重与验收状态见 [以开心为方向的自主选择](../docs/humanlike-motivation.md)。
+动机层与记忆层都默认关闭；关闭时没有对应的工具，行为与之前相同。打开后动机层只记录期待、体验与有界偏好，记忆层只记录来源、经历、主张与撤回，都不改变权限、提醒或预算，也不自动创建任务或唤醒。字段与验收状态见 [以开心为方向的自主选择](../docs/humanlike-motivation.md) 与 [类人记忆层](../docs/memory-layer.md)。
 
 没有 QQ 或执行服务时，省略对应配置。QQ 登录账号会在发信前核对；昵称不能授予身份或权限。OneBot 上报需要独立的 24 字符以上密钥，接口密钥至少 16 字符。网关安装、QQ 登录与 OneBot HTTP 配置独立完成，插件没有捆绑 SnowLuma。
 

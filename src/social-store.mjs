@@ -1,7 +1,7 @@
 import { randomUUID,createHash } from 'node:crypto'
 import { identityPart,targetKey,sourceScopes,mayRead,assertPublish,boundedText,PUBLIC_SCOPE } from './scope.mjs'
 
-const NARRATIVE_TOOLS=new Set(['yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence','yoyo_activity','yoyo_plan','yoyo_self','yoyo_concern','yoyo_feedback','yoyo_learning','yoyo_sleep','yoyo_wait','self_options','self_choose','self_appraise','self_preferences'])
+const NARRATIVE_TOOLS=new Set(['yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence','yoyo_activity','yoyo_plan','yoyo_self','yoyo_concern','yoyo_feedback','yoyo_learning','yoyo_sleep','yoyo_wait','self_options','self_choose','self_appraise','self_preferences','memory_recall','memory_inspect','memory_propose','memory_retract'])
 function evidenceText(row){
   const raw=row.result_text??row.text
   if(row.name?.startsWith('mcp__playwright-mcp__'))try{
@@ -278,7 +278,7 @@ export class SocialStore {
     if(!['continue','revise','wait','done','abandon'].includes(decision))throw Error('反馈决定无效')
     if(receipt!==undefined){
       const source=this.db.prepare("SELECT scopes,name FROM yoyo_tool_sources WHERE run_key=?").get(receipt)
-      if(!source||['yoyo_concern','yoyo_feedback','yoyo_self','yoyo_memory','yoyo_forget','yoyo_recall','self_options','self_choose','self_appraise','self_preferences'].includes(source.name)||!JSON.parse(source.scopes).every(s=>mayRead(view,s)))throw Error('反馈回执不存在或不在当前资料范围')
+      if(!source||['yoyo_concern','yoyo_feedback','yoyo_self','yoyo_memory','yoyo_forget','yoyo_recall','self_options','self_choose','self_appraise','self_preferences','memory_recall','memory_inspect','memory_propose','memory_retract'].includes(source.name)||!JSON.parse(source.scopes).every(s=>mayRead(view,s)))throw Error('反馈回执不存在或不在当前资料范围')
     }
     const body={outcome,decision,receipt:receipt??null,evidence:receipt?'tool_receipt':'self_report'}
     const result=this.db.prepare('INSERT INTO yoyo_concern_feedback(concern_id,body,scopes,created_at) VALUES(?,?,?,?)').run(id,JSON.stringify(body),JSON.stringify(sourceScopes(view.scopes)),Date.now())

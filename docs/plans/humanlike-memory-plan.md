@@ -1,6 +1,6 @@
 # 适合 Bot 的类人记忆系统 Plan
 
-日期：2026-10-21。状态：设计方案，尚未实现；本轮只修改文档。配套方案：[自主动机](humanlike-motivation-plan.md)、[多 Agent 编排](artex-multi-agent-plan.md)。
+日期：2026-10-21。状态：阶段 1 已实现（0.13.0，默认关闭），阶段 2–5 未实现；实现、配置与验证见 [记忆层实现文档](../memory-layer.md)。配套方案：[自主动机](humanlike-motivation-plan.md)、[多 Agent 编排](artex-multi-agent-plan.md)。
 
 ## 1. 目标：记住自己的经历，而不只是保存聊天文本
 
@@ -188,12 +188,12 @@ LLM 上下文压缩与长期记忆整理是两件事。压缩负责让原生请�
 4. **前瞻与多 Agent。** 接入可靠触发、工作记忆包、候选汇合和并发版本控制。
 5. **整合与压缩。** 更新增量夜间策略，验证超长输入、重启、撤权及整理失败时的恢复。
 
-实施切分（2026-10-21 基于现有代码拟定，尚未开始）：
+实施切分（2026-10-21 拟定，阶段 1 已完成）：
 
-- 新增 `src/memory-layer.mjs`，沿用 `src/motivation.mjs` 的写法：宿主表 + 少量工具 + 有界更新，接入 `social-agent.mjs` 的工具白名单与动态状态。
-- 阶段 1 的表：`yoyo_memory_episodes`（场景、时间区间、参与者身份、角色、结果、未解决事项、来源范围、版本）、`yoyo_memory_claims`（主张、类型、适用情境、支持与反例、置信类型、状态）、`yoyo_memory_links`（派生关系）、`yoyo_memory_revisions`（更正链）、`yoyo_memory_retractions`（撤回墓碑，阻止复活）、`yoyo_memory_uses`（有效召回计数）。既有 `yoyo_memories` 保留为文本记忆，逐条映射过去后退役，不借迁移提高可信度。
-- 阶段 1 的工具：`memory_recall`、`memory_inspect`、`memory_propose`、`memory_retract`，全部按视图范围过滤；撤回沿派生关系传播，并让执行者上下文与压缩摘要一起排除。
-- 阶段 2 起才加入线索召回排序、情景分段、前瞻触发与夜间整合；每阶段先补测试再接入原生循环。
+- `src/memory-layer.mjs` 按 `src/motivation.mjs` 的写法：宿主表 + 少量工具 + 有界更新，接入 `social-agent.mjs` 的工具白名单、系统提示与动态状态。
+- 阶段 1 已建表 `yoyo_memory_episodes`、`yoyo_memory_claims`、`yoyo_memory_links`、`yoyo_memory_revisions`、`yoyo_memory_retractions`、`yoyo_memory_uses`；既有 `yoyo_memories` 保留为文本记忆，尚未迁移，也不借迁移提高可信度。
+- 阶段 1 的工具：`memory_recall`、`memory_inspect`、`memory_propose`、`memory_retract`，全部按视图范围过滤；撤回沿派生关系传播，忘记会登记来源墓碑阻止复活。
+- 阶段 2 起才加入线索召回排序、情景分段、前瞻触发与夜间整合；每阶段先补测试再接入原生循环。详细差距见 [记忆层实现文档](../memory-layer.md)。
 
 | 验收场景 | 必须表现 |
 | --- | --- |
