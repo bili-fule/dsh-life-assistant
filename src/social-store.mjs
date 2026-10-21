@@ -1,5 +1,6 @@
 import { randomUUID,createHash } from 'node:crypto'
 import { identityPart,targetKey,sourceScopes,mayRead,assertPublish,boundedText,PUBLIC_SCOPE } from './scope.mjs'
+import { readChunk } from './chunk.mjs'
 
 const NARRATIVE_TOOLS=new Set(['yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence','yoyo_activity','yoyo_plan','yoyo_self','yoyo_concern','yoyo_feedback','yoyo_learning','yoyo_sleep','yoyo_wait','self_options','self_choose','self_appraise','self_preferences','memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments'])
 function evidenceText(row){
@@ -334,6 +335,15 @@ export class SocialStore {
   concernFeedbacks(viewId) {
     const view=this.view(viewId)
     return this.db.prepare('SELECT id,concern_id,body,created_at FROM yoyo_concern_feedback f WHERE NOT EXISTS(SELECT 1 FROM json_each(f.scopes) s WHERE s.value NOT IN(SELECT value FROM json_each(?))) ORDER BY id DESC LIMIT 20').all(JSON.stringify(view.scopes)).map(r=>({id:r.id,concern:r.concern_id,...JSON.parse(r.body),at:r.created_at}))
+  }
+  // A stored page or extracted document is readable by offset, so a long input is
+  // never refused and never handed over in one oversized result.
+  documentText(viewId,{id,offset=0,characters}) {
+    const view=this.view(viewId)
+    if(!Number.isSafeInteger(id)||id<1)throw Error('网页来源编号无效')
+    const row=this.db.prepare('SELECT id,url,body,scope FROM yoyo_documents WHERE id=?').get(id)
+    if(!row||!mayRead(view,row.scope))throw Error('网页来源不在当前资料范围')
+    return {id:row.id,url:row.url,...readChunk(row.body,{offset,...(characters===undefined?{}:{characters})})}
   }
   evidence(viewId,{limit=10}={}) {
     const view=this.view(viewId)
