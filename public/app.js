@@ -41,6 +41,7 @@ function renderTools(){const files=$('#workspace-files'),runs=$('#tool-list');fi
 $('#uploads').onchange=async()=>{const files=[...$('#uploads').files];if(files.length>8){toast('一次最多上传 8 个文件');return}for(const f of files){if(f.size>32*1024*1024){toast(f.name+' 超过 32MiB，未上传');continue}try{toast('正在上传 '+f.name);const data=await new Promise((yes,no)=>{const reader=new FileReader();reader.onload=()=>yes(String(reader.result).split(',')[1]);reader.onerror=no;reader.readAsDataURL(f)});await api('/api/upload',{name:f.name,data});toast(f.name+' 已保存，正在读取。')}catch(e){toast(e.message)}}$('#uploads').value='';refresh()}
 
 const teamLabels={ready:'等待调度',running:'执行中',waiting:'等待对方回复',blocked:'已阻塞',completed:'已完成',cancelled:'已取消',failed:'失败'}
+const eventLabels={finding:'发现',question:'提问',answer:'答复',progress:'进展',direction_changed:'改向',blocked:'受阻',completed:'完成',cancel:'取消'}
 // Reading one task's own material is a separate, deliberate act: it is asked for
 // per task, confirmed in the browser, and a revoked window stays unreadable.
 async function showTaskDetail(task,card){
@@ -74,6 +75,7 @@ function renderTeam(team){
    '尝试 '+(t.attempt??0)+' 次 · 失败 '+(t.failures??0)+' 次'+(t.retry_at?' · 计划重试 '+format(t.retry_at):''),
    (t.steps??0)+' 步 · '+(t.tokensReported?(t.tokens??0)+' Token':'Token 未上报（0 表示未测量，不代表没有消耗）')+' · 报告 '+(t.reports??0)+' 条 · 证据 '+(t.evidence??0)+' 条',
    t.leaseExpires?'发言租约到 '+format(t.leaseExpires):'当前没有发言租约',
+   t.waitingFor?'有 '+t.waitingFor+' 个问题等它回答':'没有待它回答的问题',
    t.dependsOn?'依赖 '+t.dependsOn+' 个任务':'无依赖']
   const card=el('div',null,'card'),buttons=el('div',null,'actions')
   if(['ready','running','waiting'].includes(t.state))buttons.append(button('追加提示',()=>{const message=window.prompt('给这个任务追加一条提示');if(!message)return Promise.resolve();return action('/api/yoyo/team',{id:t.id,action:'steer',message},'提示已排队，在执行者下一个边界送达')}))
@@ -82,6 +84,18 @@ function renderTeam(team){
   buttons.append(button('查看资料',()=>showTaskDetail(t,card)))
   card.append(el('div',facts.join('\n'),'text-block'))
   if(buttons.children.length)card.append(buttons)
+  root.append(card)
+ }
+ // Same subject, one timeline: what kind of event moved between which branches,
+ // when it was handed over, and which question is still unanswered. No bodies.
+ if(Array.isArray(team.timeline)&&team.timeline.length){
+  const card=el('div',null,'card')
+  card.append(el('div','最近事件（同一主体的分支交流：类型 / 来自 → 去往 / 时间 / 送达 / 是否待答）','text-block'))
+  const lines=team.timeline.slice(0,20).map(e=>[eventLabels[e.kind]||e.kind,
+   (e.from?('#'+String(e.from).slice(0,8)):'主体')+' → '+(e.to?('#'+String(e.to).slice(0,8)):'全部相关分支'),
+   format(e.at),(e.delivered??0)+' 次',
+   e.openQuestion?'待回答':(e.kind==='question'?'已回答':'-')].join(' · '))
+  card.append(el('div',lines.join('\n'),'text-block'))
   root.append(card)
  }
 }

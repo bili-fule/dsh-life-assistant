@@ -10,7 +10,7 @@
 
 当前状态：`npm test` 共 238 项，`npm run check` 通过；生产运行的是 0.25.0（见 [部署验收记录](deployment-025-2026-10-21.md)），本文描述的是仓库里的开发版。
 
-<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=252 -->
+<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=253 -->
 
 ## 1. 动机计划 §12
 

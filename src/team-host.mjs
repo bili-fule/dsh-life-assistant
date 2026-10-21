@@ -263,8 +263,20 @@ export class TeamHost {
     return {concurrency:{running:this.coordinator.running.size,max:this.coordinator.maxConcurrent},tasks:tasks.map(row=>{
       const depends=this.db.prepare('SELECT depends_on FROM yoyo_team_tasks WHERE id=?').get(row.id).depends_on
       const task={...row,tokensReported:row.tokensReported===1,dependsOn:depends?JSON.parse(depends).length:0}
-      return {...task,waitReason:this.waitReason(task)}
-    })}
+      return {...task,waitReason:this.waitReason(task),waitingFor:this.db.prepare("SELECT count(*) n FROM yoyo_team_events q WHERE q.kind='question' AND q.to_task=? AND NOT EXISTS(SELECT 1 FROM yoyo_team_events a WHERE a.kind='answer' AND a.ref=q.event_id)").get(row.id).n}
+    }),timeline:this.timeline()}
+  }
+  // Timeline for the admin page: who sent what kind of event to whom, when it was
+  // delivered, and whether it is still unanswered. Kinds, ids and timing only -
+  // goals, reports and window content stay behind team_inspect.
+  timeline({limit=30}={}) {
+    if(!Number.isInteger(limit)||limit<1||limit>100)throw Error('事件条数无效')
+    return this.db.prepare(`SELECT e.id,e.event_id,e.kind,e.from_task,e.to_task,e.activity_id,e.created_at,
+      e.delivered_count,e.expires_at,
+      (e.kind='question' AND NOT EXISTS(SELECT 1 FROM yoyo_team_events a WHERE a.kind='answer' AND a.ref=e.event_id)) open
+      FROM yoyo_team_events e ORDER BY e.id DESC LIMIT ?`).all(limit)
+      .map(row=>({eventId:row.event_id,kind:row.kind,from:row.from_task,to:row.to_task,activityId:row.activity_id,
+        at:row.created_at,delivered:row.delivered_count,openQuestion:!!row.open,expiresAt:row.expires_at}))
   }
   // A small, content-free digest for the subject's dynamic state: enough to know
   // that branches are alive and that someone is waiting for an answer, without

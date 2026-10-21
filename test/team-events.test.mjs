@@ -221,6 +221,27 @@ test('a contradiction gets a recorded ruling instead of a silent overwrite',t=>{
   assert.throws(()=>tasks.decideSource(view.id,{source:'https://example.com/a',decision:'refuted',chosenBody:'x',reason:'y'}),/采纳内容/)
 })
 
+test('the admin timeline shows what moved between branches without their text',t=>{
+  const {tasks,view,create,social}=fixture(t)
+  const host=new TeamHost(social,{})
+  t.after(()=>host.stop())
+  const reader=create('读群'),sibling=create('查证')
+  tasks.claim(reader.id,'worker-reader');tasks.claim(sibling.id,'worker-sibling')
+  tasks.evidence('worker-reader',{kind:'finding',body:'CANARY 群里说了新玩法',source:'群消息2'})
+  const asked=tasks.ask(reader.id,{toTask:sibling.id,question:'CANARY 那个游戏叫什么',viewId:view.id})
+  const status=host.status()
+  const question=status.timeline.find(event=>event.kind==='question')
+  assert.ok(question,'the timeline records the question')
+  assert.equal(question.openQuestion,true)
+  assert.equal(question.to,sibling.id)
+  assert.equal(JSON.stringify(status).includes('CANARY'),false,'the panel never carries event or report text')
+  assert.equal(status.tasks.find(task=>task.id===sibling.id).waitingFor,1,'the panel shows who is waiting for an answer')
+  tasks.answer(sibling.id,{questionEventId:asked.eventId,answer:'叫双人地牢',viewId:view.id})
+  const after=host.status()
+  assert.equal(after.timeline.find(event=>event.eventId===asked.eventId).openQuestion,false)
+  assert.equal(after.tasks.find(task=>task.id===sibling.id).waitingFor,0)
+})
+
 test('a branch waits in the host for a sibling instead of finishing early',async t=>{
   const {tasks,view,create}=fixture(t)
   const asker=create('读群'),sibling=create('查证')

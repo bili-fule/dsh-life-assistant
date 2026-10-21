@@ -63,7 +63,7 @@
 | 过期 | `expires_at` 到期后不再投递（迟到的提问不会被当成新任务） |
 | 同级问答 | `team_ask` / `team_answer`（主体与 `peer`/`chat`/`reader` 分支都可）；答复的 `ref` 指向原问题 `event_id`，不经过主 Agent 转述 |
 | 自动事件 | 报告 → `progress`；证据 `finding` → `finding`；任务结束 → `completed`；取消 → `cancel`；主体改目标 → `direction_changed`（`announceDirection`，按 revision 去重，运行中的分支在下一个边界收到） |
-| 主体侧可观察 | `team_events`（事件流 + 仍未回答的问题）、`team_sources`（含裁定）、`state().team`（并发数、分支状态与等待原因、未答问题数、最近 5 条事件元数据，不含正文） |
+| 主体侧可观察 | `team_events`（事件流 + 仍未回答的问题）、`team_sources`（含裁定）、`state().team`（并发数、分支状态与等待原因、未答问题数、最近 5 条事件元数据，不含正文）；管理页「团队编排」另有一条事件时间线（类型、收发方、时间、送达次数、是否待答）与每个任务的「有几个问题等它回答」，同样不含正文 |
 | 冲突裁定 | `team_source_decide` 追加 `verified / refuted / unresolved` 与理由，原始说法全部保留，裁定写成 `finding` 事件送到运行中的分支；只有能看见该来源的视图才能裁 |
 
 **三个不同状态**：事件已写入（行存在）、已送达（游标推进、`delivered_count` 增加）、据此行动（分支自己的下一份 report/evidence）。控制台与状态分别显示，不把「写了」当成「收到」。
