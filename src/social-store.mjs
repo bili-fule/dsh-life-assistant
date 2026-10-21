@@ -1,7 +1,7 @@
 import { randomUUID,createHash } from 'node:crypto'
 import { identityPart,targetKey,sourceScopes,mayRead,assertPublish,boundedText,PUBLIC_SCOPE } from './scope.mjs'
 
-const NARRATIVE_TOOLS=new Set(['yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence','yoyo_activity','yoyo_plan','yoyo_self','yoyo_concern','yoyo_feedback','yoyo_learning','yoyo_sleep','yoyo_wait','self_options','self_choose','self_appraise','self_preferences','memory_recall','memory_inspect','memory_propose','memory_retract'])
+const NARRATIVE_TOOLS=new Set(['yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence','yoyo_activity','yoyo_plan','yoyo_self','yoyo_concern','yoyo_feedback','yoyo_learning','yoyo_sleep','yoyo_wait','self_options','self_choose','self_appraise','self_preferences','memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments'])
 function evidenceText(row){
   const raw=row.result_text??row.text
   if(row.name?.startsWith('mcp__playwright-mcp__'))try{

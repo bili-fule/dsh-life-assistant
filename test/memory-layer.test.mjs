@@ -162,3 +162,39 @@ test('validated procedures need a real tool receipt and usage counts only when u
   assert.equal(archived.status,'archived')
   assert.equal(memory.recall(view.id,{query:'测试'}).results.length,0)
 })
+
+test('candidate segments follow gaps, topic changes and attachments without becoming memories',t=>{
+  const {data,memory,target}=fixture(t),a=target('123','电影群','group'),view=data.open(a.handle),base=Date.now()
+  const at=(text,sender,offset,extra={})=>data.ingest({target:a.handle,sender,externalId:'seg-'+offset+'-'+sender,text,receivedAt:base+offset,...extra}).id
+  at('电影里的长镜头太漂亮了','555',0)
+  at('我也喜欢那个长镜头','777',3000)
+  at('第二天再说吧','555',3600000)
+  at('明天去买菜','777',3600000+3000)
+  at('[图片]','555',3600000+6000,{segments:[{type:'image',data:{}}]})
+  const result=memory.segments(view.id,{})
+  assert.equal(result.segments[0].boundary,'window_start')
+  assert.deepEqual(result.segments[0].senders.sort(),['555','777'])
+  const reasons=result.segments.map(segment=>segment.boundary)
+  assert.ok(reasons.includes('gap'),'a long pause starts a new segment')
+  assert.ok(reasons.includes('topic_shift'),'an unrelated topic starts a new segment')
+  assert.ok(reasons.includes('attachment'),'an attachment starts a new segment')
+  assert.match(result.guidance,/候选分段/)
+  // A segment is a proposal: nothing is remembered until the subject writes it.
+  assert.equal(memory.recall(view.id).results.length,0)
+  // Segmentation needs a concrete window.
+  assert.throws(()=>memory.segments(data.publicView().id,{}),/窗口/)
+})
+
+test('a candidate segment range can be cited as evidence and stays bounded',t=>{
+  const {data,memory,target,say}=fixture(t),a=target('123'),view=data.open(a.handle)
+  const first=say(a.handle,'123','rng-1','聊到了电影'),second=say(a.handle,'123','rng-2','聊到了配乐')
+  const episode=memory.propose(view.id,{kind:'episode',title:'聊电影',what:'聊了长镜头和配乐',evidence:{range:{from:first,to:second}}})
+  assert.equal(memory.inspect(view.id,{kind:'episode',id:episode.id}).sources.length,2)
+  assert.throws(()=>memory.propose(view.id,{kind:'episode',title:'另一个',what:'x',evidence:{range:{from:first,to:first+60}}}),/分段范围/)
+  const fact=memory.propose(view.id,{kind:'claim',claimType:'fact',statement:'他喜欢电影配乐',subject:'topic:音乐',evidence:{messages:[second]},confidence:'observed'})
+  const revised=memory.propose(view.id,{kind:'claim',claim:fact.id,claimType:'fact',statement:'他喜欢电影配乐',subject:'topic:音乐',evidence:{messages:[first]},confidence:'observed'})
+  assert.equal(revised.added.length,1)
+  const recalled=memory.recall(view.id,{query:'配乐'})
+  assert.equal(recalled.results.filter(item=>item.kind==='claim').length,1)
+  assert.equal(recalled.results.find(item=>item.kind==='claim').support,2)
+})

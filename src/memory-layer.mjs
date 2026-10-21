@@ -6,7 +6,7 @@ import { boundedText,mayRead,sourceScopes } from './scope.mjs'
 // experience can never be re-derived from the same messages, and a forwarded
 // name can never become an identity. Nothing here decides what the subject
 // feels; it only records what happened and where it came from.
-export const MEMORY_TOOLS=['memory_recall','memory_inspect','memory_propose','memory_retract']
+export const MEMORY_TOOLS=['memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments']
 export const MEMORY_POLICY=`你可以用 memory_recall 按线索想起当前范围内相关的经历与主张，用 memory_inspect 核对原始依据，用 memory_propose 提交带来源的经历或主张，用 memory_retract 淡出、归档、撤回或按要求忘记。概括不是新的事实来源：同一条原文反复引用仍然只算一个来源，推断不会被重复回忆升级为观察。转发里的姓名和引自他人的说法不能当作本人身份或本人偏好；同昵称的两个人按平台、账号和真实发送者编号区分。执行者说查过但没有工具依据的，只能记成报告。被撤回或要求忘记的来源不能再重新形成记忆。`
 
 const CLAIM_KINDS=['fact','knowledge','preference','impression','communication','procedure','self','simulation']
@@ -29,7 +29,7 @@ function terms(query) {
   for(const word of String(query).toLowerCase().split(/[\s\p{P}\p{S}]+/u).filter(word=>word.length>1)){
     found.add(word)
     if(word.length>=4&&/[\u4e00-\u9fff]/.test(word))
-      for(let index=0;index+2<=word.length&&found.size<24;index+=2)found.add(word.slice(index,index+2))
+      for(let index=0;index+2<=word.length&&found.size<24;index++)found.add(word.slice(index,index+2))
   }
   return [...found].slice(0,24)
 }
@@ -69,7 +69,17 @@ export class MemoryLayer {
   // ---- evidence ----------------------------------------------------------
   evidence(view,args={}) {
     const refs=[]
-    for(const id of args.messages??[]){
+    const messages=[...(args.messages??[])]
+    // A candidate segment can be cited as a range: the host expands it to the
+    // actual messages so the model never has to list forty ids by hand.
+    if(args.range!==undefined&&args.range!==null){
+      const {from,to}=args.range
+      if(!Number.isSafeInteger(from)||!Number.isSafeInteger(to)||from<1||to<from||to-from>39)throw Error('分段范围无效（最多 40 条）')
+      if(!view.focus)throw Error('按范围引用来源需要绑定一个窗口')
+      for(const row of this.db.prepare('SELECT id FROM yoyo_events WHERE target=? AND id>=? AND id<=? ORDER BY id LIMIT 40').all(view.focus,from,to))messages.push(row.id)
+      if(!messages.length)throw Error('该范围内没有可引用的原文')
+    }
+    for(const id of messages){
       if(!Number.isSafeInteger(id)||id<1)throw Error('消息来源编号无效')
       const row=this.db.prepare('SELECT id,scope,sender,target,segments,kind,received_at,text FROM yoyo_events WHERE id=?').get(id)
       if(!row||!mayRead(view,row.scope))throw Error('消息来源不在当前资料范围')
@@ -235,6 +245,7 @@ export class MemoryLayer {
     const wanted=terms(query)
     const personFilter=args.person?String(args.person):null
     const uses=new Map(this.db.prepare('SELECT kind,ref_id,count(*) n FROM yoyo_memory_uses GROUP BY kind,ref_id').all().map(row=>[row.kind+':'+row.ref_id,row.n]))
+    const seen=new Set()
     const episodes=this.db.prepare(`SELECT e.* FROM yoyo_memory_episodes e WHERE e.status IN ('active','faded') AND ${this.visible('e')} ORDER BY e.updated_at DESC LIMIT 60`)
       .all(JSON.stringify(view.scopes)).filter(row=>!args.episode||row.id===args.episode)
       .map(row=>({row,body:JSON.parse(row.body)}))
@@ -249,6 +260,12 @@ export class MemoryLayer {
     const claims=this.db.prepare(`SELECT c.* FROM yoyo_memory_claims c WHERE c.status IN ('active','faded') AND ${this.visible('c')} ORDER BY c.updated_at DESC LIMIT 80`)
       .all(JSON.stringify(view.scopes))
       .filter(row=>args.includeSimulation===true||row.kind!=='simulation')
+      .filter(row=>{
+        // One topic should not fill the result twice with the same statement.
+        const key=row.subject+'|'+row.kind+'|'+keyOf(row.statement)
+        if(seen.has(key))return false
+        seen.add(key);return true
+      })
       .filter(row=>!personFilter||row.subject===personFilter||row.subject.endsWith(':'+personFilter))
       .filter(row=>!args.episode||row.episode_id===args.episode)
       .map(row=>{
@@ -279,6 +296,56 @@ export class MemoryLayer {
       -(row.status==='faded'?1:0)
       -(Date.now()-(row.updated_at??0)>30*86400000?0.3:0)
     return {value:Math.round(value*100)/100,matched}
+  }
+
+  // ---- candidate segmentation --------------------------------------------
+  // A segment is a proposal, not a memory. The host only groups consecutive
+  // messages by observable boundaries; the subject still decides what an
+  // experience meant and what is worth remembering.
+  segments(viewId,{after,before=Number.MAX_SAFE_INTEGER,limit=8,gapMs}={}) {
+    const view=this.data.view(viewId)
+    if(!view.focus)throw Error('分段需要绑定一个聊天窗口')
+    if(!Number.isInteger(limit)||limit<1||limit>12)throw Error('分段数量无效')
+    const gap=Number.isFinite(gapMs)?Math.max(60000,Math.min(gapMs,86400000)):600000
+    const start=Number.isSafeInteger(after)&&after>=0?after:0
+    const rows=this.db.prepare("SELECT id,sender,kind,text,segments,received_at FROM yoyo_events WHERE target=? AND id>? AND id<=? ORDER BY id LIMIT 400")
+      .all(view.focus,start,before)
+    const groups=[]
+    let current=null,lastAt=0,previous=new Set()
+    for(const row of rows){
+      const terms=this.termsOf(row.text)
+      const attachment=JSON.parse(row.segments).some(segment=>['forward','file','image'].includes(segment.type))
+      let boundary=null
+      if(!current)boundary='window_start'
+      else if(row.received_at-lastAt>gap)boundary='gap'
+      else if(attachment)boundary='attachment'
+      else if(current.count>=40)boundary='length'
+      else if(current.count>=1&&previous.size>=4&&terms.size>=4&&this.overlap(previous,terms)<0.02)boundary='topic_shift'
+      if(!current||boundary){
+        current={from:row.id,to:row.id,count:0,boundary,startedAt:row.received_at,senders:new Set(),preview:row.text.slice(0,80)}
+        groups.push(current)
+      }
+      current.to=row.id;current.count++;current.endedAt=row.received_at
+      if(row.kind!=='outgoing')current.senders.add(String(row.sender))
+      previous=terms;lastAt=row.received_at
+    }
+    const segments=groups.slice(-limit).map(group=>({...group,senders:[...group.senders]}))
+    return {window:view.focus,scopes:view.scopes,segments,
+      guidance:segments.length?'这些只是候选分段：真实的开始、转折和结束还要你自己判断。值得记住的用 memory_propose 写成经历，并把你当时的期待与评价写进去；不值得记的可以直接放过。':'这个范围没有可分段的新消息。没有新经历时不必整理。'}
+  }
+  termsOf(text) {
+    const found=new Set()
+    for(const word of String(text??'').toLowerCase().split(/[\s\p{P}\p{S}]+/u).filter(word=>word.length>1)){
+      if(/[\u4e00-\u9fff]/.test(word)){for(let index=0;index+2<=word.length&&found.size<200;index++)found.add(word.slice(index,index+2))}
+      else found.add(word)
+    }
+    return found
+  }
+  overlap(left,right) {
+    if(!left.size||!right.size)return 0
+    let shared=0
+    for(const term of right)if(left.has(term))shared++
+    return shared/(left.size+right.size-shared)
   }
 
   // ---- inspecting --------------------------------------------------------
@@ -422,13 +489,16 @@ export class MemoryLayer {
         claimType:{type:'string',enum:CLAIM_KINDS},statement:{type:'string',maxLength:1200},context:{type:'string',maxLength:300},
         subject:{type:'string',maxLength:200},person:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}}}},
         confidence:{type:'string',enum:CONFIDENCE},episode:{type:'integer',minimum:1},claim:{type:'integer',minimum:1},
-        evidence:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}},receipts:{type:'array',maxItems:10,items:{type:'string',maxLength:500}},documents:{type:'array',maxItems:10,items:{type:'integer',minimum:1}}}},
+        evidence:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}},receipts:{type:'array',maxItems:10,items:{type:'string',maxLength:500}},documents:{type:'array',maxItems:10,items:{type:'integer',minimum:1}},range:{type:'object',additionalProperties:false,properties:{from:{type:'integer',minimum:1},to:{type:'integer',minimum:1}}}}},
         counter:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}},receipts:{type:'array',maxItems:10,items:{type:'string',maxLength:500}},documents:{type:'array',maxItems:10,items:{type:'integer',minimum:1}}}}},
       ['kind'],async(args,exec,key,view)=>this.propose(view.id,args))
     define('memory_retract','淡出、归档、撤回或按要求忘记一条记忆。撤回会沿派生关系传递到引用它的主张；忘记还会阻止用同一原文重新形成记忆。原文删除属于单独的删除流程。',
       {kind:{type:'string',enum:['episode','claim']},id:{type:'integer',minimum:1},
         mode:{type:'string',enum:['fade','archive','retract','forget']},reason:{type:'string',maxLength:300}},
       ['kind','id','mode','reason'],async(args,exec,key,view)=>this.retract(view.id,args))
+    define('memory_segments','把一个窗口的新消息按时间间隔、附件和话题变化切成候选分段，返回每段起止、参与者、边界原因和开头预览。分段只是候选，不是记忆：值得记住的要你自己写成经历。',
+      {after:{type:'integer',minimum:0},before:{type:'integer',minimum:1},limit:{type:'integer',minimum:1,maximum:12},gapMs:{type:'integer',minimum:60000,maximum:86400000}},
+      [],async(args,exec,key,view)=>this.segments(view.id,args))
   }
 }
 function hashIdentity(target,sender) {
