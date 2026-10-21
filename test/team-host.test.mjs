@@ -18,7 +18,10 @@ function fixture(t,config={}){
   const context={args:{text:'hello',replyId:'input-1'},view,agentId:'worker',taskId:task.id,signal:new AbortController().signal,authorize:()=>host.tasks.authorizeSend('worker',view.focus,1)}
   store.set('yoyo_settings',{observeOnly:false,dailySteps:100})
   t.after(async()=>{await host.stop();store.close();rmSync(root,{recursive:true,force:true})})
-  return {store,data,social,host,view,task,context}
+  // Another platform in the same database is a genuinely independent subject:
+  // a view opened from it carries only ['public', its own scope].
+  const wechat=(peer='alice')=>{const t=data.discover({platform:'wechat',account:'bound',kind:'owner',peer});return data.approve(t.handle,true)}
+  return {store,data,social,host,view,task,context,wechat}
 }
 test('worker delivery persists a real receipt and duplicate logical replies do not resend',async t=>{
   const {host,social,task,context,data}=fixture(t);let sent=0
@@ -235,13 +238,16 @@ test('the admin page renders the team panel from the operational status only',t=
   assert.match(script,/window\.confirm\('这会显示该任务的目的、报告与证据/)
   assert.equal(/goal|PRIVATE|报告正文.*innerHTML/.test(script.split('function renderTeam')[1].split('function renderYoyo')[0].replace(/任务目的与报告正文默认不展示/,'')),false,'the panel never renders task text on its own')
 })
-test('cancellation stops steering and a foreign window cannot steer or read the board',t=>{
-  const {host,view,task,data}=fixture(t),other=data.discover({platform:'qq',account:'1',kind:'private',peer:'9'})
-  data.approve(other.handle,true)
-  const foreign=data.open(other.handle)
+test('cancellation stops steering and another subject cannot steer or read the board',t=>{
+  const {host,view,task,data,wechat}=fixture(t),foreign=data.open(wechat('9').handle)
   host.tasks.claim(task.id,'worker')
+  host.tasks.evidence('worker',{kind:'finding',body:'同主体的另一个窗口也读得到'})
   assert.throws(()=>host.tasks.steer(foreign.id,{taskId:task.id,message:'越范围'}),/范围/)
   assert.throws(()=>host.tasks.board(foreign.id,{taskId:task.id}),/范围/)
+  // The same subject's other window keeps its reading rights; the task is still fenced.
+  const sameOwner=data.discover({platform:'qq',account:'1',kind:'private',peer:'8'})
+  data.approve(sameOwner.handle,true)
+  assert.equal(host.tasks.board(data.open(sameOwner.handle).id,{taskId:task.id}).length,1)
   host.coordinator.cancel(task.id,view.id)
   assert.throws(()=>host.tasks.steer(view.id,{taskId:task.id,message:'已经取消'}),/进行中/)
 })
@@ -325,7 +331,7 @@ test('an accepted memory candidate becomes a worker report, never an observation
   assert.equal(data.db.prepare('SELECT count(*) n FROM yoyo_memory_episodes').get().n,0)
 })
 test('a delegated task starts with a scoped pack of memory summaries',async t=>{
-  const {host,view,data}=fixture(t),tools={}
+  const {host,view,data,wechat}=fixture(t),tools={}
   host.memory=new MemoryLayer(data)
   host.register((name,description,properties,required,execute)=>{tools[name]={properties,execute}})
   host.coordinator.start=id=>({started:true,id})
@@ -340,11 +346,9 @@ test('a delegated task starts with a scoped pack of memory summaries',async t=>{
   // The worker gets the summaries through the bridge, and only its own task's pack.
   host.tasks.claim(delegated.id,'worker')
   assert.equal((await host.coordinator.tools.pack({agentId:'worker',view})).pack.items.length,1)
-  // Without a clue there is no pack, and a pack stays out of other windows.
+  // Without a clue there is no pack, and a pack stays out of another subject.
   const plain=await tools.team_delegate.execute({concernId:concern.id,role:'reader',goal:'再读一遍',rationale:'复核'},{},'pack-key-2',view)
   assert.equal(plain.memoryPack,undefined)
   assert.equal(host.tasks.memoryPack(plain.id,view.id),null)
-  const other=data.discover({platform:'qq',account:'1',kind:'private',peer:'3'})
-  data.approve(other.handle,true)
-  assert.throws(()=>host.tasks.memoryPack(delegated.id,data.open(other.handle).id),/范围/)
+  assert.throws(()=>host.tasks.memoryPack(delegated.id,data.open(wechat('3').handle).id),/范围/)
 })

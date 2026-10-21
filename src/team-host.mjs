@@ -224,13 +224,13 @@ export class TeamHost {
       throw error
     }
   }
-  mainEnqueue(view,key) {
-    const lease=this.db.prepare('SELECT * FROM yoyo_team_speakers WHERE target=?').get(view.focus)
+  mainEnqueue(view,key,target=view.focus) {
+    const lease=this.db.prepare('SELECT * FROM yoyo_team_speakers WHERE target=?').get(target)
     if(lease&&lease.expires_at>Date.now()&&lease.agent_id!==this.social.sessionId)throw Error('聊天执行者持有发言权，请先 team_takeover')
-    const generation=lease&&lease.expires_at>Date.now()?lease.generation:this.tasks.takeover(view.id,this.social.sessionId,Date.now()+900000)
-    this.tasks.authorizeSend(this.social.sessionId,view.focus,generation)
+    const generation=lease&&lease.expires_at>Date.now()?lease.generation:this.tasks.takeover(view.id,this.social.sessionId,Date.now()+900000,target)
+    this.tasks.authorizeSend(this.social.sessionId,target,generation)
     const remoteKey='yoyo-'+createHash('sha256').update(key).digest('hex').slice(0,24)
-    this.db.prepare('INSERT OR IGNORE INTO yoyo_team_main_outbox VALUES(?,?,?)').run(remoteKey,view.focus,generation)
+    this.db.prepare('INSERT OR IGNORE INTO yoyo_team_main_outbox VALUES(?,?,?)').run(remoteKey,target,generation)
   }
   mainDispatch(key) {
     const row=this.db.prepare('SELECT * FROM yoyo_team_main_outbox WHERE key=?').get(key)

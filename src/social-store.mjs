@@ -1,5 +1,5 @@
 import { randomUUID,createHash } from 'node:crypto'
-import { identityPart,targetKey,sourceScopes,mayRead,assertPublish,boundedText,PUBLIC_SCOPE } from './scope.mjs'
+import { identityPart,targetKey,sourceScopes,mayRead,assertOutbound,boundedText,PUBLIC_SCOPE } from './scope.mjs'
 import { readChunk } from './chunk.mjs'
 
 const NARRATIVE_TOOLS=new Set(['yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence','yoyo_activity','yoyo_plan','yoyo_self','yoyo_concern','yoyo_feedback','yoyo_learning','yoyo_sleep','yoyo_wait','self_options','self_choose','self_appraise','self_preferences','memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments'])
@@ -45,6 +45,8 @@ export class SocialStore {
       CREATE TABLE IF NOT EXISTS yoyo_concern_feedback(id INTEGER PRIMARY KEY,concern_id INTEGER NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_concern_wakes(id INTEGER PRIMARY KEY,concern_id INTEGER NOT NULL,scopes TEXT NOT NULL,
         reason TEXT NOT NULL DEFAULT 'review',outcome TEXT,created_at INTEGER NOT NULL,resolved_at INTEGER);
+      CREATE TABLE IF NOT EXISTS yoyo_activities(activity_id TEXT PRIMARY KEY,revision INTEGER NOT NULL DEFAULT 1,goal TEXT NOT NULL,why TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT 'active',step TEXT NOT NULL DEFAULT '',done_when TEXT NOT NULL DEFAULT '',stop_when TEXT NOT NULL DEFAULT '',review_at INTEGER,origin TEXT NOT NULL DEFAULT '',scopes TEXT NOT NULL,branch TEXT,owner_version INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_activity_links(activity_id TEXT NOT NULL,kind TEXT NOT NULL,ref TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(activity_id,kind,ref));
       INSERT OR IGNORE INTO yoyo_activity(id,updated_at) VALUES(1,0);
     `)
     if(!this.db.prepare('PRAGMA table_info(yoyo_outbox)').all().some(c=>c.name==='content'))this.db.exec('ALTER TABLE yoyo_outbox ADD COLUMN content TEXT')
@@ -91,9 +93,35 @@ export class SocialStore {
     this.store.audit('yoyo.attention_mute',{target:handle,muted})
     return {target:handle,muted,scope:'agent_attention',retained:true}
   }
+  // Reading rights belong to the subject, not to the window it is looking at. A
+  // window view therefore carries every authorized scope of the same platform
+  // plus the focus that decides which recipient a tool acts on. Another platform
+  // in the same database stays outside: that is an independent subject.
+  subjectScopes(platform=null) {
+    const scopes=[PUBLIC_SCOPE]
+    for(const row of this.db.prepare('SELECT scope,platform FROM yoyo_targets WHERE approved=1 ORDER BY handle').all())if(!platform||row.platform===platform)scopes.push(row.scope)
+    return [...new Set(scopes)]
+  }
+  platformOf(scope) {
+    if(scope===PUBLIC_SCOPE)return PUBLIC_SCOPE
+    return this.db.prepare('SELECT platform FROM yoyo_targets WHERE scope=? AND approved=1').get(scope)?.platform??null
+  }
+  // A record written while looking at one window belongs to the whole subject: its
+  // scope set is the subject's current set for that platform, not the window's
+  // snapshot, so it stays readable after a window switch or a new authorisation.
+  // A public-only view (research, browsing) keeps writing public records.
+  recordScopes(view) {
+    const platform=view.focus?this.platformOf(view.focus):null
+    return sourceScopes(platform?this.subjectScopes(platform):view.scopes)
+  }
+  assertOutbound(scopes,target) {
+    const t=this.target(target,{approved:true})
+    assertOutbound(scopes,t.scope,scope=>this.platformOf(scope))
+    return t
+  }
   open(handle) {
     const t=this.target(handle,{approved:true})
-    const view={id:randomUUID(),focus:t.handle,scopes:[PUBLIC_SCOPE,t.scope],authorizationVersion:t.version,createdAt:Date.now()}
+    const view={id:randomUUID(),focus:t.handle,scopes:this.subjectScopes(t.platform),authorizationVersion:t.version,createdAt:Date.now()}
     this.db.prepare('INSERT INTO yoyo_views VALUES(?,?,?,?,?)').run(view.id,view.focus,JSON.stringify(view.scopes),view.authorizationVersion,view.createdAt)
     return view
   }
@@ -158,8 +186,8 @@ export class SocialStore {
       this.db.prepare('INSERT INTO yoyo_attention_policies(target,last_at) VALUES(?,?) ON CONFLICT(target) DO UPDATE SET last_at=max(last_at,excluded.last_at)').run(b.handle,now)
     }
   }
-  planningView() {
-    const scopes=[PUBLIC_SCOPE,...this.db.prepare('SELECT scope FROM yoyo_targets WHERE approved=1 ORDER BY handle').all().map(t=>t.scope)]
+  planningView(platform=null) {
+    const scopes=this.subjectScopes(platform)
     const view={id:randomUUID(),focus:null,scopes,authorizationVersion:null,createdAt:Date.now()}
     this.db.prepare('INSERT INTO yoyo_views VALUES(?,?,?,?,?)').run(view.id,null,JSON.stringify(view.scopes),null,view.createdAt)
     return view
@@ -168,8 +196,14 @@ export class SocialStore {
     const row=this.db.prepare('SELECT * FROM yoyo_views WHERE id=?').get(id)
     if(!row)throw Error('资料视图不存在')
     if(row.focus){const t=this.target(row.focus,{approved:true});if(t.version!==row.authorization_version)throw Error('资料视图授权已失效')}
-    const scopes=JSON.parse(row.scopes)
-    for(const scope of scopes)if(scope!==PUBLIC_SCOPE&&!this.db.prepare('SELECT 1 FROM yoyo_targets WHERE scope=? AND approved=1').get(scope))throw Error('资料视图授权已失效')
+    const stored=JSON.parse(row.scopes)
+    for(const scope of stored)if(scope!==PUBLIC_SCOPE&&!this.db.prepare('SELECT 1 FROM yoyo_targets WHERE scope=? AND approved=1').get(scope))throw Error('资料视图授权已失效')
+    // A view is a position inside the subject, not a frozen copy of its rights:
+    // a window authorized after this view was created is readable from the same
+    // position. Public-only views stay public.
+    const platforms=new Set()
+    for(const scope of stored)if(scope!==PUBLIC_SCOPE){const found=this.db.prepare('SELECT platform FROM yoyo_targets WHERE scope=?').get(scope);if(found)platforms.add(found.platform)}
+    const scopes=platforms.size?[...new Set([...stored,...[...platforms].flatMap(platform=>this.subjectScopes(platform))])].sort():stored
     return {id:row.id,focus:row.focus,scopes,authorizationVersion:row.authorization_version,createdAt:row.created_at}
   }
   read(viewId,{after,before=Number.MAX_SAFE_INTEGER,limit=30,query=''}={}) {
@@ -193,14 +227,65 @@ export class SocialStore {
     if(viewId&&!scopes.every(s=>mayRead(this.view(viewId),s)))return {revision:r.revision,state:r.state,body:{},wake_at:r.wake_at,restricted:true}
     return {...r,body:JSON.parse(r.body),scopes}
   }
-  saveActivity(viewId,{state='idle',description='',next='',wakeAt=null}={}) {
+  saveActivity(viewId,{state='idle',description='',next='',wakeAt=null,activityId=null}={}) {
     const view=this.view(viewId)
     if(!['idle','working','sleeping','waiting','paused'].includes(state)||typeof description!=='string'||description.length>1000||typeof next!=='string'||next.length>1000||wakeAt!==null&&(!Number.isSafeInteger(wakeAt)||wakeAt<Date.now()||wakeAt>Date.now()+30*86400000))throw Error('活动或唤醒时间无效')
-    this.db.prepare('UPDATE yoyo_activity SET revision=revision+1,state=?,body=?,scopes=?,wake_at=?,updated_at=? WHERE id=1').run(state,JSON.stringify({description,next,viewId}),JSON.stringify(view.scopes),wakeAt,Date.now())
-    this.db.prepare('INSERT INTO yoyo_activity_log(state,body,scopes,created_at) VALUES(?,?,?,?)').run(state,JSON.stringify({description,next}),JSON.stringify(view.scopes),Date.now())
+    // The pointer keeps the activity it belongs to, so a restart resumes the same
+    // goal instead of an anonymous "whatever was on screen".
+    const linked=activityId??this.store.get('yoyo_current_activity')??null
+    this.db.prepare('UPDATE yoyo_activity SET revision=revision+1,state=?,body=?,scopes=?,wake_at=?,updated_at=? WHERE id=1').run(state,JSON.stringify({description,next,viewId,activityId:linked}),JSON.stringify(this.recordScopes(view)),wakeAt,Date.now())
+    this.db.prepare('INSERT INTO yoyo_activity_log(state,body,scopes,created_at) VALUES(?,?,?,?)').run(state,JSON.stringify({description,next}),JSON.stringify(this.recordScopes(view)),Date.now())
     return this.activity(viewId)
   }
   activityHistory(viewId){const view=this.view(viewId);return this.db.prepare("SELECT state,body,created_at FROM yoyo_activity_log l WHERE NOT EXISTS(SELECT 1 FROM json_each(l.scopes) s WHERE s.value NOT IN(SELECT value FROM json_each(?))) ORDER BY id DESC LIMIT 20").all(JSON.stringify(view.scopes)).map(r=>({...r,body:JSON.parse(r.body)}))}
+  // One index for durable goals. Concerns, plans and delegated tasks stay the
+  // records they already are and attach here, instead of growing a fourth
+  // competing truth. Each record keeps its source scopes, so nothing becomes public.
+  activities(viewId,{state=null,limit=12}={}) {
+    const view=this.view(viewId)
+    if(state!==null&&!['proposed','active','waiting','paused','done','abandoned','blocked'].includes(state))throw Error('活动状态无效')
+    if(!Number.isInteger(limit)||limit<1||limit>30)throw Error('活动数量无效')
+    return this.db.prepare(`SELECT * FROM yoyo_activities a WHERE (? IS NULL OR a.state=?) AND NOT EXISTS(SELECT 1 FROM json_each(a.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?))) ORDER BY CASE a.state WHEN 'active' THEN 0 WHEN 'waiting' THEN 1 WHEN 'blocked' THEN 2 WHEN 'paused' THEN 3 ELSE 4 END,a.updated_at DESC LIMIT ?`)
+      .all(state,state,JSON.stringify(view.scopes),limit)
+      .map(r=>({activityId:r.activity_id,revision:r.revision,goal:r.goal,why:r.why,state:r.state,step:r.step,doneWhen:r.done_when,stopWhen:r.stop_when,reviewAt:r.review_at,origin:r.origin,branch:r.branch,ownerVersion:r.owner_version,createdAt:r.created_at,updatedAt:r.updated_at,links:this.activityLinks(r.activity_id)}))
+  }
+  activityLinks(activityId) {return this.db.prepare('SELECT kind,ref,created_at FROM yoyo_activity_links WHERE activity_id=? ORDER BY created_at').all(activityId).map(r=>({kind:r.kind,ref:r.ref,at:r.created_at}))}
+  linkActivity(activityId,kind,ref) {
+    if(typeof kind!=='string'||!['concern','plan','task','memory_intent','receipt','document'].includes(kind)||typeof ref!=='string'||!ref||ref.length>200)throw Error('关联类型无效')
+    this.db.prepare('INSERT OR IGNORE INTO yoyo_activity_links(activity_id,kind,ref,created_at) VALUES(?,?,?,?)').run(activityId,kind,String(ref),Date.now())
+    return this.activityLinks(activityId)
+  }
+  startActivity(viewId,{goal,why='',step='',doneWhen='',stopWhen='',reviewAt=null,origin=''}) {
+    const view=this.view(viewId)
+    goal=boundedText(goal,300,'活动目标')
+    for(const [value,max,label] of [[why,1500,'起因'],[step,1500,'当前步骤'],[doneWhen,1500,'完成条件'],[stopWhen,1500,'停止条件'],[origin,1500,'原始证据']])if(typeof value!=='string'||value.length>max)throw Error(label+'无效')
+    if(reviewAt!==null&&(!Number.isSafeInteger(reviewAt)||reviewAt<0))throw Error('复查时间无效')
+    const scopes=JSON.stringify(this.recordScopes(view))
+    // The same goal opened twice is one activity, not two parallel truths.
+    const existing=this.db.prepare("SELECT activity_id FROM yoyo_activities WHERE goal=? AND state IN ('proposed','active','waiting','paused','blocked') AND scopes=?").get(goal,scopes)
+    if(existing)return {activityId:existing.activity_id,duplicate:true}
+    const activityId=randomUUID(),now=Date.now()
+    this.db.prepare('INSERT INTO yoyo_activities(activity_id,revision,goal,why,state,step,done_when,stop_when,review_at,origin,scopes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(activityId,1,goal,why,'active',step,doneWhen,stopWhen,reviewAt,origin,scopes,now,now)
+    this.store.set('yoyo_current_activity',activityId)
+    return {activityId,goal,state:'active',revision:1}
+  }
+  updateActivity(viewId,{activityId,revision,state,step,goal,doneWhen,stopWhen,reviewAt,origin,branch}) {
+    const view=this.view(viewId)
+    if(typeof activityId!=='string'||!activityId)throw Error('活动编号无效')
+    const row=this.db.prepare('SELECT * FROM yoyo_activities WHERE activity_id=?').get(activityId)
+    if(!row)throw Error('活动不存在')
+    if(!JSON.parse(row.scopes).every(s=>mayRead(view,s)))throw Error('活动不在当前资料范围')
+    // Concurrent writers compare revisions instead of overwriting silently.
+    if(revision!==undefined&&revision!==row.revision)throw Error('活动已更新到第 '+row.revision+' 版，请先读取再修改')
+    if(state!==undefined&&!['proposed','active','waiting','paused','done','abandoned','blocked'].includes(state))throw Error('活动状态无效')
+    const patch={state:state??row.state,step:step===undefined?row.step:boundedText(step,1500,'当前步骤'),goal:goal===undefined?row.goal:boundedText(goal,300,'活动目标'),done_when:doneWhen===undefined?row.done_when:String(doneWhen).slice(0,1500),stop_when:stopWhen===undefined?row.stop_when:String(stopWhen).slice(0,1500),review_at:reviewAt===undefined?row.review_at:reviewAt,origin:origin===undefined?row.origin:String(origin).slice(0,1500),branch:branch===undefined?row.branch:branch}
+    const owner=branch!==undefined&&branch!==row.branch?row.owner_version+1:row.owner_version
+    this.db.prepare('UPDATE yoyo_activities SET revision=revision+1,state=?,step=?,goal=?,done_when=?,stop_when=?,review_at=?,origin=?,branch=?,owner_version=?,updated_at=? WHERE activity_id=?')
+      .run(patch.state,patch.step,patch.goal,patch.done_when,patch.stop_when,patch.review_at,patch.origin,patch.branch,owner,Date.now(),activityId)
+    const updated=this.db.prepare('SELECT * FROM yoyo_activities WHERE activity_id=?').get(activityId)
+    return {activityId,revision:updated.revision,state:updated.state,step:updated.step,ownerVersion:updated.owner_version}
+  }
   concerns(viewId) {
     const view=this.view(viewId)
     const wakes=this.concernWakeStats(viewId)
@@ -219,9 +304,11 @@ export class SocialStore {
     if(args.reviewAt!==undefined&&body.reviewAt!==null&&(!Number.isSafeInteger(body.reviewAt)||body.reviewAt<=Date.now()||body.reviewAt>Date.now()+30*86400000))throw Error('复查时间无效')
     // Updating a concern from a broader view also broadens its input provenance.
     body.viewId=viewId
-    const scopes=JSON.stringify(sourceScopes(view.scopes)),now=Date.now()
+    const scopes=JSON.stringify(this.recordScopes(view)),now=Date.now()
     if(previous)this.db.prepare('UPDATE yoyo_concerns SET body=?,scopes=?,updated_at=? WHERE id=?').run(JSON.stringify(body),scopes,now,previous.id)
     const id=previous?.id??Number(this.db.prepare('INSERT INTO yoyo_concerns(body,scopes,updated_at) VALUES(?,?,?)').run(JSON.stringify(body),scopes,now).lastInsertRowid)
+    const current=this.store.get('yoyo_current_activity')
+    if(current)this.linkActivity(current,'concern',String(id))
     // Closing a concern is a decision about the concern itself, so the wakes that
     // led here are resolved instead of staying open forever.
     if(body.state==='done'||body.state==='abandoned')this.decideConcernWake(id,body.state==='done'?'done':'abandon')
@@ -261,7 +348,7 @@ export class SocialStore {
       if(receipt.name==='yoyo_job'&&JSON.parse(receipt.result_text).state!=='done')throw Error('尝试任务尚未完成')
       body.reviewConfidence='self_report'
     }
-    const scopes=JSON.stringify(sourceScopes(view.scopes)),now=Date.now()
+    const scopes=JSON.stringify(this.recordScopes(view)),now=Date.now()
     return this.store.transaction(()=>{
       let id=previous?.id
       if(id)this.db.prepare('UPDATE yoyo_learning SET body=?,scopes=?,updated_at=? WHERE id=?').run(JSON.stringify(body),scopes,now,id)
@@ -325,7 +412,7 @@ export class SocialStore {
       if(!source||['yoyo_concern','yoyo_feedback','yoyo_self','yoyo_memory','yoyo_forget','yoyo_recall','self_options','self_choose','self_appraise','self_preferences','memory_recall','memory_inspect','memory_propose','memory_retract'].includes(source.name)||!JSON.parse(source.scopes).every(s=>mayRead(view,s)))throw Error('反馈回执不存在或不在当前资料范围')
     }
     const body={outcome,decision,receipt:receipt??null,evidence:receipt?'tool_receipt':'self_report'}
-    const result=this.db.prepare('INSERT INTO yoyo_concern_feedback(concern_id,body,scopes,created_at) VALUES(?,?,?,?)').run(id,JSON.stringify(body),JSON.stringify(sourceScopes(view.scopes)),Date.now())
+    const result=this.db.prepare('INSERT INTO yoyo_concern_feedback(concern_id,body,scopes,created_at) VALUES(?,?,?,?)').run(id,JSON.stringify(body),JSON.stringify(this.recordScopes(view)),Date.now())
     // Only a concern-level decision resolves the wake that led here.
     this.decideConcernWake(id,decision)
     // Feedback is a report, not automatic proof of success. Update the explicit
@@ -367,7 +454,7 @@ export class SocialStore {
     }
     const forgotten=this.db.prepare('SELECT r.through_id FROM yoyo_memories m JOIN yoyo_retirements r ON r.memory_id=m.id WHERE m.body=?').all(body)
     if(forgotten.some(r=>sources.every(s=>s.document!==undefined||s.id<=r.through_id)))throw Error('不能从旧原文重新学习已忘记的内容')
-    const scopes=sourceScopes(view.scopes)
+    const scopes=this.recordScopes(view)
     const duplicate=this.db.prepare('SELECT id FROM yoyo_memories WHERE body=? AND scopes=? AND active=1').get(body,JSON.stringify(scopes))
     if(duplicate)return {id:duplicate.id,duplicate:true}
     const id=Number(this.db.prepare('INSERT INTO yoyo_memories(kind,body,scopes,sources,confidence,created_at,expires_at) VALUES(?,?,?,?,?,?,?)').run(kind,body,JSON.stringify(scopes),JSON.stringify(sources),confidence,Date.now(),expiresAt??(kind==='episodes'?Date.now()+48*3600000:null)).lastInsertRowid)
@@ -395,7 +482,9 @@ export class SocialStore {
       this.db.prepare('UPDATE yoyo_plans SET title=coalesce(?,title),progress=?,state=?,not_before=?,updated_at=? WHERE id=?').run(title??null,progress,state,notBefore,Date.now(),id)
     }else{
       title=boundedText(title,300)
-      id=Number(this.db.prepare('INSERT INTO yoyo_plans(title,progress,state,scopes,view_id,not_before,updated_at) VALUES(?,?,?,?,?,?,?)').run(title,progress,state,JSON.stringify(view.scopes),view.id,notBefore,Date.now()).lastInsertRowid)
+      id=Number(this.db.prepare('INSERT INTO yoyo_plans(title,progress,state,scopes,view_id,not_before,updated_at) VALUES(?,?,?,?,?,?,?)').run(title,progress,state,JSON.stringify(this.recordScopes(view)),view.id,notBefore,Date.now()).lastInsertRowid)
+      const current=this.store.get('yoyo_current_activity')
+      if(current)this.linkActivity(current,'plan',String(id))
     }
     return {id,state}
   }
@@ -408,10 +497,13 @@ export class SocialStore {
     return !!row&&JSON.parse(row.scopes).every(s=>mayRead(this.view(viewId),s))
   }
   enqueue(viewId,target,text,runKey,now=Date.now()) {
-    const view=this.view(viewId),t=this.target(target,{approved:true});text=boundedText(text)
+    const view=this.view(viewId),t=this.assertOutbound(view.scopes,target);text=boundedText(text)
     if(!['wechat','qq'].includes(t.platform))throw Error('此窗口不支持平台发信')
-    assertPublish(view.scopes,t.scope)
-    if(view.focus!==target||view.authorizationVersion!==t.version)throw Error('发件目标与当前资料视图不一致')
+    // The recipient is bound here by explicit handle, so an asynchronous window
+    // change cannot redirect a queued message. Only the focused window carries a
+    // snapshot authorisation version that could have gone stale.
+    if(!view.scopes.includes(t.scope))throw Error('发件目标不在当前资料视图')
+    if(view.focus===target&&view.authorizationVersion!==null&&view.authorizationVersion!==t.version)throw Error('发件目标与当前资料视图不一致')
     if(typeof runKey!=='string'||!runKey)throw Error('发送缺少原生动作回执编号')
     this.db.prepare('INSERT OR IGNORE INTO yoyo_outbox(run_key,target,authorization_version,view_id,body,scopes,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)').run(runKey,target,t.version,viewId,text,JSON.stringify(view.scopes),now,now+(t.kind==='group'?300000:3600000))
     const row=this.db.prepare('SELECT id,state,body,target FROM yoyo_outbox WHERE run_key=?').get(runKey)
@@ -421,7 +513,7 @@ export class SocialStore {
   enqueueAsset(viewId,target,content,runKey,now=Date.now()) {
     const view=this.view(viewId),asset=this.db.prepare('SELECT * FROM yoyo_assets WHERE id=?').get(content?.assetId)
     if(!asset||!JSON.parse(asset.scopes).every(s=>mayRead(view,s)))throw Error('文件不在当前资料范围')
-    assertPublish(JSON.parse(asset.scopes),this.target(target,{approved:true}).scope)
+    this.assertOutbound(JSON.parse(asset.scopes),target)
     if(!['image','file'].includes(content.kind)||!Number.isSafeInteger(content.bytes)||content.bytes<1||content.bytes>8*1024*1024||!/^([a-f0-9]{64})$/.test(content.sha256))throw Error('发送文件元数据无效')
     return this.store.transaction(()=>{
       const result=this.enqueue(viewId,target,'['+(content.kind==='image'?'图片':'文件')+'] '+asset.name,runKey,now)
@@ -433,7 +525,7 @@ export class SocialStore {
   async deliver(send,now=Date.now(),{ownerOnly=false}={}) {
     const row=this.db.prepare("SELECT * FROM yoyo_outbox WHERE state IN ('queued','retry_wait') AND next_at<=? AND (?=0 OR target IN (SELECT handle FROM yoyo_targets WHERE platform='wechat' AND kind='owner')) ORDER BY id LIMIT 1").get(now,ownerOnly?1:0)
     if(!row)return false
-    const authorize=()=>{try{const t=this.target(row.target,{approved:true});if(t.version!==row.authorization_version||row.expires_at<Math.max(now,Date.now()))throw Error('授权已变化或回复已过期');this.view(row.view_id);assertPublish(JSON.parse(row.scopes),t.scope)}catch(e){e.authorityInvalid=true;throw e}}
+    const authorize=()=>{try{const t=this.target(row.target,{approved:true});if(t.version!==row.authorization_version||row.expires_at<Math.max(now,Date.now()))throw Error('授权已变化或回复已过期');this.view(row.view_id);this.assertOutbound(JSON.parse(row.scopes),row.target)}catch(e){e.authorityInvalid=true;throw e}}
     try{authorize()}
     catch(e){this.db.prepare("UPDATE yoyo_outbox SET state='cancelled',error=? WHERE id=?").run(e.message,row.id);return false}
     this.db.prepare("UPDATE yoyo_outbox SET state='sending',attempts=attempts+1 WHERE id=?").run(row.id)

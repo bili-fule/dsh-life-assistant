@@ -12,9 +12,11 @@ function fixture(t){
   const dir=mkdtempSync(join(tmpdir(),'yoyo-motivation-')),store=new Store(join(dir,'data.sqlite')),data=new SocialStore(store)
   const motivation=new Motivation(data)
   const target=peer=>{const t=data.discover({platform:'qq',account:'10001',kind:'private',peer});return data.approve(t.handle,true)}
+  // 另一个平台是另一个独立主体：它的视图只带 public 和自己的范围。
+  const wechat=(peer='alice')=>data.approve(data.discover({platform:'wechat',account:'bound',kind:'owner',peer}).handle,true)
   t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true})})
   const message=(handle,sender,externalId,text)=>({handle,id:data.ingest({target:handle,sender,externalId,text}).id})
-  return {store,data,motivation,target,message}
+  return {store,data,motivation,target,wechat,message}
 }
 const near=(actual,expected,label)=>assert.ok(Math.abs(actual-expected)<0.02,label+': '+actual+' ≈ '+expected)
 
@@ -75,7 +77,7 @@ test('one unpleasant experience cannot make an activity permanently disliked',t=
 })
 
 test('activities keep their own record of how they went, without one happiness score',t=>{
-  const {data,motivation,target,message}=fixture(t),a=target('123'),b=target('456'),view=data.open(a.handle),other=data.open(b.handle)
+  const {data,motivation,target,wechat,message}=fixture(t),a=target('123'),b=target('456'),view=data.open(a.handle),other=data.open(b.handle),foreign=data.open(wechat('alice').handle)
   const run=(activity,liked,worth,msg,extra={})=>motivation.appraise(view.id,{choice:motivation.choose(view.id,{activity,chosen:activity}).id,
     outcome:activity+' 的一次',liked,worthAfter:worth,progress:'unknown',evidence:{messages:[msg]},confidence:'medium',...extra})
   const talk=message(a.handle,'123','act-1','聊得挺开心').id
@@ -96,22 +98,33 @@ test('activities keep their own record of how they went, without one happiness s
   // The compact dynamic state carries the same counts, and nothing is merged
   // into a single writable happiness number.
   assert.equal(motivation.summary(data.view(view.id)).activities.length,2)
-  assert.deepEqual(motivation.activitySummary(data.view(other.id)),[],'counts never leak into another window')
+  // 同一个主体的另一个 QQ 窗口带着同一份记录；另一个主体看不到。
+  assert.deepEqual(motivation.activitySummary(data.view(other.id)).map(entry=>entry.activity).sort(),['和他闲聊','读技术文章'])
+  assert.deepEqual(motivation.activitySummary(data.view(foreign.id)),[],'counts never leak into another subject')
   assert.equal(typeof motivation.happiness,'undefined')
 })
 
-test('private experience never changes public or other-window affect and preferences',t=>{
-  const {data,motivation,target,message}=fixture(t),a=target('123'),b=target('456'),privateView=data.open(a.handle),other=data.open(b.handle),publicView=data.publicView(),msg=message(a.handle,'123','priv','只对你说的')
+test('private experience never changes public or other-subject affect and preferences',t=>{
+  const {data,motivation,target,wechat,message}=fixture(t),a=target('123'),b=target('456'),privateView=data.open(a.handle),other=data.open(b.handle),foreign=data.open(wechat('alice').handle),publicView=data.publicView(),msg=message(a.handle,'123','priv','只对你说的')
   const choice=motivation.choose(privateView.id,{activity:'听他说烦心事',chosen:'听他说'})
   motivation.appraise(privateView.id,{choice:choice.id,outcome:'听完有点沉重',liked:'disliked',worthAfter:'worth',evidence:{messages:[msg.id]},confidence:'high'})
   const privateState=motivation.options(privateView.id)
   assert.equal(privateState.preferences.length,1)
+  // 同一个主体的另一个 QQ 窗口是同一个心情与偏好：窗口是位置，不是权限。
+  assert.equal(motivation.options(other.id).preferences.length,1)
+  assert.equal(motivation.options(other.id).affect.source,'current')
+  // public 和另一个独立主体都不受影响。
   assert.equal(motivation.options(publicView.id).preferences.length,0)
-  assert.equal(motivation.options(other.id).preferences.length,0)
+  assert.equal(motivation.options(foreign.id).preferences.length,0)
   assert.equal(motivation.options(publicView.id).affect.source,'none')
-  assert.equal(motivation.options(other.id).affect.mood,'calm')
-  // A choice made in one window cannot be appraised from another.
-  assert.throws(()=>motivation.appraise(other.id,{choice:choice.id,outcome:'猜测',liked:'neutral'}),/资料范围/)
+  assert.equal(motivation.options(foreign.id).affect.mood,'calm')
+  assert.equal(motivation.options(foreign.id).affect.source,'none')
+  // A choice made in one subject cannot be appraised from another.
+  assert.throws(()=>motivation.appraise(foreign.id,{choice:choice.id,outcome:'猜测',liked:'neutral'}),/资料范围/)
+  // 换个 QQ 窗口回看还是同一次选择，记录沿用主体的全部范围而不是某个窗口。
+  const continued=motivation.appraise(other.id,{choice:choice.id,outcome:'隔着另一个窗口回看',liked:'neutral',confidence:'high'})
+  assert.deepEqual(JSON.parse(data.db.prepare('SELECT scopes FROM yoyo_motivation_experiences WHERE id=?').get(continued.experience).scopes).sort(),['public',a.handle,b.handle].sort())
+  assert.equal(motivation.options(privateView.id).preferences.length,1)
   // Appraising from a broader view keeps the private scope on the new record.
   const planning=data.planningView()
   motivation.appraise(planning.id,{choice:choice.id,outcome:'回看仍然沉重',liked:'disliked',confidence:'high'})
@@ -214,7 +227,7 @@ test('manual preference revision is bounded and needs a genuine experience',t=>{
 })
 
 test('a delegation may belong to one of the subject’s own choices but never to a retired or foreign one',async t=>{
-  const {store,data,motivation,target}=fixture(t),a=target('123'),b=target('456'),view=data.open(a.handle)
+  const {store,data,motivation,target,wechat}=fixture(t),a=target('123'),b=target('456'),view=data.open(a.handle)
   const host=new TeamHost({store,data,separate:true,sessionId:'main',qq:null,motivation},{})
   t.after(async()=>{await host.stop()})
   const concern=data.concern(view.id,{title:'弄清这个问题',why:'好奇',origin:'刚才的讨论',next:'查资料',doneWhen:'有解释',stopWhen:'没有进展'})
@@ -223,7 +236,11 @@ test('a delegation may belong to one of the subject’s own choices but never to
   const task=delegate({choiceId:choice.id,key:'run-1'})
   assert.equal(data.db.prepare('SELECT choice_id FROM yoyo_team_intents WHERE task_id=?').get(task.id).choice_id,choice.id)
   assert.equal(host.motivation.deliberate(view.id).work[0].choice.id,choice.id)
-  const foreign=motivation.choose(data.open(b.handle).id,{activity:'别的事',chosen:'做'})
+  // 同一个主体的另一个 QQ 窗口里的选择也属于自己：窗口是位置，不是权限。
+  const sibling=motivation.choose(data.open(b.handle).id,{activity:'在同一件事上换个角度',chosen:'研究'})
+  assert.equal(data.db.prepare('SELECT choice_id FROM yoyo_team_intents WHERE task_id=?').get(delegate({choiceId:sibling.id,key:'run-2b'}).id).choice_id,sibling.id)
+  // 另一个独立主体的选择不属于自己。
+  const foreign=motivation.choose(data.open(wechat('alice').handle).id,{activity:'别的事',chosen:'做'})
   assert.throws(()=>delegate({choiceId:foreign.id,key:'run-2'}),/不在当前资料范围/)
   motivation.appraise(view.id,{choice:choice.id,outcome:'告一段落',liked:'neutral',end:true})
   assert.throws(()=>delegate({choiceId:choice.id,key:'run-3'}),/已结束/)

@@ -7,16 +7,19 @@ import { Store } from '../src/store.mjs'
 import { SocialStore } from '../src/social-store.mjs'
 import { SocialAgent } from '../src/social-agent.mjs'
 
-function fixture(t){const dir=mkdtempSync(join(tmpdir(),'yoyo-')),store=new Store(join(dir,'data.sqlite')),data=new SocialStore(store);t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true})});const target=(peer,kind='private')=>{const target=data.discover({platform:'qq',account:'10001',kind,peer,label:'相同昵称'});return data.approve(target.handle,true)};return {store,data,target}}
+function fixture(t){const dir=mkdtempSync(join(tmpdir(),'yoyo-')),store=new Store(join(dir,'data.sqlite')),data=new SocialStore(store);t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true})});const target=(peer,kind='private')=>{const target=data.discover({platform:'qq',account:'10001',kind,peer,label:'相同昵称'});return data.approve(target.handle,true)};const wechat=(peer='alice')=>{const target=data.discover({platform:'wechat',account:'bound',kind:'owner',peer,label:'我的微信'});return data.approve(target.handle,true)};return {store,data,target,wechat}}
 
-test('persistent concerns retain intention and cannot cross private windows',t=>{
-  const {data,target}=fixture(t),a=data.open(target('123').handle),b=data.open(target('456').handle)
+test('concerns follow the subject across its own windows and never enter the other subject',t=>{
+  const {data,target,wechat}=fixture(t),a=data.open(target('123').handle),b=data.open(target('456').handle),w=data.open(wechat().handle)
   const saved=data.concern(a.id,{title:'study',why:'understand',origin:'a question',next:'experiment',doneWhen:'verified result',stopWhen:'no useful progress'})
   assert.equal(data.concerns(a.id)[0].next,'experiment')
-  assert.deepEqual(data.concerns(b.id),[])
-  assert.throws(()=>data.concern(b.id,{id:saved.id,state:'done'}),/范围/)
-  data.concern(a.id,{id:saved.id,state:'abandoned'})
-  assert.equal(data.concerns(a.id)[0].state,'abandoned')
+  // The same person moved to another chat: why they came along is still there.
+  assert.equal(data.concerns(b.id)[0].next,'experiment')
+  data.concern(b.id,{id:saved.id,state:'done'})
+  assert.equal(data.concerns(a.id)[0].state,'done')
+  // A different subject in the same database keeps its own memory.
+  assert.deepEqual(data.concerns(w.id),[])
+  assert.throws(()=>data.concern(w.id,{id:saved.id,state:'done'}),/范围/)
   assert.throws(()=>data.concern(a.id,{title:'empty'}))
 })
 
@@ -30,20 +33,20 @@ test('self-authored activity cannot prove procedural execution and evidence quer
 })
 
 test('feedback distinguishes a self report from scoped tool evidence and review consumption preserves newer decisions',t=>{
- const {data,target}=fixture(t),a=data.open(target('123').handle),b=data.open(target('456').handle),now=Date.now()
+ const {data,target,wechat}=fixture(t),a=data.open(target('123').handle),b=data.open(target('456').handle),w=data.open(wechat().handle),now=Date.now()
  const c=data.concern(a.id,{title:'experiment',why:'question',origin:'experience',next:'run',doneWhen:'measured',stopWhen:'no progress',reviewAt:now+1000})
  assert.equal(data.concernFeedback(a.id,{id:c.id,outcome:'seems promising',decision:'continue'}).evidence,'self_report')
  data.db.prepare('INSERT INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run('private-result','yoyo_job',JSON.stringify(a.scopes),'done',now)
- assert.throws(()=>data.concernFeedback(b.id,{id:c.id,outcome:'read',decision:'done',receipt:'private-result'}),/范围/)
- assert.equal(data.concernFeedback(a.id,{id:c.id,outcome:'job done',decision:'continue',receipt:'private-result'}).evidence,'tool_receipt')
+ assert.throws(()=>data.concernFeedback(w.id,{id:c.id,outcome:'read',decision:'done',receipt:'private-result'}),/范围/)
+ assert.equal(data.concernFeedback(b.id,{id:c.id,outcome:'job done',decision:'continue',receipt:'private-result'}).evidence,'tool_receipt')
  data.concern(a.id,{id:c.id,reviewAt:now+2000})
  data.consumeConcernReview(c.id,now+1000)
  assert.equal(data.concerns(a.id)[0].reviewAt,now+2000)
- assert.deepEqual(data.concernFeedbacks(b.id),[])
+ assert.deepEqual(data.concernFeedbacks(w.id),[])
 })
 
 test('concern wakes are counted and only a concern decision resolves them',t=>{
-  const {data,target}=fixture(t),a=data.open(target('123').handle),b=data.open(target('456').handle),now=Date.now()
+  const {data,target,wechat}=fixture(t),a=data.open(target('123').handle),w=data.open(wechat().handle),now=Date.now()
   const c=data.concern(a.id,{title:'experiment',why:'question',origin:'experience',next:'run',doneWhen:'measured',stopWhen:'no progress',reviewAt:now+1000})
   const wakes=()=>data.concerns(a.id).find(row=>row.id===c.id).wakes
   assert.deepEqual(wakes(),{delivered:0,effective:0,deferred:0,dropped:0,ignored:0,open:0})
@@ -67,13 +70,13 @@ test('concern wakes are counted and only a concern decision resolves them',t=>{
   data.consumeConcernReview(second.id,now+4000)
   data.concern(a.id,{id:second.id,state:'abandoned'})
   assert.equal(data.concerns(a.id).find(row=>row.id===second.id).wakes.dropped,1)
-  // Counts never leak into another window, nor into the stored concern body.
-  assert.deepEqual(data.concerns(b.id),[])
+  // Counts stay in this subject, not in another subject's windows.
+  assert.deepEqual(data.concerns(w.id),[])
   assert.equal('wakes' in JSON.parse(data.db.prepare('SELECT body FROM yoyo_concerns WHERE id=?').get(c.id).body),false)
 })
 
 test('learning selects one admired identity, requires a real trial before adoption and retains retirement history',t=>{
- const {data,target}=fixture(t),a=target('123'),b=target('456'),v=data.open(a.handle),other=data.open(b.handle)
+ const {data,target,wechat}=fixture(t),a=target('123'),b=target('456'),v=data.open(a.handle),other=data.open(b.handle),w=data.open(wechat().handle)
  const first=data.ingest({target:a.handle,sender:'123',externalId:'learn-1',text:'先把问题说清楚'})
  const second=data.ingest({target:a.handle,sender:'123',externalId:'learn-2',text:'可以一步一步来'})
  const wrong=data.ingest({target:a.handle,sender:'456',externalId:'learn-3',text:'也可以'})
@@ -83,7 +86,9 @@ test('learning selects one admired identity, requires a real trial before adopti
  assert.throws(()=>data.learn(v.id,{...fields,sources:[fields.sources[0],{id:wrong.id,quote:'也可以'}]}),/同一稳定身份/)
  assert.throws(()=>data.learn(v.id,{...fields,sources:[fields.sources[0],{id:forwarded.id,quote:'转发'}]}),/不接受转发/)
  const l=data.learn(v.id,fields)
- assert.deepEqual(data.learning(other.id),[])
+ // The subject carries its own learning across its windows, not into another subject.
+ assert.equal(data.learning(other.id)[0].id,l.id)
+ assert.deepEqual(data.learning(w.id),[])
  data.learn(v.id,{id:l.id,state:'trial'})
  assert.throws(()=>data.learn(v.id,{id:l.id,state:'adopted',review:'helpful',trialReceipt:'missing'}),/回执/)
  data.db.prepare('INSERT INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run('trial-job','yoyo_job',JSON.stringify(v.scopes),JSON.stringify({state:'done'}),Date.now())
@@ -92,7 +97,7 @@ test('learning selects one admired identity, requires a real trial before adopti
  data.learn(v.id,{id:l.id,state:'retired'})
  assert.equal(data.learning(v.id)[0].state,'retired')
  assert.equal(data.db.prepare('SELECT count(*) n FROM yoyo_learning_versions WHERE learning_id=?').get(l.id).n,4)
- assert.throws(()=>data.learn(other.id,{id:l.id,state:'trial'}),/范围/)
+ assert.throws(()=>data.learn(w.id,{id:l.id,state:'trial'}),/范围/)
 })
 
 test('stable accounts separate identical nicknames and duplicate incoming events',t=>{
@@ -105,17 +110,23 @@ test('stable accounts separate identical nicknames and duplicate incoming events
   assert.equal(data.read(data.open(b.handle).id)[0].text,'hello')
 })
 
-test('unified internal attention cannot publish cross-window information',t=>{
-  const {data,target}=fixture(t),a=target('123'),b=target('456'),overview=data.planningView()
-  assert.throws(()=>data.enqueue(overview.id,b.handle,'private thought','send-1'),/资料|跨|来源/)
+test('one subject may read and speak in any of its own windows while another subject stays out',t=>{
+  const {data,target,wechat}=fixture(t),a=target('123'),b=target('456'),overview=data.planningView()
   const av=data.open(a.handle),bv=data.open(b.handle)
+  // Window A is where the thought came from; window B is where it is said. That
+  // is one person switching chats, so the host binds the recipient explicitly.
+  assert.equal(data.enqueue(av.id,b.handle,'cross window','send-1').queued,true)
+  assert.equal(data.enqueue(overview.id,b.handle,'overview thought','send-2').queued,true)
+  // The WeChat assistant is a different subject, in its own store and its own rights.
+  const w=wechat(),wv=data.open(w.handle)
+  assert.throws(()=>data.enqueue(av.id,w.handle,'leak','send-3'),/独立主体/)
+  assert.throws(()=>data.enqueue(wv.id,b.handle,'leak','send-4'),/独立主体/)
   data.labelEvent('one-agent',1,av.scopes)
-  assert.equal(data.eventVisible('one-agent',1,bv.id),false)
-  assert.equal(data.eventVisible('one-agent',1,overview.id),true)
-  assert.throws(()=>data.enqueue(av.id,b.handle,'cross target','send-2'))
-  assert.equal(data.enqueue(bv.id,b.handle,'hello','send-3').queued,true)
-  assert.equal(data.enqueue(bv.id,b.handle,'hello','send-3').id,1)
-  assert.throws(()=>data.enqueue(bv.id,b.handle,'different','send-3'),/更换/)
+  assert.equal(data.eventVisible('one-agent',1,bv.id),true)
+  assert.equal(data.eventVisible('one-agent',1,wv.id),false)
+  const queued=data.enqueue(bv.id,b.handle,'hello','send-5')
+  assert.equal(data.enqueue(bv.id,b.handle,'hello','send-5').id,queued.id)
+  assert.throws(()=>data.enqueue(bv.id,b.handle,'different','send-5'),/更换/)
 })
 
 test('revocation invalidates old focused and overview views and cancels queued sends',async t=>{
@@ -146,13 +157,16 @@ test('explicit failure can retry while a successful platform receipt finishes on
 })
 
 test('memory evidence, expiration, scope and forgetting are enforced outside the model',t=>{
-  const {data,target}=fixture(t),a=target('123'),b=target('456'),av=data.open(a.handle),bv=data.open(b.handle)
+  const {data,target,wechat}=fixture(t),a=target('123'),b=target('456'),av=data.open(a.handle),bv=data.open(b.handle),wv=data.open(wechat().handle)
   const source=data.ingest({target:a.handle,sender:'123',externalId:'1',text:'我喜欢简洁的回复'})
   const memory={kind:'communication',body:'偏好简洁；原因尚不确定',confidence:'hypothesis',sources:[{id:source.id,quote:'喜欢简洁'}]}
-  assert.throws(()=>data.remember(bv.id,memory),/逐字证据/)
+  assert.throws(()=>data.remember(wv.id,memory),/逐字证据/)
   assert.throws(()=>data.remember(av.id,{...memory,sources:[{id:source.id,quote:'编造原文'}]}),/逐字证据/)
   const saved=data.remember(av.id,memory)
-  assert.equal(data.recall(av.id).length,1);assert.equal(data.recall(bv.id).length,0)
+  assert.equal(data.recall(av.id).length,1)
+  // What the subject observed in one chat stays available in its other chats.
+  assert.equal(data.recall(bv.id).length,1)
+  assert.equal(data.recall(wv.id).length,0)
   data.forget(saved.id);assert.equal(data.recall(av.id).length,0)
   assert.throws(()=>data.remember(av.id,memory),/已忘记/)
 })
@@ -174,10 +188,14 @@ test('changing owner revokes the former binding and an explicit revoke stays rev
 })
 
 test('own plans and web-supported knowledge inherit host visibility',t=>{
-  const {data,target}=fixture(t),a=target('123'),b=target('456'),av=data.open(a.handle),bv=data.open(b.handle),publicView=data.publicView()
+  const {data,target,wechat}=fixture(t),a=target('123'),b=target('456'),av=data.open(a.handle),bv=data.open(b.handle),publicView=data.publicView(),wv=data.open(wechat().handle)
   data.plan(av.id,{title:'private project',progress:'private progress'})
-  assert.equal(data.plans(bv.id).length,0);assert.equal(data.plans(av.id).length,1)
-  assert.throws(()=>data.plan(bv.id,{id:1,title:'take over'}),/资料范围/)
+  // The plan follows the subject to its other chat, never into a public window
+  // and never into another subject.
+  assert.equal(data.plans(bv.id).length,1);assert.equal(data.plans(av.id).length,1)
+  assert.equal(data.plans(publicView.id).length,0);assert.equal(data.plans(wv.id).length,0)
+  assert.throws(()=>data.plan(publicView.id,{id:1,title:'take over'}),/资料范围/)
+  data.plan(bv.id,{id:1,state:'done'});assert.equal(data.plans(av.id)[0].state,'done')
   const document=Number(data.db.prepare('INSERT INTO yoyo_documents(url,body,scope,created_at) VALUES(?,?,?,?)').run('https://example.com','public source','public',Date.now()).lastInsertRowid)
   data.remember(publicView.id,{kind:'knowledge',body:'public learned fact',sources:[{document,quote:'public source'}]})
   assert.equal(data.recall(bv.id)[0].body,'public learned fact')
@@ -196,10 +214,10 @@ test('attention batches are fixed at five seconds and acknowledging one window p
  assert.equal(data.attention(start+10100,5000).find(v=>v.handle===a.handle).count,1)
 })
 test('asset outbox pins the original payload and rechecks target revocation before sending',async t=>{
- const {data,target}=fixture(t),a=target('123'),b=target('456'),av=data.open(a.handle),bv=data.open(b.handle)
+ const {data,target,wechat}=fixture(t),a=target('123'),w=wechat(),av=data.open(a.handle),wv=data.open(w.handle)
  data.db.prepare('INSERT INTO yoyo_assets VALUES(?,?,?,?,?)').run('asset-a','image.png',JSON.stringify(av.scopes),'image.png',Date.now())
  const content={assetId:'asset-a',kind:'image',bytes:10,sha256:'a'.repeat(64)}
- assert.throws(()=>data.enqueueAsset(bv.id,b.handle,content,'wrong-scope'),/资料范围/)
+ assert.throws(()=>data.enqueueAsset(wv.id,w.handle,content,'wrong-scope'),/资料范围/)
  const queued=data.enqueueAsset(av.id,a.handle,content,'asset-send')
  assert.throws(()=>data.enqueueAsset(av.id,a.handle,{...content,sha256:'b'.repeat(64)},'asset-send'),/更换附件/)
  assert.equal(JSON.parse(data.db.prepare('SELECT content FROM yoyo_outbox WHERE id=?').get(queued.id).content).sha256,content.sha256)
@@ -210,14 +228,15 @@ test('asset outbox pins the original payload and rechecks target revocation befo
 
 
 test('verified procedural memories require real tool receipts and inherit their private scope',t=>{
- const {data,target}=fixture(t),a=target('123'),b=target('456'),av=data.open(a.handle),bv=data.open(b.handle)
+ const {data,target,wechat}=fixture(t),a=target('123'),b=target('456'),av=data.open(a.handle),bv=data.open(b.handle),wv=data.open(wechat().handle)
  const message=data.ingest({target:a.handle,sender:'123',externalId:'a',text:'执行成功'})
  const value={kind:'procedures',body:'实测过的处理流程',confidence:'observed',sources:[{id:message.id,quote:'执行成功'}]}
  assert.throws(()=>data.remember(av.id,value),/实际工具回执/)
  data.db.prepare('INSERT INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run('real-receipt','yoyo_job',JSON.stringify(av.scopes),JSON.stringify({exitCode:0,stdout:'selftest passed'}),Date.now())
  const proven={...value,sources:[{receipt:'real-receipt',quote:'selftest passed'}]}
  assert.ok(data.remember(av.id,proven).id)
- assert.throws(()=>data.remember(bv.id,proven),/逐字证据/)
+ assert.ok(data.remember(bv.id,proven).id)
+ assert.throws(()=>data.remember(wv.id,proven),/逐字证据/)
  assert.throws(()=>data.remember(av.id,{...proven,sources:[{receipt:'invented',quote:'passed'}]}),/逐字证据/)
 })
 

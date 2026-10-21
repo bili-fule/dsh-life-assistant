@@ -16,14 +16,20 @@ function fixture(t){
   const view=peer=>{const target=social.discover({platform:'qq',account:'1',kind:'private',peer,label:'same'});social.approve(target.handle,true);return social.open(target.handle)}
   const a=view('2'),b=view('3'),team=new TeamStore(social,()=>100)
   const create=(key,v=a,role='chat')=>team.create({key,role,goal:'secret goal',viewId:v.id,expiresAt:1000})
-  return {team,social,store,a,b,create}
+  // Another platform in the same database is a genuinely independent subject:
+  // its view carries only ['public', its own scope], never the QQ windows.
+  const wechat=(peer='alice')=>{const t=social.discover({platform:'wechat',account:'bound',kind:'owner',peer});return social.approve(t.handle,true)}
+  const wc=()=>social.open(wechat().handle)
+  return {team,social,store,a,b,create,wechat,wc}
 }
-test('parallel task authorities never inherit the current window, reports stay scoped',t=>{  const {team,a,b,create}=fixture(t),x=create('x'),y=create('y',b)
+test('parallel task authorities never inherit the current window, reports stay scoped',t=>{  const {team,a,b,create,wc}=fixture(t),x=create('x'),y=create('y',b)
   team.claim(x.id,'worker-x');team.claim(y.id,'worker-y')
   assert.equal(team.authority('worker-x').view.id,a.id)
   assert.equal(team.authority('worker-y').view.id,b.id)
   team.report('worker-x','private finding')
-  assert.throws(()=>team.reports(x.id,b.id),/范围/)
+  // The same subject's other window is the same reader; another subject is not.
+  assert.equal(team.reports(x.id,b.id)[0].body,'private finding')
+  assert.throws(()=>team.reports(x.id,wc().id),/范围/,'an independent subject reads no QQ report')
   assert.equal(team.reports(x.id,a.id)[0].body,'private finding')
   assert.ok(!JSON.stringify(team.overview()).includes('secret'))
   assert.ok(!JSON.stringify(team.overview()).includes('private finding'))
@@ -43,7 +49,13 @@ test('single speaker, takeover fences delayed sends and reports',t=>{
 test('revocation invalidates running authority; private material cannot become public research',t=>{
   const {team,social,a,create}=fixture(t),x=create('x')
   team.claim(x.id,'worker')
-  assert.throws(()=>create('research',a,'research'),/公开/)
+  // A research branch delegated from a private window gets its own public-only
+  // view instead of the caller's scopes: the branch itself stays blind.
+  const research=create('research',a,'research')
+  assert.deepEqual(social.view(research.view_id).scopes,['public'])
+  assert.equal(research.focus_key,'','a research branch holds no window')
+  assert.deepEqual(ROLE_TOOLS.research.filter(name=>['send','read','wait'].includes(name)),[],
+    'research still cannot speak and cannot read a private window')
   social.approve(a.focus,false)
   assert.throws(()=>team.authority('worker'))
   assert.throws(()=>team.authorizeSend('worker',a.focus,1))
@@ -107,34 +119,37 @@ test('cancel while delivery is pending rejects the late dispatch',async t=>{
   assert.equal(team.inspect(chat.id,a.id).state,'cancelled')
 })
 test('motivated delegation preserves reasons, scope and explicit stopping conditions',t=>{
-  const {team,social,a,b}=fixture(t),motivation=new TeamMotivation(team)
+  const {team,social,a,wc}=fixture(t),motivation=new TeamMotivation(team),w=wc()
   const concern=social.concern(a.id,{title:'understand',why:'curiosity',origin:'conversation',next:'ask',doneWhen:'answered',stopWhen:'no interest'})
   const args={key:'motivated',role:'chat',goal:'discuss',viewId:a.id,expiresAt:1000,concernId:concern.id,rationale:'continue discussion while I investigate'}
   const task=motivation.delegate(args)
   assert.equal(motivation.delegate(args).id,task.id)
-  assert.throws(()=>motivation.delegate({...args,key:'other',viewId:b.id}),/关切/)
-  assert.deepEqual(motivation.deliberate(b.id).work,[])
+  // The subject's own window keeps the concern and the work; another subject sees neither.
+  assert.throws(()=>motivation.delegate({...args,key:'other',viewId:w.id}),/关切/)
   assert.equal(motivation.deliberate(a.id).work[0].stopWhen,'no interest')
+  assert.deepEqual(motivation.deliberate(w.id).work,[])
   team.claim(task.id,'worker');team.report('worker','I think solved');team.finish('worker')
   const report=team.reports(task.id,a.id)[0]
   const review=motivation.review(a.id,{taskId:task.id,decision:'wait',reason:'need evidence',reportId:report.id})
   assert.equal(review.evidence,'worker_report')
   assert.equal(review.automaticallyScheduled,false)
   assert.equal(social.concerns(a.id)[0].state,'active')
-  assert.throws(()=>motivation.review(b.id,{taskId:task.id,decision:'done',reason:'bad'}),/范围/)
+  assert.throws(()=>motivation.review(w.id,{taskId:task.id,decision:'done',reason:'bad'}),/范围/)
   social.concern(a.id,{id:concern.id,state:'abandoned'})
   assert.throws(()=>motivation.delegate({...args,key:'new'}),/活跃/)
 })
 
-test('a task evidence board stays inside the task view and steering is consumed once',t=>{
-  const {team,a,b,create}=fixture(t),x=create('x'),y=create('y',b)
+test('a task evidence board stays inside its subject and steering is consumed once',t=>{
+  const {team,a,b,create,wc}=fixture(t),w=wc(),x=create('x'),y=create('y',b)
   team.claim(x.id,'worker-x');team.claim(y.id,'worker-y')
   const shared=team.evidence('worker-x',{kind:'finding',body:'只在这个窗口读到的材料',source:'event:42'})
   assert.equal(shared.taskId,x.id)
   assert.equal(team.board(a.id,{taskId:x.id}).length,1)
   assert.equal(team.board(a.id,{taskId:x.id})[0].body,'只在这个窗口读到的材料')
-  assert.deepEqual(team.board(b.id),[])
-  assert.throws(()=>team.board(b.id,{taskId:x.id}),/范围/)
+  // The subject's other window is the same reader; another subject reads nothing.
+  assert.equal(team.board(b.id,{taskId:x.id}).length,1)
+  assert.deepEqual(team.board(w.id),[])
+  assert.throws(()=>team.board(w.id,{taskId:x.id}),/范围/)
   assert.throws(()=>team.evidence('nobody',{body:'伪造的证据'}),/授权/)
   assert.throws(()=>team.evidence('worker-x',{kind:'rumour',body:'x'}),/证据类型/)
   // The worker's own board never leaks another task's material.
@@ -144,11 +159,11 @@ test('a task evidence board stays inside the task view and steering is consumed 
   assert.deepEqual(team.takeSteers('worker-x'),[])
   team.finish('worker-x')
   assert.throws(()=>team.steer(a.id,{taskId:x.id,message:'太晚了'}),/进行中/)
-  assert.throws(()=>team.steer(b.id,{taskId:x.id,message:'越范围'}),/范围/)
+  assert.throws(()=>team.steer(w.id,{taskId:x.id,message:'越范围'}),/范围/)
 })
 
-test('evidence is one row per real source and cross-task search stays inside the window',t=>{
-  const {team,a,b,create}=fixture(t),x=create('x'),reader=create('reader',a,'reader')
+test('evidence is one row per real source and cross-task search stays inside the subject',t=>{
+  const {team,a,b,create,wc}=fixture(t),w=wc(),x=create('x'),reader=create('reader',a,'reader')
   team.claim(x.id,'worker-x');team.claim(reader.id,'worker-r')
   const first=team.evidence('worker-x',{kind:'source',source:'https://example.com/film',body:'长镜头在结尾出现两次'})
   assert.equal(first.duplicate,undefined)
@@ -162,11 +177,13 @@ test('evidence is one row per real source and cross-task search stays inside the
   assert.equal(differing.conflict,true)
   assert.equal(team.board(a.id,{taskId:x.id}).length,2)
   const other=team.evidence('worker-r',{kind:'finding',body:'评论区也在讨论长镜头的剪辑',source:'event:88'})
-  // A later task reaches what an earlier task really read, in the same window only.
+  // A later task reaches what an earlier task really read inside the same subject.
   const found=team.searchEvidence(a.id,{query:'长镜头'})
   assert.deepEqual(found.map(row=>row.id).sort(),[first.id,differing.id,other.id].sort())
   assert.equal(found[0].score>=found[found.length-1].score,true)
-  assert.deepEqual(team.searchEvidence(b.id,{query:'长镜头'}),[],'another window sees nothing')
+  assert.deepEqual(team.searchEvidence(b.id,{query:'长镜头'}).map(row=>row.id).sort(),found.map(row=>row.id).sort(),
+    'the subject reads its own windows')
+  assert.deepEqual(team.searchEvidence(w.id,{query:'长镜头'}),[],'another subject sees nothing')
   assert.deepEqual(team.searchEvidence(a.id,{query:'长镜头',kind:'finding'}).map(row=>row.id),[other.id])
   assert.throws(()=>team.searchEvidence(a.id,{query:'   '}),/线索/)
   assert.throws(()=>team.searchEvidence(a.id,{query:'长镜头',limit:99}),/条数/)
@@ -174,7 +191,7 @@ test('evidence is one row per real source and cross-task search stays inside the
 })
 
 test('a worker memory candidate is only a candidate until the subject decides',t=>{
-  const {team,a,b,create}=fixture(t),x=create('x')
+  const {team,a,b,create,wc}=fixture(t),x=create('x')
   team.claim(x.id,'worker-x')
   const submitted=team.memoryCandidate('worker-x',{kind:'claim',claimType:'preference',statement:'对方更喜欢语音而不是打字',
     context:'聊到沟通方式',evidence:{messages:[1,2]}})
@@ -183,7 +200,8 @@ test('a worker memory candidate is only a candidate until the subject decides',t
   assert.equal(team.memoryCandidate('worker-x',{kind:'claim',claimType:'preference',statement:'对方更喜欢语音而不是打字',
     context:'聊到沟通方式',evidence:{messages:[1,2]}}).duplicate,true)
   assert.equal(team.memoryCandidates(a.id).length,1)
-  assert.deepEqual(team.memoryCandidates(b.id),[],'another window sees no candidates')
+  assert.equal(team.memoryCandidates(b.id).length,1,'the subject reads its own windows')
+  assert.deepEqual(team.memoryCandidates(wc().id),[],'another subject sees no candidates')
   // A worker cannot hand over identity or habit claims, and needs real sources.
   assert.throws(()=>team.memoryCandidate('worker-x',{kind:'claim',claimType:'impression',statement:'他很内向',evidence:{messages:[1]}}),/身份/)
   assert.throws(()=>team.memoryCandidate('worker-x',{kind:'claim',claimType:'fact',statement:'没有依据'}),/依据/)
@@ -201,20 +219,21 @@ test('a worker memory candidate is only a candidate until the subject decides',t
   assert.equal(rejected.state,'rejected')
   assert.match(rejected.reason,/没有真实新增内容/)
   assert.equal(team.memoryCandidates(a.id,{state:'rejected'})[0].statement,'聊过一次沟通方式')
-  assert.throws(()=>team.candidate(b.id,second.id),/范围/)
+  assert.throws(()=>team.candidate(wc().id,second.id),/范围/)
 })
 
-test('a memory pack belongs to one task and one window',t=>{
-  const {team,a,b,create}=fixture(t),x=create('x'),y=create('y',b)
+test('a memory pack belongs to one task and its subject',t=>{
+  const {team,a,b,create,wc}=fixture(t),x=create('x'),y=create('y',b)
   assert.equal(team.memoryPack(x.id,a.id),null)
   const written=team.writeMemoryPack(x.id,a.id,{clue:'聊过的电影',items:[{id:1,kind:'episode',title:'聊到一部电影'}]})
   assert.equal(written.items,1)
   const pack=team.memoryPack(x.id,a.id)
   assert.equal(pack.clue,'聊过的电影')
   assert.equal(pack.items[0].kind,'episode')
-  // Only summaries are carried, and another window cannot read this pack.
+  // Only summaries are carried; the same subject's other window reads it, another subject does not.
   assert.deepEqual(team.memoryPack(y.id,b.id),null)
-  assert.throws(()=>team.memoryPack(x.id,b.id),/范围/)
+  assert.equal(team.memoryPack(x.id,b.id).clue,'聊过的电影')
+  assert.throws(()=>team.memoryPack(x.id,wc().id),/范围/)
   // Re-writing replaces the pack instead of stacking old summaries.
   team.writeMemoryPack(x.id,a.id,{clue:'聊过的电影',items:[]})
   assert.deepEqual(team.memoryPack(x.id,a.id).items,[])
@@ -224,8 +243,11 @@ test('a memory pack belongs to one task and one window',t=>{
 
 test('the engineering role starts public, cannot speak and can only narrow its tools',t=>{
   const {team,social,a,create}=fixture(t),publicView=social.publicView()
-  // Private material never reaches a code runner.
-  assert.throws(()=>create('eng-private',a,'engineer'),/公开/)
+  // Private material never reaches a code runner: the branch gets a public view.
+  const private_=create('eng-private',a,'engineer')
+  assert.deepEqual(social.view(private_.view_id).scopes,['public'])
+  assert.equal(private_.focus_key,'','an engineering branch holds no window')
+  assert.equal(private_.toolset,null,'the role toolset is unchanged')
   const task=create('eng',publicView,'engineer')
   assert.equal(task.role,'engineer')
   assert.deepEqual(ROLE_TOOLS.engineer.filter(name=>['send','read','wait','web'].includes(name)),[],
@@ -266,7 +288,7 @@ test('a peer executor reaches nearly everything but never the control plane',t=>
 })
 
 test('the source registry shows repeated readings and cross-task disagreements',t=>{
-  const {team,a,b,create}=fixture(t),x=create('x'),reader=create('reader',a,'reader'),other=create('other',b)
+  const {team,a,b,create,wc}=fixture(t),x=create('x'),reader=create('reader',a,'reader'),other=create('other',b)
   team.claim(x.id,'worker-x');team.claim(reader.id,'worker-r');team.claim(other.id,'worker-o')
   team.evidence('worker-x',{kind:'source',source:'https://example.com/a',body:'文章说长镜头出现在结尾'})
   team.evidence('worker-r',{kind:'excerpt',source:'https://example.com/a',body:'文章说长镜头出现在开头'})
@@ -275,15 +297,16 @@ test('the source registry shows repeated readings and cross-task disagreements',
   const registry=team.sourceRegistry(a.id)
   assert.equal(registry.length,1,'an unlabelled finding is not a source')
   assert.equal(registry[0].source,'https://example.com/a')
-  assert.equal(registry[0].readings,2)
-  assert.equal(registry[0].distinct,2)
+  // The subject's other window is the same reader: three readings, three wordings.
+  assert.equal(registry[0].readings,3)
+  assert.equal(registry[0].distinct,3)
   assert.equal(registry[0].conflict,true)
-  assert.deepEqual(registry[0].tasks.sort(),[x.id,reader.id].sort())
-  // The same URL read in another window stays in that window's registry.
-  assert.deepEqual(team.sourceRegistry(b.id).map(row=>row.tasks),[ [other.id] ])
+  assert.deepEqual(registry[0].tasks.sort(),[x.id,reader.id,other.id].sort())
+  // An independent subject reads no QQ row, so its registry stays empty.
+  assert.deepEqual(team.sourceRegistry(wc().id),[])
   // Re-reading the same words is not a second reading of a different kind.
   team.evidence('worker-x',{kind:'source',source:'https://example.com/a',body:'文章说长镜头出现在结尾'})
-  assert.equal(team.sourceRegistry(a.id)[0].readings,2)
+  assert.equal(team.sourceRegistry(a.id)[0].readings,3)
   assert.throws(()=>team.sourceRegistry(a.id,{limit:99}),/条数/)
 })
 

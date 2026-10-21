@@ -27,8 +27,11 @@ function fixture(t,extra={}){
   const agent=new SocialAgent(runtime,ctx,{enabled:true,...extra})
   t.after(()=>{agent.stop();assert.equal(hooks.size,0);assert.equal(tools.size,0);store.close();rmSync(root,{recursive:true,force:true})})
   const target=(peer)=>{const t=agent.data.discover({platform:'qq',account:'1000',kind:'private',peer});return agent.data.approve(t.handle,true)}
+  // Another platform in the same database is a genuinely independent subject:
+  // a view opened from it carries only ['public', its own scope].
+  const wechat=(peer='alice')=>{const t=agent.data.discover({platform:'wechat',account:'bound',kind:'owner',peer});return agent.data.approve(t.handle,true)}
   const exec={agent:{id:'one-agent'},signal:runtime.abort.signal,callId:'1',concludeTurn(){prompts.push('concluded')}}
-  return {agent,store,ctx,hooks,tools,target,exec,prompts,runtime}
+  return {agent,store,ctx,hooks,tools,target,wechat,exec,prompts,runtime}
 }
 
 test('social native assembly filters private instructions, contexts and tool schemas',async t=>{
@@ -80,8 +83,8 @@ test('opening another window concludes a native turn and defers its request view
   assert.deepEqual(prompts,['concluded'])
 })
 
-test('observation does not queue messages and current permissions block cross-window file access',async t=>{
-  const {agent,tools,target,exec,store}=fixture(t),a=target('123'),b=target('456')
+test('observation does not queue messages and current permissions block file access from another subject',async t=>{
+  const {agent,tools,target,wechat,exec,store}=fixture(t),a=target('123'),b=wechat('alice')
   const av=agent.data.open(a.handle),bv=agent.data.open(b.handle);agent.activeView=av
   assert.equal((await tools.get('yoyo_send').execute({text:'hello'},exec)).observation,true)
   assert.equal(agent.data.snapshot().outbox.length,0)

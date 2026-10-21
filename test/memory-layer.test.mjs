@@ -11,9 +11,11 @@ function fixture(t){
   const dir=mkdtempSync(join(tmpdir(),'yoyo-memory-')),store=new Store(join(dir,'data.sqlite')),data=new SocialStore(store)
   const memory=new MemoryLayer(data)
   const target=(peer,label='同一个昵称',kind='private')=>data.approve(data.discover({platform:'qq',account:'10001',kind,peer,label}).handle,true)
+  // 另一个平台是另一个独立主体：它的窗口只带 public 和自己的范围。
+  const wechat=(peer='alice')=>data.approve(data.discover({platform:'wechat',account:'bound',kind:'owner',peer}).handle,true)
   const say=(handle,sender,externalId,text,extra={})=>data.ingest({target:handle,sender,externalId,text,...extra}).id
   t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true})})
-  return {store,data,memory,target,say}
+  return {store,data,memory,target,wechat,say}
 }
 
 test('an episode keeps the real senders and refuses forwarded or mixed identities',t=>{
@@ -71,16 +73,24 @@ test('repetition never becomes a new source and cannot promote an inference',t=>
   assert.throws(()=>memory.propose(view.id,{kind:'claim',expectedVersion:1,claimType:'preference',statement:'无对象',evidence:{messages:[first]}}),/只用于修订/)
 })
 
-test('private memory stays out of other windows and the public view',t=>{
-  const {data,memory,target,say}=fixture(t),a=target('123'),b=target('456','另一个群','group'),privateView=data.open(a.handle),other=data.open(b.handle),publicView=data.publicView()
+test('private memory stays inside its own subject and out of the public view',t=>{
+  const {data,memory,target,wechat,say}=fixture(t),a=target('123'),b=target('456','另一个群','group'),privateView=data.open(a.handle),other=data.open(b.handle),publicView=data.publicView(),foreign=data.open(wechat('alice').handle)
   const message=say(a.handle,'123','p1','这件事只跟你说')
   memory.propose(privateView.id,{kind:'episode',title:'一次私下聊天',role:'participant',what:'说了烦心事',evidence:{messages:[message]}})
   assert.equal(memory.recall(privateView.id).results.length,1)
   assert.equal(memory.recall(publicView.id).results.length,0)
-  assert.equal(memory.recall(other.id).results.length,0)
+  // 同一个主体的另一个 QQ 窗口是另一个位置，不是另一个权限：同一件事看得见。
+  assert.equal(memory.recall(other.id).results.length,1,'another window of the same subject continues the memory')
+  // 写下来的记录带的是主体在这个平台上的全部范围，不是当时窗口的快照。
+  assert.deepEqual(JSON.parse(data.db.prepare('SELECT scopes FROM yoyo_memory_episodes').get().scopes).sort(),['public',a.handle,b.handle].sort())
   const episode=memory.recall(privateView.id).results[0]
-  assert.throws(()=>memory.inspect(other.id,{kind:'episode',id:episode.id}),/资料范围/)
+  // 位置不是权限：另一个 QQ 窗口可以接着用窗口 A 的原文写下同一件事。
+  assert.equal(memory.propose(other.id,{kind:'claim',claimType:'fact',statement:'他那天说了烦心事',subject:'topic:烦心事',evidence:{messages:[message]},confidence:'observed'}).sources,1)
+  assert.throws(()=>memory.inspect(foreign.id,{kind:'episode',id:episode.id}),/资料范围/)
   assert.throws(()=>memory.propose(publicView.id,{kind:'claim',claimType:'fact',statement:'他最近很累',evidence:{messages:[message]},confidence:'observed'}),/资料范围/)
+  // 另一个主体无论如何都读不到、也写不进这段经历。
+  assert.equal(memory.recall(foreign.id).results.length,0,'a different subject sees nothing')
+  assert.throws(()=>memory.propose(foreign.id,{kind:'claim',claimType:'fact',statement:'他最近很累',evidence:{messages:[message]},confidence:'observed'}),/资料范围/)
 })
 
 test('forgetting blocks re-derivation from the same original wording or not',t=>{
@@ -241,14 +251,15 @@ test('a commitment returns once at its trigger and needs real evidence to close'
   assert.equal(memory.dueIntent(Date.now()),null)
 })
 
-test('time-triggered intents fire after their due time only, and stay inside their scope',t=>{
-  const {data,memory,target,say}=fixture(t),a=target('123'),b=target('456','另一个群','group'),view=data.open(a.handle),other=data.open(b.handle)
+test('time-triggered intents fire after their due time only, and stay inside their own subject',t=>{
+  const {data,memory,target,wechat,say}=fixture(t),a=target('123'),b=target('456','另一个群','group'),view=data.open(a.handle),other=data.open(b.handle),foreign=data.open(wechat('alice').handle)
   const message=say(a.handle,'123','t1','下周记得问那份资料')
   const due=Date.now()+3600000
   const intent=memory.intent(view.id,{statement:'问那份资料',kind:'intention',trigger:'time',dueAt:due,evidence:{messages:[message]}})
   assert.equal(memory.dueIntent(due-1),null)
-  // A private commitment is invisible from another window.
-  assert.deepEqual(memory.intents(data.view(other.id)),[])
+  // 同一个主体的另一个 QQ 窗口看到同一件待办；另一个主体看不到。
+  assert.deepEqual(memory.intents(data.view(other.id)).map(item=>item.id),[intent.id],'another window of the same subject continues the intent')
+  assert.deepEqual(memory.intents(data.view(foreign.id)),[],'a different subject sees nothing')
   assert.equal(memory.dueIntent(due+1).id,intent.id)
   memory.consumeIntent(intent.id,due)
   assert.equal(memory.dueIntent(due+2),null,'the same due time fires once')
@@ -256,11 +267,14 @@ test('time-triggered intents fire after their due time only, and stay inside the
   assert.throws(()=>memory.intent(view.id,{statement:'x',kind:'intention',trigger:'time',evidence:{messages:[message]}}),/dueAt/)
   assert.throws(()=>memory.intent(view.id,{statement:'y',kind:'commitment',trigger:'explicit',evidence:{messages:[message]}}),/完成条件/)
   assert.throws(()=>memory.intent(view.id,{statement:'z',kind:'intention',trigger:'explicit'}),/依据/)
-  // Revoking the window means a pending reminder no longer surfaces anywhere.
+  // Revoking one window invalidates the view and the reminders recorded inside it,
+  // so nothing tied to that scope surfaces from the subject's other window either.
   const pending=memory.intent(view.id,{statement:'问另一份资料',kind:'intention',trigger:'time',dueAt:Date.now()+1000,evidence:{messages:[message]}})
   data.approve(a.handle,false)
   assert.equal(memory.dueIntent(Date.now()+5000),null,'a revoked window cannot surface a reminder')
-  assert.equal(memory.intents(data.view(other.id)).length,0)
+  // 撤销一个窗口也让按旧授权建的视图失效；重新打开后那条被撤销范围内的事项不会冒出来。
+  assert.throws(()=>data.view(other.id),/失效/)
+  assert.equal(memory.intents(data.open(b.handle)).length,0)
   assert.ok(pending.id)
 })
 
@@ -334,7 +348,7 @@ test('legacy memories arrive as unverified claims and migrate only once',t=>{
 })
 
 test('wakes are counted and a reminder that keeps being ignored goes quiet',t=>{
-  const {data,memory,target,say}=fixture(t),a=target('123'),b=target('456','另一个群','group'),view=data.open(a.handle),other=data.open(b.handle)
+  const {data,memory,target,wechat,say}=fixture(t),a=target('123'),b=target('456','另一个群','group'),view=data.open(a.handle),other=data.open(b.handle),foreign=data.open(wechat('alice').handle)
   const message=say(a.handle,'123','w1','周五之前给你答复')
   const intent=memory.intent(view.id,{statement:'周五前答复他',kind:'commitment',trigger:'window',about:a.handle,
     doneWhen:'把答复发出来',evidence:{messages:[message]}})
@@ -364,6 +378,8 @@ test('wakes are counted and a reminder that keeps being ignored goes quiet',t=>{
   assert.equal(closed.ignored,3)
   assert.equal(closed.open,0)
   assert.equal(memory.intents(view).find(item=>item.id===intent.id).nagMuted,false)
-  // Wake counts stay inside their scope.
-  assert.deepEqual(memory.summary(data.view(other.id)).wakes,{delivered:0,done:0,dropped:0,ignored:0,open:0})
+  // Wake counts belong to the subject: another QQ window carries the same counts,
+  // while an independent subject sees none of them.
+  assert.deepEqual(memory.summary(data.view(other.id)).wakes,{delivered:4,done:1,dropped:0,ignored:3,open:0})
+  assert.deepEqual(memory.summary(data.view(foreign.id)).wakes,{delivered:0,done:0,dropped:0,ignored:0,open:0},'wake counts never leak into another subject')
 })

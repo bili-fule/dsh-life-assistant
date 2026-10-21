@@ -267,3 +267,15 @@ QQ 新增 `yoyo_debug` / `yoyo_debug_status` / `yoyo_debug_patch`，通过宿主
 没有的东西照样是硬边界，不靠提示词：分派／取消／接管其他执行者（`team_*` 全套）、切换窗口与设置注意力／免打扰（`yoyo_open`／`yoyo_attention`／`yoyo_mute`／`yoyo_dismiss`）、主体的自身状态（活动、打算、情绪与动机、关切与反馈、学习意图、人设与设置）、不可逆动作（`memory_retract`）与排障容器（`yoyo_debug*`）。发言仍走任务自己的发言租约：主体接管后同伴的后续发送立刻失效；同时受 `max_steps`、任务期限、用量台账与暂停开关约束。
 
 插件测试 238 项（新增 2 项：同伴具备哪些工具且没有控制面、接管后不能再发、只能收窄工具集；同伴调用主体实现时带任务视图与任务级回执、保留工具不接线、取消后立即失效）与语法检查通过。未部署。
+
+## 0.39 连续主体：窗口是位置，不是权限
+
+把 QQ 从「按窗口隔离的 Agent」改成「一个连续主体」。读取权随主体走：`open(窗口)` 得到的视图携带该平台**全部已授权范围**，`focus` 只决定工具作用在哪个收件人；`view(id)` 会把存储范围与主体当前范围取并集，所以新授权的窗口立刻可读，旧视图不会因为少一个范围而看不到自己的新记录。主会话历史按主体读取权投影，切换群聊、私聊或 public 研究不再重写原生请求视图；`state()` 里的活动、关切、计划、记忆与学习同样按主体读取权返回，`focus` 与 `currentWindow` 单独给出。
+
+发言校验从「本轮读过的范围必须等于目标范围」换成**主体边界**校验（`scope.mjs` 的 `assertOutbound`）：同一主体可以读 A 群再发 B 群（这就是一个人切窗口），但 QQ 资料不能发进微信主体、微信资料也不能发进 QQ 窗口；撤权目标解析不到平台因而被拒。收件人在 `yoyo_send`（可选 `target`）与出站队列里显式绑定，异步切窗不会改收件人，同一原生动作仍不能更换收件人或正文，`uncertain` 仍不自动重发。内容得体由提示词约束，没有新增隔离发言或审核 Agent。
+
+新增跨窗口活动索引：`yoyo_activities` 记目标、起因、当前步骤、完成与停止条件、复查时间、revision 与 owner_version，`yoyo_activity_links` 把关切、计划与委派任务挂到同一条活动；`yoyo_activity` 带 `goal` 新建（同目标重复创建会合并）、带 `activityId` 更新（revision 过期会被拒绝而不是覆盖）；`yoyo_open` 可以携带 `activityId`，指针写进 `yoyo_activity.body.activityId` 与 `yoyo_current_activity`，重启后恢复。打开窗口不写任何完成状态，0 未读也不会让活动变成 done。
+
+分支侧：`research` / `engineer` 从任意窗口分派时由宿主**自建 public 视图**（不再要求主体先切到 public 窗口），这两个角色仍拿不到私有材料；`chat` / `reader` / `peer` 与主体共享读取权；任务幂等比较改为窗口句柄（新增列 `focus_key`、`activity_id`，旧库按 `yoyo_views.focus` 回填）。
+
+插件测试见 `npm test`（`test/subject-continuity.test.mjs` 4 项：切窗后仍知道目标/起因/步骤、重启恢复同一活动、过期 revision 被拒、打开窗口不写完成且未知活动被拒）。逐项证据与仍未实现的缺口（分支增量事件与确认游标、同级问答、运行重叠实测、冲突合并、真实模型回放与部署）见 [实施状态与证据](../docs/subject-continuity.md)。未部署。

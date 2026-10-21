@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { boundedText, assertPublish, mayRead, sourceScopes } from './scope.mjs'
+import { boundedText, mayRead, sourceScopes } from './scope.mjs'
 
 // Each role is a fixed set of host methods. A task may narrow its role, never
 // widen it; the model cannot name a tool outside its role.
@@ -60,8 +60,11 @@ export class TeamStore {
     const columns=this.db.prepare('PRAGMA table_info(yoyo_team_tasks)').all().map(column=>column.name)
     for(const [name,type] of [['failures','INTEGER NOT NULL DEFAULT 0'],['retry_at','INTEGER'],['renewed_at','INTEGER'],
       ['parent_id','TEXT'],['depends_on','TEXT'],['toolset','TEXT'],['authorization_version','INTEGER'],
-      ['persona_version','INTEGER'],['max_steps','INTEGER']])
+      ['persona_version','INTEGER'],['max_steps','INTEGER'],['focus_key','TEXT'],['activity_id','TEXT']])
       if(!columns.includes(name))this.db.exec(`ALTER TABLE yoyo_team_tasks ADD COLUMN ${name} ${type}`)
+    // A task now stores the window it works in, not the identity of the caller's
+    // view object, so idempotency is compared on the window itself.
+    this.db.exec("UPDATE yoyo_team_tasks SET focus_key=(SELECT coalesce(focus,'') FROM yoyo_views v WHERE v.id=yoyo_team_tasks.view_id) WHERE focus_key IS NULL")
     // Databases created before usage reporting was distinguished keep their rows;
     // an existing 0 simply means "not reported", which is what the flag defaults to.
     const usageColumns=this.db.prepare('PRAGMA table_info(yoyo_team_usage)').all().map(column=>column.name)
@@ -77,17 +80,17 @@ export class TeamStore {
     try {const result=fn();this.db.exec('COMMIT');return result}
     catch(error){this.db.exec('ROLLBACK');throw error}
   }
-  create({key,role,goal,viewId,expiresAt,parentId=null,dependsOn=null,toolset=null,maxSteps=null}) {
+  create({key,role,goal,viewId,expiresAt,parentId=null,dependsOn=null,toolset=null,maxSteps=null,activityId=null}) {
     if(!Object.keys(ROLE_TOOLS).includes(role))throw Error('未知执行角色')
     boundedText(key,300,'幂等键');goal=boundedText(goal,6000,'任务目标')
-    const view=this.social.view(viewId)
-    // chat and reader work inside one window; research and verify never imply a
-    // private window.
+    let view=this.social.view(viewId)
+    // chat, reader and peer work inside one window; research and verify never
+    // imply a private window.
     if(['chat','reader'].includes(role)&&!view.focus)throw Error('该角色需要绑定窗口')
-    // Until an audited declassification path exists, public work starts public.
-    if(role==='research'&&view.scopes.some(s=>s!=='public'))throw Error('公开研究必须从公开视图分派')
-    // Engineering must not carry private material into a code runner.
-    if(role==='engineer'&&view.scopes.some(s=>s!=='public'))throw Error('工程任务必须从公开视图分派')
+    // Public research and engineering must not carry private material into a
+    // separate process, so they get their own public window instead of failing:
+    // the subject keeps its own reading rights while the branch stays narrow.
+    if(['research','engineer'].includes(role)&&view.scopes.some(s=>s!=='public')){view=this.social.publicView();viewId=view.id}
     if(!Number.isSafeInteger(expiresAt)||expiresAt<=this.clock())throw Error('任务期限无效')
     let tools=null
     if(toolset!==null){
@@ -102,17 +105,19 @@ export class TeamStore {
       depends=JSON.stringify([...new Set(dependsOn)])
     }
     if(parentId!==null)this.inspect(parentId,viewId)
+    if(activityId!==null&&!this.social.activities(viewId).some(a=>a.activityId===activityId))throw Error('活动不存在或不在当前资料范围')
     const old=this.db.prepare('SELECT * FROM yoyo_team_tasks WHERE run_key=?').get(key)
     if(old){
-      if(old.role!==role||old.goal!==goal||old.view_id!==viewId||old.expires_at!==expiresAt)throw Error('幂等键参数冲突')
+      if(old.role!==role||old.goal!==goal||(old.focus_key??'')!==(view.focus??'')||old.expires_at!==expiresAt)throw Error('幂等键参数冲突')
       return old
     }
     // Snapshots make a stale authorisation or persona visible instead of implicit.
     const authorization=view.focus&&['chat','reader','peer'].includes(role)?this.social.target(view.focus,{approved:true}).version:null
     const persona=this.db.prepare('SELECT coalesce(max(id),0) id FROM yoyo_persona_versions').get().id
     const id=randomUUID()
-    this.db.prepare('INSERT INTO yoyo_team_tasks(id,run_key,role,goal,view_id,state,expires_at,created_at,parent_id,depends_on,toolset,authorization_version,persona_version,max_steps) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id,key,role,goal,viewId,'ready',expiresAt,this.clock(),parentId,depends,tools,authorization,persona,maxSteps)
+    this.db.prepare('INSERT INTO yoyo_team_tasks(id,run_key,role,goal,view_id,state,expires_at,created_at,parent_id,depends_on,toolset,authorization_version,persona_version,max_steps,focus_key,activity_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(id,key,role,goal,viewId,'ready',expiresAt,this.clock(),parentId,depends,tools,authorization,persona,maxSteps,view.focus??'',activityId)
+    if(activityId)this.social.linkActivity(activityId,'task',id)
     return this.inspect(id,viewId)
   }
   inspect(id,viewId) {
@@ -146,7 +151,7 @@ export class TeamStore {
         // version means the window changed and the old task must not continue.
         if(task.authorization_version!==null&&target.version!==task.authorization_version)throw Error('目标授权已变化，不能沿用旧任务')
         if(['chat','peer'].includes(task.role)){
-          assertPublish(view.scopes,target.scope)
+          this.social.assertOutbound(view.scopes,view.focus)
           const speaker=this.db.prepare('SELECT * FROM yoyo_team_speakers WHERE target=?').get(view.focus)
           if(speaker&&speaker.expires_at>this.clock())throw Error('窗口已有发言者')
           this.speaker(view.focus,agentId,id,task.expires_at,view.id)
@@ -167,14 +172,15 @@ export class TeamStore {
       generation=generation+1,expires_at=excluded.expires_at,view_id=excluded.view_id`).run(target,agentId,taskId,expiresAt,viewId)
     return this.db.prepare('SELECT generation FROM yoyo_team_speakers WHERE target=?').get(target).generation
   }
-  takeover(viewId,mainAgentId,expiresAt) {
+  takeover(viewId,mainAgentId,expiresAt,target=null) {
     const view=this.social.view(viewId)
-    if(!view.focus||!Number.isSafeInteger(expiresAt)||expiresAt<=this.clock())throw Error('接管参数无效')
-    assertPublish(view.scopes,this.social.target(view.focus,{approved:true}).scope)
+    const window=target??view.focus
+    if(!window||!Number.isSafeInteger(expiresAt)||expiresAt<=this.clock())throw Error('接管参数无效')
+    this.social.assertOutbound(view.scopes,window)
     return this.transaction(()=>{
-      const previous=this.db.prepare('SELECT task_id FROM yoyo_team_speakers WHERE target=?').get(view.focus)
+      const previous=this.db.prepare('SELECT task_id FROM yoyo_team_speakers WHERE target=?').get(window)
       if(previous?.task_id)this.db.prepare("UPDATE yoyo_team_tasks SET state='cancelled' WHERE id=?").run(previous.task_id)
-      return this.speaker(view.focus,mainAgentId,null,expiresAt,view.id)
+      return this.speaker(window,mainAgentId,null,expiresAt,view.id)
     })
   }
   authorizeSend(agentId,target,generation) {
@@ -185,7 +191,7 @@ export class TeamStore {
     if(lease.task_id){
       const {view}=this.authority(agentId)
       if(view.focus!==target)throw Error('执行者不能跨窗口发送')
-      assertPublish(view.scopes,this.social.target(target,{approved:true}).scope)
+      this.social.assertOutbound(view.scopes,target)
     }
     return true
   }

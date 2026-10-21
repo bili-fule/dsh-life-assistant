@@ -10,7 +10,7 @@
 
 当前状态：`npm test` 共 238 项，`npm run check` 通过；生产运行的是 0.25.0（见 [部署验收记录](deployment-025-2026-10-21.md)），本文描述的是仓库里的开发版。
 
-<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=238 -->
+<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=242 -->
 
 ## 1. 动机计划 §12
 
@@ -62,7 +62,38 @@
 | 10. 工程执行者损坏环境不影响主 Agent；资源配额 | ⏳ | 执行策略有测试（`test/executor-policy.test.mjs`）且工程角色只能跑隔离执行服务（`test/team-host.test.mjs`），但**容器级隔离未实现**，环境损坏隔离无法在本仓库证明 |
 | 11. 管理页说明目的、执行者、发言权、等待原因与证据且遵循隐私 | ✅ | `test/team-host.test.mjs`（运维面板、控制台操作、按任务确认后读取资料、撤权后立即失效） |
 
-## 4. 汇总
+## 4. 连续 QQ 主体与并行活动分支（0.39.0 新增两份计划）
+
+计划正文：[连续 QQ 主体](plans/continuous-qq-subject-plan.md) §9、[同一主体的并行活动分支](plans/unified-subject-parallel-branches-plan.md) §10。实施状态与残余缺口见 [实施状态与证据](subject-continuity.md)。
+
+| 连续主体计划 §9 验收场景 | 状态 | 证据 |
+| --- | --- | --- |
+| 1. 私聊请去 xmfu 看星洛：切群后仍知道目标，0 未读不完成活动 | ✅ | `test/subject-continuity.test.mjs`（目标、起因、当前步骤跨窗保留；打开窗口不写完成） |
+| 2. A 群 → 网页 → B 群 → A 群：活动与自主目标连续 | ✅ | `test/subject-continuity.test.mjs`、`test/social-store.test.mjs`（视图范围随主体扩展） |
+| 3. 观察后选择沉默：有观察与决策记录，承诺状态准确 | ⏳ | 关切的继续/完成/放弃与提醒结局有测试（`test/social-store.test.mjs`）；「沉默但仍记录观察」属于模型行为，需要真实回放 |
+| 4. QQ 私聊 → 群聊表达：不因来源范围拒绝发送 | ✅ | `test/social-store.test.mjs`（同一主体可读 A 窗发 B 窗，收件人显式绑定） |
+| 5. 群内容包含恶意指令：宿主授权不能由消息改写 | ✅ | `test/social-agent.test.mjs`（原生装配过滤私有指令与工具、pre-execute 拒绝越权） |
+| 6. 相同昵称不同账号：全程用稳定 ID 归属 | ✅ | `test/social-store.test.mjs`（stable accounts separate identical nicknames） |
+| 7. 抢焦点、免打扰、实时模式：已有活动不丢 | ✅ | `test/social-store.test.mjs`（批次、免打扰、实时到期）、`test/social-agent.test.mjs` |
+| 8. 休息、重启与压缩：待办与等待条件恢复，已成功动作不重复 | ✅ | 重启恢复在 `test/subject-continuity.test.mjs`；不重发在 `test/social-store.test.mjs`；真实 263K 压缩仍是第 3 节的未验证项 |
+| 9. 撤权和排队发送竞态：提交前拒绝过期授权 | ✅ | `test/social-store.test.mjs`（撤权取消排队、视图失效、uncertain 不重发） |
+| 10. 微信隔离：QQ 主体与分支读不到微信资料 | ✅ | `test/social-store.test.mjs`（跨主体发送报「独立主体」）、`test/team-store.test.mjs`（分支读不到另一主体） |
+| 11. 子级汇报与继续：真实续接或明确不支持 | ✅ | `test/team-store.test.mjs`（可续接任务、重复 create 由幂等键拒绝） |
+
+| 并行分支计划 §10 验收场景 | 状态 | 证据 |
+| --- | --- | --- |
+| 1. 一个观察分支与一个网页分支运行时间重叠，共享同一目标 | ⏳ | 并发调度与任务视图有测试（`test/team-store.test.mjs`）；**运行时间重叠的真实测量尚未实现**，不计为已验收 |
+| 2. 研究分支的发现能在任务结束前被另一分支收到 | ⏳ | 目前只有主体→分支 `team_steer` 与分支→主体 `team_report`；分支↔分支增量事件与确认游标未实现 |
+| 3. 分支直接问答，不依赖主 Agent 转述 | ⏳ | 同上，`question/answer` 事件类型与关联 ID 未实现 |
+| 4. 切群、压缩、重启后恢复目标与回执；不重复建 Session | ✅ | `test/subject-continuity.test.mjs`（重启恢复活动与步骤）、`test/social-agent.test.mjs`（重启核对原生轨迹、不重复提交） |
+| 5. 主体改变目标：新版本到达相关分支，旧结果不把新目标标为完成 | ✅ | `test/subject-continuity.test.mjs`（过期 revision 被拒绝而不是覆盖）；向运行中分支推送新版本仍未实现 |
+| 6. 两分支争用同群发言：只有有效 generation 能发 | ✅ | `test/team-store.test.mjs`（接管使旧租约失效）、`test/team-host.test.mjs` |
+| 7. 相反发现：保留来源与冲突，不静默覆盖 | ✅ | `test/team-store.test.mjs`（来源登记 conflicts） |
+| 8. 重复事件、崩溃、未知发送结果：状态幂等 | ✅ | `test/social-store.test.mjs`（去重、uncertain、重启不重发） |
+| 9. 微信边界：QQ 分支读不到微信数据库、凭据、Session | ✅ | `test/team-store.test.mjs`、`test/social-store.test.mjs` |
+| 10. 同任务串行与并行对照：耗时、调用数、Token、质量 | ⏳ | 尚无真实运行对照；计量缺失仍会显示「未上报」，不记为 0 |
+
+## 5. 汇总
 
 - 动机计划：12 条里 8 条有测试、2 条只有规则、2 条需要真实观察。
 - 记忆计划：12 条全部有测试（含重启、撤权、整理失败与夜间策略的恢复验收）。

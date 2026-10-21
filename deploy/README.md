@@ -42,6 +42,7 @@ autonomy:
     account: '替换为实际机器人QQ号'
     tokenEnv: SNOWLUMA_TOKEN
     eventTokenEnv: SNOWLUMA_EVENT_TOKEN
+  subjectPlatform: qq      # 主体读取权的平台边界；默认独立 QQ 会话下为 qq，省略时取全部已授权窗口
   executor:
     socketPath: /run/yoyo-executor/runner.sock
   team:
@@ -68,6 +69,8 @@ autonomy:
 若网关在 Docker 中，将所有管理端口发布到宿主回环地址。`onebot-relay.mjs` 仅在 Docker 网桥监听经过认证的 `POST /onebot/event`，固定转发至助理的同名入口；它不转发管理 API。按实际网桥设置 `YOYO_RELAY_BIND`，并共享 `SNOWLUMA_EVENT_TOKEN`。示例 systemd 单元见 `yoyo-onebot-relay.service`。
 
 管理页的「yoyo 的活动」负责预算、观察/暂停、公开人设和窗口授权。每日预算初始为 0，不自动开始无人值守活动；观察模式抑制 QQ 发言，私人微信回复仍可发送。未授权窗口不会进入模型收件箱。授权发生变化后，旧窗口视图和待发消息失效。
+
+QQ 是一个**连续主体**：已授权窗口都属于同一个它，切换群聊、私聊或 public 研究不重写主会话历史，也不重新剪掉自己的活动、关切、计划与记忆；窗口只决定工具现在作用在哪个收件人。因此读 A 群再发 B 群是正常行为（同一个人切窗口），而 QQ 与微信互为独立主体、资料不能互相投递。收件人在发送时显式绑定，异步切窗不会改变收件人。内容是否得体由提示词和人格约束，不额外插入隔离发言或审核 Agent。详见 [连续主体实施状态](../docs/subject-continuity.md)。
 
 ## 执行服务
 
