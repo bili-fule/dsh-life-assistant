@@ -19,7 +19,9 @@ ProtectSystem=strict
 ReadWritePaths=/run/yoyo-browser /run/docker.sock
 NoNewPrivileges=true
 MemoryMax=64M
-TasksMax=24
+# Each concurrent Docker CLI starts multiple Go runtime threads.
+# Leave room for all four allowed browser sessions and cleanup commands.
+TasksMax=128
 
 [Install]
 WantedBy=multi-user.target
