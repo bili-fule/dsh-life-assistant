@@ -9,7 +9,7 @@ export class TeamCoordinator {
     if(!Number.isInteger(maxConcurrent)||maxConcurrent<1||maxConcurrent>8)throw Error('并发限制无效')
     this.tasks=tasks;this.adapter=adapter;this.tools=tools;this.maxConcurrent=maxConcurrent;this.running=new Map();this.retry=retry
   }
-  start(id) {
+  start(id,{wake=null}={}) {
     if(this.running.size>=this.maxConcurrent)return {started:false,reason:'capacity'}
     // The executor identity is derived from the task, so a later attempt reuses
     // the same DSH home, working directory and native session instead of
@@ -17,7 +17,7 @@ export class TeamCoordinator {
     const agentId='worker-'+createHash('sha256').update(id).digest('hex').slice(0,20)
     const {task,view}=this.tasks.claim(id,agentId),controller=new AbortController()
     const generation=['chat','peer'].includes(task.role)?this.tasks.db.prepare('SELECT generation FROM yoyo_team_speakers WHERE target=?').get(view.focus).generation:null
-    let conclusion=null
+    let conclusion=null,suspended=false
     const invoke=async(name,args)=>{
       if(controller.signal.aborted)throw Error('执行已取消')
       const current=this.tasks.authority(agentId)
@@ -28,7 +28,16 @@ export class TeamCoordinator {
         conclusion=args.decision
         return {decision:conclusion,recorded:true}
       }
+      // Suspending is a real state: the run ends here, the process is released and
+      // only a genuine new message wakes this same identity and session again.
+      if(name==='pause'){
+        if(suspended)throw Error('任务已经挂起')
+        const paused=this.tasks.pause(agentId,args?.reason)
+        suspended=true
+        return paused
+      }
       if(conclusion&&!['usage','report'].includes(name))throw Error('任务已经明确结束')
+      if(suspended&&!['usage','report'].includes(name))throw Error('任务已经挂起')
       const roleTools=ROLE_TOOLS[task.role]??[]
       // A task may narrow the role's toolset, never widen it.
       const allowed=task.toolset?roleTools.filter(name=>JSON.parse(task.toolset).includes(name)):roleTools
@@ -77,13 +86,19 @@ export class TeamCoordinator {
     deadline.unref?.()
     const runStarted=this.tasks.clock()
     slot.promise=Promise.resolve().then(()=>this.adapter.run({
-      agentId,task:{id,role:task.role,goal:task.goal,expiresAt:task.expires_at},
+      agentId,task:{id,role:task.role,goal:task.goal,expiresAt:task.expires_at,wake},
       invoke,signal:controller.signal,
     })).then(()=>{
       // Model-response latency of one executor run, kept apart from the event
       // delivery latency the store records at each native boundary.
       this.tasks.metrics?.count('worker_run');this.tasks.metrics?.time('worker_run',this.tasks.clock()-runStarted)
-      if(!conclusion)throw Error('原生轮次结束但任务没有明确结束决定')
+      if(!conclusion){
+        const state=this.tasks.db.prepare('SELECT state FROM yoyo_team_tasks WHERE id=?').get(id)?.state
+        // A suspended task ended this run on purpose; anything else that stops
+        // without a decision is a failure, not a quiet success.
+        if(state==='suspended')return {state:'suspended'}
+        throw Error('原生轮次结束但任务没有明确结束决定')
+      }
       const state=conclusion==='completed'?'completed':'cancelled'
       this.tasks.finish(agentId,state)
       return {state}
@@ -103,7 +118,7 @@ export class TeamCoordinator {
     const slot=this.running.get(id)
     // Fence first, then ask the runtime to stop.
     this.tasks.transaction(()=>{
-      this.tasks.db.prepare("UPDATE yoyo_team_tasks SET state='cancelled' WHERE id=? AND state IN ('ready','running','waiting')").run(id)
+      this.tasks.db.prepare("UPDATE yoyo_team_tasks SET state='cancelled' WHERE id=? AND state IN ('ready','running','waiting','suspended')").run(id)
       this.tasks.db.prepare('UPDATE yoyo_team_speakers SET generation=generation+1,expires_at=0 WHERE task_id=?').run(id)
     })
     slot?.controller.abort(Error('任务取消'))

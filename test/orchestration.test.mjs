@@ -89,6 +89,23 @@ test('a takeover without a real reason is refused',async t=>{
   assert.equal(agent.executionGrant(),null)
 })
 
+test('follow-up messages in an owned window go to the executor instead of waking the subject',async t=>{
+  const {agent,store}=fixture(t)
+  store.set('yoyo_started',true)
+  const view=agent.activeView,handle=view.focus
+  const task=agent.team.tasks.create({key:'chat-owned',role:'chat',goal:'接话',viewId:view.id,expiresAt:Date.now()+600000})
+  agent.team.tasks.claim(task.id,'worker-owned')
+  assert.equal(agent.team.ownsWindow(handle),true,'while the executor holds the window')
+  agent.team.tasks.pause('worker-owned','等对方回复')
+  agent.data.ingest({target:handle,sender:'123',externalId:'follow-1',text:'你还没回答我',receivedAt:Date.now()-10000})
+  assert.equal(agent.team.ownsWindow(handle),true,'a suspended activity still owns its window')
+  assert.equal(agent.choose(Date.now()+agent.config.ordinaryMs+1000),null,'the subject is not asked to approve each follow-up')
+  // Once the activity is gone the same window reaches the subject again.
+  agent.team.coordinator.cancel(task.id,view.id)
+  assert.equal(agent.team.ownsWindow(handle),false)
+  assert.notEqual(agent.choose(Date.now()+agent.config.ordinaryMs+2000),null)
+})
+
 test('metrics keep counts, separate latencies and a missing meter apart from zero',()=>{
   const root=mkdtempSync(join(tmpdir(),'yoyo-metrics-')),store=new Store(join(root,'m.sqlite'))
   try{

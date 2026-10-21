@@ -447,7 +447,7 @@ export class SocialAgent {
     for(const plan of due){try{const v=this.data.view(plan.view_id);this.duePlan=plan.id;return select(v.focus??(v.scopes.length===1?'public':'overview'),{kind:'plan_review_due',plan:plan.id},v)}catch{/* Revoked work does not wake the agent. */}}
     this.readyJob=null
     for(const job of this.data.db.prepare("SELECT id,view_id,state,backend FROM yoyo_jobs WHERE notified=0 AND state IN ('done','failed','timed_out','interrupted') AND view_id IS NOT NULL ORDER BY created_at LIMIT 20").all()){try{const v=this.data.view(job.view_id);this.readyJob=job;return select(v.focus??(v.scopes.length===1?'public':'overview'),{kind:'job_finished',job:job.id,state:job.state,backend:job.backend},v)}catch{this.data.db.prepare('UPDATE yoyo_jobs SET notified=1 WHERE id=?').run(job.id)}}
-    const a=this.data.activity(),inbox=this.data.attention(now,this.config.quietMs).filter(t=>t.ready&&!this.team?.activeWindow(t.handle))
+    const a=this.data.activity(),inbox=this.data.attention(now,this.config.quietMs).filter(t=>t.ready&&!this.team?.ownsWindow(t.handle))
     const concern=this.data.dueConcern(now)
     if(concern){this.dueConcern=concern;return select(concern.view.focus??(concern.view.scopes.length===1?'public':'overview'),{kind:'concern_review_due',concern:concern.id,scheduledAt:concern.reviewAt},concern.view)}
     // A commitment or an awaited reply returns at the agent's own action

@@ -250,11 +250,36 @@ export class TeamHost {
   activeWindow(target) {
     return !!this.db.prepare("SELECT 1 FROM yoyo_team_speakers s JOIN yoyo_team_tasks t ON t.id=s.task_id WHERE s.target=? AND s.expires_at>? AND t.state IN ('running','waiting')").get(target,Date.now())
   }
+  // A window belongs to a branch while a chat/peer task runs or is suspended on
+  // it. The subject is not woken for those messages; the host hands them over.
+  ownsWindow(target) {
+    if(!target)return false
+    return !!this.db.prepare("SELECT 1 FROM yoyo_team_tasks WHERE focus_key=? AND role IN ('chat','peer') AND state IN ('running','waiting','suspended') AND expires_at>? LIMIT 1").get(target,Date.now())
+  }
+  // Follow-up messages in a window that already has a chat executor go straight to
+  // that executor, with a brief carrying the real message ids. The subject is not
+  // asked to approve each line, and nothing here invents a "keep going" prompt.
+  routeChatMessages(now=Date.now()) {
+    const routed=[]
+    for(const candidate of this.tasks.chatWakeCandidates({now,quietMs:this.social.config?.quietMs??5000})){
+      if(this.coordinator.running.size>=this.coordinator.maxConcurrent)break
+      let started=null
+      try{started=this.coordinator.start(candidate.id,{wake:{kind:'new_messages',after:candidate.after,through:candidate.through,count:candidate.count}})}catch{continue}
+      if(!started.started)break
+      // The cursor moves when the delivery is handed over, not when the branch
+      // paused: a message that arrived during the run is never lost, at worst it
+      // costs one extra wake.
+      this.tasks.ackChatThrough(candidate.id,candidate.through)
+      this.social.metrics?.count('chat_routed_to_executor')
+      routed.push({taskId:candidate.id,target:candidate.target,count:candidate.count,through:candidate.through})
+    }
+    return routed
+  }
   // Read-only operational view for the admin page: who runs what, how long they
   // have left, why a task is waiting, and what it has spent. No goal, no report
   // text and no private window content.
   status() {
-    const tasks=this.db.prepare(`SELECT t.id,t.role,t.state,t.attempt,t.failures,t.retry_at,t.renewed_at,t.expires_at,
+    const tasks=this.db.prepare(`SELECT t.id,t.role,t.state,t.attempt,t.failures,t.retry_at,t.renewed_at,t.expires_at,t.paused_reason,t.wake_count,t.chat_through,
       coalesce((SELECT sum(u.steps) FROM yoyo_team_usage u WHERE u.task_id=t.id),0) steps,
       coalesce((SELECT sum(u.tokens) FROM yoyo_team_usage u WHERE u.task_id=t.id),0) tokens,
       coalesce((SELECT max(u.tokens_reported) FROM yoyo_team_usage u WHERE u.task_id=t.id),0) tokensReported,
@@ -288,7 +313,7 @@ export class TeamHost {
   digest(viewId) {
     try{
       const view=this.social.data.view(viewId)
-      const tasks=this.db.prepare("SELECT id,role,state,expires_at,failures,retry_at FROM yoyo_team_tasks WHERE state IN ('ready','running','waiting','blocked') ORDER BY created_at DESC LIMIT 8").all()
+      const tasks=this.db.prepare("SELECT id,role,state,expires_at,failures,retry_at FROM yoyo_team_tasks WHERE state IN ('ready','running','waiting','blocked','suspended') ORDER BY created_at DESC LIMIT 8").all()
         .map(row=>({id:row.id,role:row.role,state:row.state,waitReason:this.waitReason(row)}))
       const events=this.tasks.activityEvents(view.id,{limit:5}).map(({eventId,kind,from,to,at})=>({eventId,kind,from,to,at}))
       return {running:this.coordinator.running.size,max:this.coordinator.maxConcurrent,tasks,openQuestions:this.tasks.openQuestions(view.id).length,recentEvents:events}
@@ -309,11 +334,18 @@ export class TeamHost {
     if(row.state==='ready')return row.dependsOn?'等待依赖任务':'等待调度'
     if(row.state==='running')return row.leaseExpires?'执行中':'执行中（无发言租约）'
     if(row.state==='waiting')return '等待对方回复'
+    if(row.state==='suspended')return '等待该窗口的新消息'
     return row.state
   }
   tick() {
     const settings=this.social.store.get('yoyo_settings',{})
     if(settings.paused)return
+    // A suspended activity whose window has new messages is woken here, by the
+    // host, with the message ids; there is no fixed "continue" prompt and no
+    // model-side polling. Expired suspensions end their activity instead.
+    const now=Date.now()
+    this.db.prepare("UPDATE yoyo_team_tasks SET state='cancelled' WHERE state='suspended' AND expires_at<=?").run(now)
+    this.routeChatMessages(now)
     // Retries are opt-in. A task whose last send is uncertain is never retried.
     if(this.config.retryBlocked)for(const row of this.tasks.resumable({now:Date.now()})){
       try{this.tasks.inspect(row.id,row.view_id);this.tasks.requeue(row.id)}catch{/* Revoked work stays blocked. */}

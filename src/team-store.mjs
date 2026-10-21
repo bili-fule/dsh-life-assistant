@@ -4,7 +4,7 @@ import { boundedText, mayRead, sourceScopes } from './scope.mjs'
 // Each role is a fixed set of host methods. A task may narrow its role, never
 // widen it; the model cannot name a tool outside its role.
 export const ROLE_TOOLS={
-  chat:['read','wait','recall','send','report','evidence','board','remember','pack','usage','step','ask','answer','events','wait_event'],
+  chat:['read','wait','pause','recall','send','report','evidence','board','remember','pack','usage','step','ask','answer','events','wait_event'],
   research:['web','report','evidence','board','remember','pack','usage','step','ask','answer','events','wait_event'],
   reader:['read','recall','report','evidence','board','remember','pack','usage','step','ask','answer','events','wait_event'],
   verify:['board','recall','report','evidence','pack','usage','step','answer','events','wait_event'],
@@ -16,7 +16,7 @@ export const ROLE_TOOLS={
   // no orchestration of other executors, no attention/focus, no own-state or
   // settings tools, and no debug container. The subject keeps cancelling, steering,
   // taking over and bounding it.
-  peer:['read','wait','search','message','file','attachment','forward','recall','web','execute','job','send',
+  peer:['read','wait','pause','search','message','file','attachment','forward','recall','web','execute','job','send',
     'report','evidence','board','remember','pack','memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize','usage','step','ask','answer','events','wait_event'],
 }
 
@@ -82,7 +82,10 @@ export class TeamStore {
     const columns=this.db.prepare('PRAGMA table_info(yoyo_team_tasks)').all().map(column=>column.name)
     for(const [name,type] of [['failures','INTEGER NOT NULL DEFAULT 0'],['retry_at','INTEGER'],['renewed_at','INTEGER'],
       ['parent_id','TEXT'],['depends_on','TEXT'],['toolset','TEXT'],['authorization_version','INTEGER'],
-      ['persona_version','INTEGER'],['max_steps','INTEGER'],['focus_key','TEXT'],['activity_id','TEXT']])
+      ['persona_version','INTEGER'],['max_steps','INTEGER'],['focus_key','TEXT'],['activity_id','TEXT'],
+      // The chat cursor is what makes "these messages are the executor's, not a
+      // new decision for the subject" checkable instead of hopeful.
+      ['chat_through','INTEGER NOT NULL DEFAULT 0'],['wake_count','INTEGER NOT NULL DEFAULT 0'],['paused_reason','TEXT']])
       if(!columns.includes(name))this.db.exec(`ALTER TABLE yoyo_team_tasks ADD COLUMN ${name} ${type}`)
     // A task now stores the window it works in, not the identity of the caller's
     // view object, so idempotency is compared on the window itself.
@@ -140,7 +143,26 @@ export class TeamStore {
     this.db.prepare('INSERT INTO yoyo_team_tasks(id,run_key,role,goal,view_id,state,expires_at,created_at,parent_id,depends_on,toolset,authorization_version,persona_version,max_steps,focus_key,activity_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(id,key,role,goal,viewId,'ready',expiresAt,this.clock(),parentId,depends,tools,authorization,persona,maxSteps,view.focus??'',activityId)
     if(activityId)this.social.linkActivity(activityId,'task',id)
+    // A new chat task starts from what is already in the window: only messages
+    // that arrive afterwards are the executor's to handle.
+    if(['chat','peer'].includes(role)&&view.focus)this.db.prepare('UPDATE yoyo_team_tasks SET chat_through=? WHERE id=?').run(this.latestMessage(view.focus),id)
     return this.inspect(id,viewId)
+  }
+  latestMessage(target){return this.db.prepare("SELECT coalesce(max(id),0) id FROM yoyo_events WHERE target=? AND kind<>'outgoing'").get(target).id}
+  // Which suspended chat task has new messages waiting, batched like the subject's
+  // own attention so a burst is one wake and a quiet window is no wake at all.
+  chatWakeCandidates({now=this.clock(),quietMs=5000,limit=8}={}){
+    const cutoff=now-Math.max(0,quietMs),rows=this.db.prepare("SELECT id,view_id,focus_key,expires_at,chat_through,paused_reason FROM yoyo_team_tasks WHERE state='suspended' AND expires_at>? ORDER BY chat_through LIMIT ?").all(now,limit)
+    const out=[]
+    for(const row of rows){
+      if(!row.focus_key)continue
+      const fresh=this.db.prepare("SELECT count(*) n,max(id) through FROM yoyo_events WHERE target=? AND kind<>'outgoing' AND id>? AND received_at<=?").get(row.focus_key,row.chat_through,cutoff)
+      if(fresh.n>0)out.push({id:row.id,viewId:row.view_id,target:row.focus_key,after:row.chat_through,through:fresh.through,count:fresh.n,reason:row.paused_reason??null})
+    }
+    return out
+  }
+  ackChatThrough(taskId,through){
+    this.db.prepare('UPDATE yoyo_team_tasks SET chat_through=max(chat_through,?),wake_count=wake_count+1 WHERE id=?').run(Number(through)||0,taskId)
   }
   inspect(id,viewId) {
     const row=this.db.prepare('SELECT * FROM yoyo_team_tasks WHERE id=?').get(id)
@@ -160,7 +182,9 @@ export class TeamStore {
   claim(id,agentId) {
     boundedText(agentId,160,'执行者')
     return this.transaction(()=>{
-      const task=this.db.prepare("SELECT * FROM yoyo_team_tasks WHERE id=? AND state='ready'").get(id)
+      // A suspended chat task is claimable again: the same identity, the same
+      // native session, a fresh lease.
+      const task=this.db.prepare("SELECT * FROM yoyo_team_tasks WHERE id=? AND state IN ('ready','suspended')").get(id)
       if(!task||task.expires_at<=this.clock())throw Error('任务不可领取')
       const view=this.social.view(task.view_id)
       if(task.depends_on)for(const dependency of JSON.parse(task.depends_on)){
@@ -228,6 +252,21 @@ export class TeamStore {
   reports(id,viewId) {
     this.inspect(id,viewId)
     return this.db.prepare('SELECT id,body,created_at FROM yoyo_team_reports WHERE task_id=? ORDER BY id DESC LIMIT 50').all(id)
+  }
+  // Waiting for the next message is a host state, not a model loop: the native run
+  // ends, the process is released, and the speaker lease goes back so the window is
+  // not locked. The next message wakes the same identity and the same session.
+  pause(agentId,reason) {
+    const {task,view}=this.authority(agentId)
+    if(!['chat','peer'].includes(task.role))throw Error('只有聊天类任务可以挂起等新消息')
+    reason=boundedText(reason,1000,'挂起原因')
+    return this.transaction(()=>{
+      this.db.prepare('INSERT INTO yoyo_team_reports(task_id,attempt,body,created_at) VALUES(?,?,?,?)').run(task.id,task.attempt,'挂起等待新消息：'+reason,this.clock())
+      this.db.prepare("UPDATE yoyo_team_tasks SET state='suspended',paused_reason=? WHERE id=?").run(reason,task.id)
+      this.db.prepare('UPDATE yoyo_team_speakers SET expires_at=0 WHERE task_id=? AND agent_id=?').run(task.id,agentId)
+      if(task.activity_id)this.publishEvent({fromTask:task.id,activityId:task.activity_id,kind:'progress',body:'这个聊天活动在等后续消息：'+reason,viewId:view.id})
+      return {paused:true,state:'suspended',after:task.chat_through??0}
+    })
   }
   // ---------------------------------------------------------------- events
   // Durable, at-least-once, deduplicated. The database is the authority and the

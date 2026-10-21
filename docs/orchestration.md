@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 1. 现场审计与基线 | 已实现、已核对 | 本文 §1；基线 `npm test` 257/257（提交 `ffb1b8f`） |
 | 2. 默认委派（工具面 + 接管例外） | 已实现、已测试、未部署 | `test/orchestration.test.mjs`（默认隐藏重执行工具、陈旧工具列表不能执行、接管需理由、到期/归还后失效） |
-| 2b. 后续聊天消息直达执行者 | 已设计、未实现 | §4.1 |
+| 2b. 后续聊天消息直达执行者 | 已实现、已测试、未部署 | `test/chat-routing.test.mjs`（挂起释放进程与租约、真实新消息才唤醒、突发一次唤醒、身份与 Session 复用、游标不重复、并发满排队、过期取消） |
 | 3. 意图队列 | 已设计、未实现 | §4.2 |
 | 4. 活动图与按需观察 | 已设计、未实现（证据板/来源登记/裁定已存在） | §4.3 |
 | 5. 冷分支与反思 | 已设计、未实现 | §4.4 |
@@ -48,6 +48,24 @@
 - `subject_turn`：主体一轮原生运行的耗时。
 - 未上报的量（例如运行时不提供 token 计量）写 `reported=0, value=null`，读取为「未测量」，不记成 0。
 
+## 2b. 已实现：后续聊天消息直达执行者（计划 §5）
+
+| 环节 | 现在怎么做 | 代码 | 证据 |
+| --- | --- | --- | --- |
+| 起点 | 聊天任务创建时记录该窗口的消息游标 `chat_through`，已有消息不算这个执行者的新工作 | `TeamStore.create()` | `test/chat-routing.test.mjs`「a new chat task starts after what is already there」 |
+| 挂起 | 执行者要等对方接着说时用 `team_pause`；宿主把任务置为 `suspended`、写挂起原因与一条进展、释放进程并交回发言租约 | `TeamStore.pause()`、`TeamCoordinator.start()` 的 `pause` 分支 | 同文件（`paused_reason`、租约 `expires_at=0`、只有聊天类角色可以挂起） |
+| 唤醒 | `TeamHost.tick()` → `routeChatMessages()`：按 `quietMs` 合并突发、只对真有新消息的挂起任务启动；开场是 `{kind:'new_messages',after,through,count}` 的真实投递 | `TeamHost.routeChatMessages()`、`TeamNativeAdapter` | 「the burst wakes the executor」+ 断言 `count/after/through` |
+| 身份与 Session | agentId 由任务编号派生，唤醒复用同一身份 → 同一原生 Session，不重复 `create` | `TeamCoordinator.start()` | 「the same executor identity, so the same native session」 |
+| 不重复投递 | 游标在**交付**时前进；运行期间到达的消息最多多花一次唤醒，不会丢 | `TeamStore.ackChatThrough()` | 「a new message that arrives during the run costs one more wake」 |
+| 容量 | 并发满时不启动、消息保持排队，下一轮 tick 再试；主体不会被默默拉来代做 | `routeChatMessages()` 的 capacity 分支 | 「no free executor slot leaves the message queued」 |
+| 过期 | 过期挂起先在 `tick()` 里置为 `cancelled`，不再路由 | `TeamHost.tick()` | 「an expired suspension ends the activity」 |
+| 主体侧 | `choose()` 用 `ownsWindow()` 跳过有聊天执行者（运行中或挂起）的窗口；主体仍可用 `team_takeover` 亲自发言，接管会让旧任务发送失效 | `TeamHost.ownsWindow()`、`SocialAgent.choose()` | 「follow-up messages in an owned window…」 |
+| 取消 | 取消现在也覆盖 `suspended`（此前只覆盖 ready/running/waiting） | `TeamCoordinator.cancel()` | 同上测试的取消分支 |
+
+唤醒提示不是「继续当前活动」的固定句子：它带窗口与消息编号区间，且执行者被要求用 `team_read` 从 `after` 之后接着读。空窗口不产生任何唤醒，因此没有固定空提示驱动，也没有模型侧轮询。
+
+
+
 ## 3. 验收口径
 
 本计划的验收必须可重复观察「主体决定与协调、执行者实际推进」，并且保持一个连续身份和活动图。判读规则：
@@ -62,7 +80,7 @@
 | 用例 | 状态 | 证据 / 缺口 |
 | --- | --- | --- |
 | 请去 xmfu 看星洛 | ⬜ | 需要意图队列（§4.2）才能把「观察意图 → 执行者读群+浏览 → 主体零重执行」做成可断言路径；主体零重执行的**工具面前提**已由 §2 提供 |
-| 持续普通聊天 | ⬜ | 需要 §4.1 的后续消息直达执行者 |
+| 持续普通聊天 | ✅ | `test/chat-routing.test.mjs`：后续消息由宿主按真实游标唤醒同一个执行者身份与 Session；窗口被执行者拥有时主体不会被唤醒（`test/orchestration.test.mjs`）；挂起即暂停，不是完成 |
 | 聊天同时研究 | ⏳ | 已有并行分支与事件（`test/team-events.test.mjs`）与真实回放（并行 9.4 s vs 串行 46.2 s），但「中途分享 + 主体仍能处理新要求」需在新的默认委派下重跑 |
 | 方向变更 | ✅ | `test/team-events.test.mjs`（`direction_changed` 带活动版本送达，旧结果不算完成新目标） |
 | 无空闲额度 | ⬜ | 需要 §4.2 的队列可观察性（ready/running/waiting 与等待原因） |
@@ -74,10 +92,8 @@
 
 ## 4. 未完成部分（按计划顺序）
 
-### 4.1 后续聊天消息直达执行者（计划 §5）
-目标：窗口里有活跃聊天活动时，新消息由宿主直接交给该执行者的**原生会话**，不经过主体规划；执行者可以在等待期间释放进程，新消息唤醒后继续（不重复 `create` Session）。
-现状缺口：执行者的原生轮次结束后，同一窗口的新消息会唤醒主体；`choose()` 只看「是否有执行者持租约」，不看「是否有可续接的聊天活动」。
-计划做法：任务增加「挂起（waiting，进程已释放）」状态与聊天游标；`TeamHost.tick()` 负责「有新消息 → 唤醒该任务」，唤醒提示只携带真实消息游标与条数（不是固定的「继续当前活动」提示）。
+### 4.1 后续聊天消息直达执行者（计划 §5）—— 已实现，见 §2b
+机制已落地并被 `test/chat-routing.test.mjs` 断言。剩余的是观察项：真实模型是否会在合适的时候用 `team_pause` 挂起、被唤醒后是否从游标处接着读、以及频繁续接时的成本。
 
 ### 4.2 意图队列（计划 §4）
 目标：活动（持续目标）→ 意图（可委派的一段工作）→ 任务（执行尝试）三层权威，状态 `ready/claimed/running/waiting/blocked/completed/abandoned`，带优先级、依赖、去重（同活动同目的先检索）、领取与租约、等待时间提升、以及旧状态映射。

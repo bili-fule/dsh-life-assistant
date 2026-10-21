@@ -44,7 +44,13 @@ export class TeamNativeAdapter {
         HOME:dir,USERPROFILE:dir,DSH_HOME:join(dir,'.dsh'),YOYO_TEAM_ROLE:task.role,YOYO_TEAM_ENDPOINT:`http://127.0.0.1:${server.address().port}/`,YOYO_TEAM_TOKEN:token}
       harness=new DeepSeekHarness({profile:'sdk-minimal',patches:[resolve(cfg.providerPatch),patch],dshHome:join(dir,'.dsh'),cwd:dir,processCwd:dir,env,provider:cfg.provider,model:cfg.model,maxTokens:cfg.maxTokens??8000,initializeTimeoutMs:45000})
       signal.addEventListener('abort',abort,{once:true});signal.throwIfAborted()
-      const result=await harness.run(JSON.stringify({role:task.role,goal:task.goal,expiresAt:task.expiresAt,persona:cfg.persona?.()}),{sessionId:agentId})
+      // A wake is a real delivery, not a nudge to "continue": it names the window,
+      // the message ids that arrived while the branch was away, and where it left
+      // off. The same session id is reused, so waking never creates a new Session.
+      const opening={role:task.role,goal:task.goal,expiresAt:task.expiresAt,persona:cfg.persona?.()}
+      if(task.wake)opening.wake={kind:task.wake.kind,after:task.wake.after,through:task.wake.through,count:task.wake.count,
+        instruction:'这个窗口在你挂起之后有新消息。先用 team_read 从 after 之后读，直接接着处理；不需要主体批准。处理完如果还要等后续，用 team_pause 说明原因；确定这个聊天活动结束时用 team_finish 说明结果。'}
+      const result=await harness.run(JSON.stringify(opening),{sessionId:agentId})
       signal.throwIfAborted()
       if(result.events.findLast(e=>e.type==='turn/end')?.data.reason?.kind!=='completed')throw Error('Native worker did not complete')
       // Record real token usage when the runtime reports it; never estimate. The
