@@ -6,9 +6,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| 待上线提交 | 推送后的 `main` 顶端（最后一次文档/修复提交；编排改造的主体提交为 `f7e8535`、`1755c6d`、`cd1cd0e`、`18ec1cd`、`34df8e4`） |
+| 待上线提交 | 推送后的 `main` 顶端（最近一次为 `7a0aff3`，含管理页队列/计量/折叠面板；编排改造主体提交 `f7e8535`、`1755c6d`、`cd1cd0e`、`18ec1cd`、`34df8e4`、`9e42b3d`、`095fac0`、`7eaed25`、`abf9a1b`） |
 | 版本号 | `package.json` 0.40.0 |
-| 测试 | `npm run check` 通过；`npm test` 281/281 |
+| 测试 | `npm run check` 通过；`npm test` 289/289 |
 | 原生验证（需要本机 SDK） | `node test/team-native-smoke.mjs`、`node test/team-native-events.mjs` 均 `PASS` |
 | 真实模型验证（可选、需要密钥） | `node test/team-native-real.mjs`（串行/并行对照）、`node test/team-native-intent.mjs`（意图队列 → 真实执行者）、`node test/team-native-chat.mjs`（聊天挂起与唤醒，常驻会话）、`node test/team-native-resume-probe.mjs`（SDK 会话续接能力探测）均 `PASS`，见 [真实模型运行记录](../docs/real-model-run-2026-10-21.md) |
 
