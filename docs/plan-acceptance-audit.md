@@ -10,7 +10,7 @@
 
 当前状态：`npm test` 共 238 项，`npm run check` 通过；生产运行的是 0.25.0（见 [部署验收记录](deployment-025-2026-10-21.md)），本文描述的是仓库里的开发版。
 
-<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=250 -->
+<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=251 -->
 
 ## 1. 动机计划 §12
 
@@ -75,7 +75,7 @@
 | 5. 群内容包含恶意指令：宿主授权不能由消息改写 | ✅ | `test/social-agent.test.mjs`（原生装配过滤私有指令与工具、pre-execute 拒绝越权） |
 | 6. 相同昵称不同账号：全程用稳定 ID 归属 | ✅ | `test/social-store.test.mjs`（stable accounts separate identical nicknames） |
 | 7. 抢焦点、免打扰、实时模式：已有活动不丢 | ✅ | `test/social-store.test.mjs`（批次、免打扰、实时到期）、`test/social-agent.test.mjs` |
-| 8. 休息、重启与压缩：待办与等待条件恢复，已成功动作不重复 | ✅ | 重启恢复在 `test/subject-continuity.test.mjs`；不重发在 `test/social-store.test.mjs`；真实 263K 压缩仍是第 3 节的未验证项 |
+| 8. 休息、重启与压缩：待办与等待条件恢复，已成功动作不重复 | ✅ | 重启恢复与压缩后重新投影在 `test/subject-continuity.test.mjs`；不重发在 `test/social-store.test.mjs`；真实 263K 压缩会话仍未实测 |
 | 9. 撤权和排队发送竞态：提交前拒绝过期授权 | ✅ | `test/social-store.test.mjs`（撤权取消排队、视图失效、uncertain 不重发） |
 | 10. 微信隔离：QQ 主体与分支读不到微信资料 | ✅ | `test/social-store.test.mjs`（跨主体发送报「独立主体」）、`test/team-store.test.mjs`（分支读不到另一主体） |
 | 11. 子级汇报与继续：真实续接或明确不支持 | ✅ | `test/team-store.test.mjs`（可续接任务、重复 create 由幂等键拒绝） |

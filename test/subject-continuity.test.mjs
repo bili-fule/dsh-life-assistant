@@ -61,6 +61,40 @@ test('a window switch keeps the goal, the reason and the unfinished step',async 
   assert.equal(agent.state().activities[0].activityId,started.activityId)
 })
 
+test('a compaction re-projects the same subject view instead of keeping a stale one',async t=>{
+  const {agent,store,target,call}=fixture(t)
+  store.set('yoyo_settings',{observeOnly:false})
+  const owner=target('1001'),group=target('2002','group')
+  agent.activeView=agent.data.open(owner.handle)
+  const started=await call('yoyo_activity',{goal:'把群里的新游戏查清楚',why:'主人问过',step:'先读群原文'})
+
+  // A minimal native session surface: five private messages and one tool call.
+  const nodes=[1,2,3,4,5,6],events=[1,2,3,4,5,6].map(seq=>({seq,type:seq===6?'tool/result':'user/message',data:{message:{role:seq===6?'tool':'user',toolCallId:'c1',content:[]}}}))
+  for(const seq of nodes)agent.data.labelEvent('one-agent',seq,agent.readView().scopes)
+  const session={id:'one-agent',surface:{nodes:[...nodes]},appended:[],append(type,data){this.appended.push({type,data})},snapshotEvents:()=>events.map(event=>({...event}))}
+  agent.applyView({session})
+  assert.equal(session.appended.length,1)
+  assert.deepEqual(session.appended[0].data.visibleSeqs,nodes,'the whole subject history is visible while nothing was compacted')
+
+  // Compaction replaces the surface with a summary node plus the newest message.
+  session.surface.nodes=[7,8]
+  events.push({seq:7,type:'compaction/summary',data:{message:{role:'assistant',content:[{type:'text',text:'摘要：主人在私聊里让我去看群'}]}}})
+  events.push({seq:8,type:'user/message',data:{message:{role:'user',content:[]}}})
+  agent.data.labelEvent('one-agent',7,agent.readView().scopes)
+  agent.data.labelEvent('one-agent',8,agent.readView().scopes)
+  agent.applyView({session})
+  assert.equal(session.appended.length,2,'the projection is re-applied after the surface changed')
+  assert.deepEqual(session.appended[1].data.visibleSeqs,[7,8])
+  // The goal itself never lived in the compacted history: it is still there.
+  const state=agent.state()
+  assert.equal(state.activities[0].activityId,started.activityId)
+  assert.equal(state.activities[0].step,'先读群原文')
+  assert.equal(state.currentActivityId,started.activityId)
+  // Repeating a step with an unchanged surface does not append again.
+  agent.applyView({session})
+  assert.equal(session.appended.length,2)
+})
+
 test('a restart resumes the same activity instead of an anonymous window',async t=>{
   const {agent,store,target,call,runtime,root}=fixture(t)
   store.set('yoyo_settings',{observeOnly:false})

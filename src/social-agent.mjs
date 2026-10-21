@@ -116,9 +116,12 @@ export class SocialAgent {
     // History is projected by the subject's own reading rights, so switching a
     // chat window no longer re-cuts the running session.
     const view=this.readView(),focus=this.activeView?.focus??null,session=agent.session
-    const key=view.id+'|'+focus
-    if(this.appliedView?.session===session&&this.appliedView.key===key)return
     const visible=scopedSurfaceSeqs(session,seq=>this.data.eventVisible(session.id,seq,view.id))
+    // The projection is re-applied whenever the surface itself changed, which is
+    // how a compaction (new summary node, shorter surface) gets the same subject
+    // view instead of keeping a stale projection from before it happened.
+    const key=view.id+'|'+focus+'|'+visible.length+'|'+(visible[visible.length-1]??'')
+    if(this.appliedView?.session===session&&this.appliedView.key===key)return
     session.append('request/view',{viewId:view.id,visibleSeqs:visible,scopes:view.scopes,authorizationVersion:null,focus})
     this.appliedView={session,key}
     if(focus)this.data.recordFocus(focus)

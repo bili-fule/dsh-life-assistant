@@ -77,6 +77,7 @@
 | 重启后恢复同一活动与未完成步骤 | `test/subject-continuity.test.mjs` |
 | 过期 revision 被拒绝而不是覆盖 | `test/subject-continuity.test.mjs` |
 | 打开窗口不写完成、未知活动被拒绝 | `test/subject-continuity.test.mjs` |
+| 压缩后重新投影同一个主体视图，活动与步骤仍在 | `test/subject-continuity.test.mjs` |
 | 两个分支同时运行；发现的投递发生在作者发布完成事件之前 | `test/team-events.test.mjs` |
 | 分支直接问答：问题 → 答复，`ref` 关联，未答问题清空 | `test/team-events.test.mjs` |
 | 事件去重、过期不投递、非法类型被拒 | `test/team-events.test.mjs` |
@@ -113,5 +114,5 @@ PASS: two real DSH worker processes exchanged a question and an answer through t
 
 1. **真实模型上的分支行为**：本文件第 5 节的确定性测试与第 6 节的双进程验证都用了脚本模型。真实模型是否愿意用 `team_ask`（而不是干等或自己猜）、是否会误把兄弟分支的话当成指令，尚未回放。
 2. **真实运行的重叠计量**：需要记录提交事件到投递的 p95、模型响应耗时、串行与并行的总耗时／调用数／Token，并与「无改善」的情形对比。现在只有逻辑顺序证明（事件序号、完成事件晚于投递）与双进程功能验证，没有计时对照。
-3. **压缩后的真实会话验证**：重启恢复与续接有测试，263K 压缩后的会话表面恢复没有真实环境验证。
+3. **压缩后的真实会话验证**：压缩后的投影与活动恢复有确定性测试（表面变化即重新投影，目标不依赖被压缩的历史），但真实 263K 压缩会话、真实摘要内容对活动叙述的影响没有实测。
 4. **部署**：生产是 `16b71e3` 的 0.38.0（见 `deploy/STATUS.md` 头部与 `docs/deployment-038-2026-10-21.md`），本改造在其之后，未上线，不能写成「已部署」。
