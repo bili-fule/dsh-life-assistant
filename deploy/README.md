@@ -31,8 +31,9 @@ autonomy:
     mode: record            # record 只记录；choose 允许作为选择依据
     maxDeltaPerHour: 0.45   # 单个偏好一小时内允许的变化上限
   memory:
-    enabled: false          # 打开后才有 memory_recall / memory_inspect / memory_propose / memory_retract
+    enabled: false          # 打开后才有 memory_recall / memory_inspect / memory_propose / memory_retract / memory_segments / memory_intent / memory_generalize
     recallLimit: 8          # 每次召回最多返回几条概要
+    migrateLegacy: false    # 打开时把旧 yoyo_memories 逐条登记为待核实主张（只跑一次，不改旧记录）
   qq:
     endpoint: http://127.0.0.1:3000
     account: '替换为实际机器人QQ号'

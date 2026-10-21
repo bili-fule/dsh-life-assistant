@@ -74,7 +74,11 @@ export class MemoryLayer {
         id INTEGER PRIMARY KEY,kind TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'open',due_at INTEGER,consumed_at INTEGER,consumed_ref INTEGER,
         created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_memory_migrations(
+        legacy_id INTEGER PRIMARY KEY,claim_id INTEGER NOT NULL,created_at INTEGER NOT NULL);
     `)
+    // Off by default: importing old notes is a deliberate operation.
+    if(config.migrateLegacy===true)this.legacyMigration=this.migrateLegacy()
   }
   visible(alias) {return `NOT EXISTS(SELECT 1 FROM json_each(${alias}.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?)))`}
 
@@ -614,6 +618,33 @@ export class MemoryLayer {
     this.db.prepare('UPDATE yoyo_memory_intents SET consumed_at=?,consumed_ref=max(coalesce(consumed_ref,0),?) WHERE id=?')
       .run(Date.now(),Number.isSafeInteger(reference)?reference:0,id)
     return {id,consumed:true}
+  }
+
+  // ---- legacy migration --------------------------------------------------
+  // The older yoyo_memories rows keep their text, their scopes and their
+  // provenance. They arrive as unverified material: migration never raises a
+  // confidence class, and the original rows stay active until reviewed.
+  migrateLegacy({limit=200}={}) {
+    const rows=this.db.prepare(`SELECT m.* FROM yoyo_memories m WHERE m.active=1
+      AND NOT EXISTS(SELECT 1 FROM yoyo_memory_migrations g WHERE g.legacy_id=m.id) ORDER BY m.id LIMIT ?`).all(limit)
+    const type={episodes:'fact',profile:'fact',relations:'fact',knowledge:'knowledge',procedures:'procedure',intention:'self',communication:'communication'}
+    const migrated=[]
+    for(const row of rows){
+      const scopes=JSON.stringify(sourceScopes(JSON.parse(row.scopes)))
+      if(this.db.prepare('SELECT 1 FROM yoyo_memory_claims WHERE statement=? AND scopes=?').get(row.body,scopes))continue
+      const claimType=type[row.kind]??'fact'
+      const body={context:'',support:[],counter:[],note:'旧记忆迁移：来源与类型沿用原记录，尚未按新结构核实',dimension:null,
+        legacy:{memoryId:row.id,kind:row.kind,confidence:row.confidence},needsReview:true,simulated:false}
+      const now=Date.now()
+      const id=Number(this.db.prepare('INSERT INTO yoyo_memory_claims(subject,kind,statement,body,scopes,status,confidence,version,episode_id,created_at,updated_at) VALUES(?,?,?,?,?,\'active\',\'inference\',1,NULL,?,?)')
+        .run('legacy:'+row.kind,claimType,row.body,JSON.stringify(body),scopes,now,now).lastInsertRowid)
+      this.db.prepare('INSERT INTO yoyo_memory_revisions(claim_id,before,after,basis,confidence,created_at) VALUES(?,NULL,?,?,?,?)')
+        .run(id,JSON.stringify({statement:row.body,confidence:'inference',support:[]}),'migrate:legacy','inference',now)
+      this.db.prepare('INSERT INTO yoyo_memory_migrations(legacy_id,claim_id,created_at) VALUES(?,?,?)').run(row.id,id,now)
+      migrated.push({legacy:row.id,claim:id})
+    }
+    return {migrated:migrated.length,claims:migrated,
+      message:migrated.length?'旧记忆已按新结构登记为待核实材料；原文、范围与旧记录都保留，不会因此提高可信度。':'没有需要迁移的旧记忆。'}
   }
   summary(view) {
     if(!view)return null

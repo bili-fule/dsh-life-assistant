@@ -124,6 +124,31 @@ export class TeamHost {
   activeWindow(target) {
     return !!this.db.prepare("SELECT 1 FROM yoyo_team_speakers s JOIN yoyo_team_tasks t ON t.id=s.task_id WHERE s.target=? AND s.expires_at>? AND t.state IN ('running','waiting')").get(target,Date.now())
   }
+  // Read-only operational view for the admin page: who runs what, how long they
+  // have left, why a task is waiting, and what it has spent. No goal, no report
+  // text and no private window content.
+  status() {
+    const tasks=this.db.prepare(`SELECT t.id,t.role,t.state,t.attempt,t.failures,t.retry_at,t.renewed_at,t.expires_at,
+      coalesce((SELECT sum(u.steps) FROM yoyo_team_usage u WHERE u.task_id=t.id),0) steps,
+      coalesce((SELECT sum(u.tokens) FROM yoyo_team_usage u WHERE u.task_id=t.id),0) tokens,
+      (SELECT s.target FROM yoyo_team_speakers s WHERE s.task_id=t.id AND s.expires_at>?) leaseTarget,
+      (SELECT s.expires_at FROM yoyo_team_speakers s WHERE s.task_id=t.id AND s.expires_at>?) leaseExpires,
+      (SELECT count(*) FROM yoyo_team_reports r WHERE r.task_id=t.id) reports,
+      (SELECT count(*) FROM yoyo_team_evidence e WHERE e.task_id=t.id) evidence
+      FROM yoyo_team_tasks t ORDER BY t.created_at DESC LIMIT 50`).all(Date.now(),Date.now())
+    return {concurrency:{running:this.coordinator.running.size,max:this.coordinator.maxConcurrent},tasks:tasks.map(row=>{
+      const depends=this.db.prepare('SELECT depends_on FROM yoyo_team_tasks WHERE id=?').get(row.id).depends_on
+      const task={...row,dependsOn:depends?JSON.parse(depends).length:0}
+      return {...task,waitReason:this.waitReason(task)}
+    })}
+  }
+  waitReason(row) {
+    if(row.state==='blocked')return row.retry_at?'等待重试':row.failures?'失败，等待复查':'已阻塞'
+    if(row.state==='ready')return row.dependsOn?'等待依赖任务':'等待调度'
+    if(row.state==='running')return row.leaseExpires?'执行中':'执行中（无发言租约）'
+    if(row.state==='waiting')return '等待对方回复'
+    return row.state
+  }
   tick() {
     const settings=this.social.store.get('yoyo_settings',{})
     if(settings.paused)return
