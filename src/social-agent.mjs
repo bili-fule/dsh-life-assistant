@@ -16,6 +16,7 @@ import { qqMediaHost,imageExtension } from './qq-media.mjs'
 import { workspacePath } from './tools.mjs'
 import { DebugHelper } from './debug-helper.mjs'
 import { TeamHost,TEAM_TOOLS,TEAM_POLICY } from './team-host.mjs'
+import { OrchestrationMetrics } from './orchestration-metrics.mjs'
 import { Motivation,MOTIVATION_TOOLS,MOTIVATION_POLICY } from './motivation.mjs'
 import { MemoryLayer,MEMORY_TOOLS,MEMORY_POLICY } from './memory-layer.mjs'
 import { readChunk,CHUNK_DEFAULT,CHUNK_MAX } from './chunk.mjs'
@@ -28,6 +29,15 @@ const OWNER_TOOLS=new Set(['life_state','life_record','life_history','life_prefe
 // can never get is the control plane — the subject's own state, its attention and
 // focus, its settings, orchestration of other executors, or the debug container.
 const PEER_TOOL_NAMES=new Set(['yoyo_read','yoyo_search','yoyo_message','yoyo_file','yoyo_attachment','yoyo_forward','yoyo_recall','yoyo_web','memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize'])
+// Heavy execution: an isolated real browser, the networkless code runner and the
+// separate debug container. When executors exist, the subject's default surface is
+// orchestration only - deciding, delegating, watching, correcting - and these tools
+// appear only after an explicit, recorded takeover. Without executors the subject
+// has nowhere to delegate to, so the surface stays whole.
+const EXECUTION_TOOLS=new Set(['yoyo_execute','yoyo_job','yoyo_projects','yoyo_debug','yoyo_debug_status','yoyo_debug_patch'])
+export const SUBJECT_EXECUTION_TOOLS=[...EXECUTION_TOOLS]
+export const TAKEOVER_DEFAULT_MINUTES=10
+export const TAKEOVER_MAX_MINUTES=60
 function messagePreviews(rows,query='') {
   let remaining=60000
   return rows.map(row=>{
@@ -74,6 +84,8 @@ export class SocialAgent {
     this.ctx=ctx;this.data=new SocialStore(this.store);this.memoryMaintenance=new SocialMaintenance(this.data,config.memoryMaintenance)
     this.config={enabled:false,quietMs:5000,attentionMs:30000,ordinaryMs:120000,maxSteps:20,turnMs:300000,...config}
     this.enabled=!!this.config.enabled;this.activeView=this.separate?this.data.publicView():null;this.disposers=[];this.currentRequest=null;this.ownerSources=[];this.peerTools=new Map()
+    this.metrics=new OrchestrationMetrics(this.data.db)
+    this.data.db.exec('CREATE TABLE IF NOT EXISTS yoyo_takeovers(id INTEGER PRIMARY KEY,reason TEXT NOT NULL,granted_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,released_at INTEGER,released_by TEXT)')
     this.qq=config.qq?new SnowLuma({...config.qq,token:process.env[config.qq.tokenEnv??'SNOWLUMA_TOKEN'],eventToken:process.env[config.qq.eventTokenEnv??'SNOWLUMA_EVENT_TOKEN'],eventSecret:process.env[config.qq.eventSecretEnv??'SNOWLUMA_EVENT_SECRET']}):null
     this.executor=config.executor?new Executor(config.executor):null
     this.debugHelper=config.debugHelper?new DebugHelper(this,config.debugHelper):null
@@ -133,7 +145,22 @@ export class SocialAgent {
     if(this.readViewCache?.key!==key)this.readViewCache={key,view:this.data.planningView(this.subjectPlatform())}
     return this.readViewCache.view
   }
-  toolsAllowed(){if(this.maintenanceJob){const names=new Set(['yoyo_read','yoyo_message','yoyo_search','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence']);if(this.memoryLayer)for(const n of ['memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize'])names.add(n);return names}const names=new Set(COMMON_TOOLS);if(this.team)for(const n of TEAM_TOOLS)names.add(n);if(this.motivation)for(const n of MOTIVATION_TOOLS)names.add(n);if(this.memoryLayer)for(const n of MEMORY_TOOLS)names.add(n);if(this.separate)names.delete('life_context');if(this.config.publicBrowser&&this.activeView)for(const n of PUBLIC_BROWSER_TOOLS)names.add(n);if(this.executor){names.add('yoyo_execute');names.add('yoyo_job');names.add('yoyo_projects')}if(this.debugHelper)for(const n of ['yoyo_debug','yoyo_debug_status','yoyo_debug_patch'])names.add(n);if(this.isOwner())for(const n of OWNER_TOOLS)names.add(n);return names}
+  heavyTools(){const names=new Set(EXECUTION_TOOLS);if(this.config.publicBrowser)for(const n of PUBLIC_BROWSER_TOOLS)names.add(n);return names}
+  // A takeover is a recorded exception, not a mode switch: it names its reason,
+  // expires on its own, and every heavy call it allows is counted separately.
+  executionGrant(now=Date.now()){const grant=this.store.get('yoyo_execution_grant');return grant&&grant.expiresAt>now?grant:null}
+  grantExecution({reason,minutes=TAKEOVER_DEFAULT_MINUTES}){if(typeof reason!=='string'||!reason.trim()||reason.length>1000)throw Error('接管需要真实理由');if(!Number.isFinite(minutes)||minutes<=0)throw Error('接管时长无效');const at=Date.now(),expiresAt=at+Math.min(TAKEOVER_MAX_MINUTES,Math.max(1,Math.round(minutes)))*60000;const previous=this.executionGrant(at);const result=this.data.db.prepare('INSERT INTO yoyo_takeovers(reason,granted_at,expires_at) VALUES(?,?,?)').run(reason.trim(),at,expiresAt);const grant={id:Number(result.lastInsertRowid),reason:reason.trim(),at,expiresAt};this.store.set('yoyo_execution_grant',grant);this.metrics.count('subject_takeover');return {...grant,replaced:previous?.id??null}}
+  releaseExecution(by='subject'){const grant=this.executionGrant();this.store.set('yoyo_execution_grant',null);if(grant)this.data.db.prepare('UPDATE yoyo_takeovers SET released_at=?,released_by=? WHERE id=?').run(Date.now(),by,grant.id);return {released:grant?.id??null}}
+  takeoverLog(limit=10){return this.data.db.prepare('SELECT id,reason,granted_at,expires_at,released_at,released_by FROM yoyo_takeovers ORDER BY id DESC LIMIT ?').all(Math.min(50,Math.max(1,limit)))}
+  toolsAllowed(){
+    if(this.maintenanceJob){const names=new Set(['yoyo_read','yoyo_message','yoyo_search','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence']);if(this.memoryLayer)for(const n of ['memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize'])names.add(n);return names}
+    const names=new Set(COMMON_TOOLS);if(this.team)for(const n of [...TEAM_TOOLS,'yoyo_takeover','yoyo_handback'])names.add(n);if(this.motivation)for(const n of MOTIVATION_TOOLS)names.add(n);if(this.memoryLayer)for(const n of MEMORY_TOOLS)names.add(n);if(this.separate)names.delete('life_context');if(this.config.publicBrowser&&this.activeView)for(const n of PUBLIC_BROWSER_TOOLS)names.add(n);if(this.executor){names.add('yoyo_execute');names.add('yoyo_job');names.add('yoyo_projects')}if(this.debugHelper)for(const n of ['yoyo_debug','yoyo_debug_status','yoyo_debug_patch'])names.add(n);if(this.isOwner())for(const n of OWNER_TOOLS)names.add(n)
+    // Default delegation: with executors available the heavy tools stay out of the
+    // default surface instead of being trusted to a Gentle Prompt. The exception is
+    // an explicit takeover, which is logged and expires.
+    if(this.team&&!this.executionGrant())for(const n of this.heavyTools())names.delete(n)
+    return names
+  }
   register() {
     const ctx=this.ctx
     this.disposers.push(ctx.systemPrompt.context({name:'yoyo:state',order:900,text:({agent})=>agent?.id===this.sessionId?JSON.stringify(this.state()):''}))
@@ -147,7 +174,12 @@ export class SocialAgent {
       return {...result,tools,sections:result.sections.filter(s=>['harness:identity','yoyo:agency'].includes(s.name)),contexts:result.contexts.filter(c=>['life-assistant:state','yoyo:state'].includes(c.name)),variables:{life_assistant_state:JSON.stringify(this.state())}}
     }))
     this.disposers.push(ctx.on('tools/pre-execute',async(exec,next)=>{
-      if(this.enabled&&exec.agent?.id===this.sessionId){this.currentView();if(this.store.get('yoyo_settings',{}).paused)throw Error('主体已暂停');if(!this.toolsAllowed().has(exec.name))throw Error('此活动未获该工具的资源权限')}
+      if(this.enabled&&exec.agent?.id===this.sessionId){
+        this.currentView();if(this.store.get('yoyo_settings',{}).paused)throw Error('主体已暂停');if(this.team&&this.heavyTools().has(exec.name)&&!this.executionGrant())throw Error('默认编排模式不亲自浏览、跑代码或进排障容器；需要亲自处理时先 yoyo_takeover 说明理由');if(!this.toolsAllowed().has(exec.name))throw Error('此活动未获该工具的资源权限')
+        // A stale tool list or a replayed call cannot restore execution rights: the
+        // grant is checked again at dispatch, and every heavy call is counted.
+        if(this.heavyTools().has(exec.name))this.metrics.count('subject_exec')
+      }
       return next()
     }))
     this.disposers.push(ctx.on('tools/result',(exec,result)=>{
@@ -204,6 +236,7 @@ export class SocialAgent {
       }}))
     }
     this.team?.register(define)
+    this.registerOrchestration(define)
     this.motivation?.register(define)
     this.memoryLayer?.register(define)
     if(this.debugHelper){
@@ -377,12 +410,23 @@ export class SocialAgent {
       return {id:job.id,state:job.state,exitCode:job.exitCode,timedOut:job.timedOut,stdout:job.stdout,stderr:job.stderr,files,error:job.error??null}
     })
   }
+  // The subject's own execution is the exception, so it is asked for explicitly,
+  // logged, time-boxed and counted. The tools are registered either way - they are
+  // only injected after a grant - so a takeover does not need a plugin reload.
+  registerOrchestration(define){
+    define('yoyo_takeover','亲自执行需要显式接管：写明为什么这次必须由你自己浏览网页、运行代码或查看排障容器。接管会写入日志，到期（默认 10 分钟，最多 60 分钟）自动归还，重执行工具从下一次原生工具注入起出现。普通接话、读群、研究和工程默认交给执行者，不需要接管。',{reason:{type:'string',minLength:1,maxLength:1000},minutes:{type:'integer',minimum:1,maximum:60}},['reason'],async args=>{
+      if(!this.team)throw Error('没有可委派的执行者，本活动本来就可以自己执行')
+      const grant=this.grantExecution(args)
+      return {...grant,tools:[...this.heavyTools()],mode:'takeover',message:'重执行工具在下一次原生工具注入时可用；用完后 yoyo_handback 归还，或等到期自动归还。已分派的执行者不会因为接管而停止。'}
+    })
+    define('yoyo_handback','结束亲自执行、回到默认编排模式，重执行工具再次隐藏；已分派的执行者继续工作。',{},[],async()=>({...this.releaseExecution('subject'),mode:'delegate',toolsHidden:[...this.heavyTools()]}))
+  }
   state() {
     // Subject-level facts (why I came, what I promised, what is unfinished,
     // what I learned) are read with the subject's own rights. Focus and window
     // metadata sit next to them so switching a chat never erases the goal.
     const window=this.activeView,view=window?this.readView():null
-    return {navigation:this.data.navigation(),navigationAuthority:'Host metadata only: a past read proves that window was readable then, not current permission or knowledge of its content here. Check currentWindow and fresh tool results; historical activity descriptions are not live diagnostics.',engine:'DSH native Agent',persona:this.isOwner(window)?this.store.get('persona'):this.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同的边界。'),continuity:'You are one continuing subject. focus is only where you are looking now; the activities, commitments and progress below are yours and stay with you across windows. Other windows in this list are yours to open and read as needed, and their content is background you may know without dragging it into this chat.',self:this.store.get('yoyo_self',{mood:'calm',energy:'steady',satisfied:{}}),motivation:view&&this.motivation?this.motivation.summary(view):null,memoryLayer:view&&this.memoryLayer?this.memoryLayer.summary(view):null,activities:view?this.data.activities(view.id):[],currentActivityId:this.store.get('yoyo_current_activity')??null,team:view&&this.team?this.team.digest(view.id):null,activity:view?this.data.activity(view.id):null,plans:view?this.data.plans(view.id):[],concerns:view?this.data.concerns(view.id).filter(c=>['active','waiting'].includes(c.state)).slice(0,8).map(({id,title,why,next,state,reviewAt,wakes})=>({id,title,why,next,state,reviewAt,wakes})):[],feedback:view?this.data.concernFeedbacks(view.id):[],learning:view?this.data.learning(view.id).slice(0,12).map(({id,trait,state,identity})=>({id,trait,state,identity})):[],focus:window?.focus??null,currentWindow:window?.focus?this.data.inbox().find(t=>t.handle===window.focus)??null:null,memories:view?this.data.recall(view.id):[],environment:{pending:this.maintenanceJob?[]:this.data.pendingNotices(),wake:this.wakeEvent??null,noticed:this.maintenanceJob?[]:(this.environmentNotice??[]),delivery:'state_at_action_boundary',interrupt:false},attention:this.data.attention().filter(t=>t.ready).map(({handle,kind,label,ready,count,mentioned})=>({handle,kind,label,ready,count,mentioned})),memoryReview:this.maintenanceJob?{after:this.maintenanceJob.after,through:this.maintenanceJob.through,kind:this.maintenanceJob.kind}:null,timezone:'Asia/Shanghai'}
+    return {navigation:this.data.navigation(),navigationAuthority:'Host metadata only: a past read proves that window was readable then, not current permission or knowledge of its content here. Check currentWindow and fresh tool results; historical activity descriptions are not live diagnostics.',engine:'DSH native Agent',persona:this.isOwner(window)?this.store.get('persona'):this.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同的边界。'),continuity:'You are one continuing subject. focus is only where you are looking now; the activities, commitments and progress below are yours and stay with you across windows. Other windows in this list are yours to open and read as needed, and their content is background you may know without dragging it into this chat.',self:this.store.get('yoyo_self',{mood:'calm',energy:'steady',satisfied:{}}),motivation:view&&this.motivation?this.motivation.summary(view):null,memoryLayer:view&&this.memoryLayer?this.memoryLayer.summary(view):null,activities:view?this.data.activities(view.id):[],currentActivityId:this.store.get('yoyo_current_activity')??null,team:view&&this.team?this.team.digest(view.id):null,orchestration:{mode:this.team?(this.executionGrant()?'takeover':'delegate'):'self',executionGrant:this.team?this.executionGrant():null,heavyToolsHidden:!!this.team&&!this.executionGrant(),guidance:'决定、分派、观察关键进展与纠偏是你的默认工作；读群、浏览、研究和工程默认交给执行者。要亲自执行先 yoyo_takeover 并写明理由，完成后 yoyo_handback。',metrics:this.metrics.summary()},activity:view?this.data.activity(view.id):null,plans:view?this.data.plans(view.id):[],concerns:view?this.data.concerns(view.id).filter(c=>['active','waiting'].includes(c.state)).slice(0,8).map(({id,title,why,next,state,reviewAt,wakes})=>({id,title,why,next,state,reviewAt,wakes})):[],feedback:view?this.data.concernFeedbacks(view.id):[],learning:view?this.data.learning(view.id).slice(0,12).map(({id,trait,state,identity})=>({id,trait,state,identity})):[],focus:window?.focus??null,currentWindow:window?.focus?this.data.inbox().find(t=>t.handle===window.focus)??null:null,memories:view?this.data.recall(view.id):[],environment:{pending:this.maintenanceJob?[]:this.data.pendingNotices(),wake:this.wakeEvent??null,noticed:this.maintenanceJob?[]:(this.environmentNotice??[]),delivery:'state_at_action_boundary',interrupt:false},attention:this.data.attention().filter(t=>t.ready).map(({handle,kind,label,ready,count,mentioned})=>({handle,kind,label,ready,count,mentioned})),memoryReview:this.maintenanceJob?{after:this.maintenanceJob.after,through:this.maintenanceJob.through,kind:this.maintenanceJob.kind}:null,timezone:'Asia/Shanghai'}
   }
   async migrateInbox() {
     const owner=this.ownerTarget();if(!owner)return
@@ -488,11 +532,16 @@ export class SocialAgent {
       if(!review&&this.wakeEvent?.kind==='team_finished')this.team.acknowledge(this.wakeEvent.task)
       if(!review&&this.wakeEvent?.kind==='self_scheduled_review')this.data.db.prepare('UPDATE yoyo_activity SET wake_at=NULL WHERE id=1 AND revision=? AND wake_at=?').run(pending.revision,pending.wake_at)
       this.schedulerPhase='prompt'
+      const turnStarted=Date.now()
       await this.ctx.sessionController.prompt({sessionId:agent.id,requestId,mode:'queue',clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:prompt}]},this.runtime.abort.signal)
       if(this.readyJob){this.data.db.prepare('UPDATE yoyo_jobs SET notified=1 WHERE id=?').run(this.readyJob.id);this.readyJob=null}
       if(!review&&this.duePlan){this.data.db.prepare('UPDATE yoyo_plans SET not_before=NULL WHERE id=?').run(this.duePlan);this.duePlan=null}
       this.schedulerPhase='turn_running'
       await agent.whenIdle();await this.ctx.sessions.flush(agent.session)
+      // Two different latencies are recorded apart: how long the subject's own
+      // turn took, and - in the team store - how long an event waited for a
+      // branch to reach a native boundary.
+      this.metrics.time('subject_turn',Date.now()-turnStarted)
       const info=await this.ctx.sessionController.inspect(agent.id,this.runtime.abort.signal)
       const result=nativeOutcome(info.events,requestId)
       if(result.reason?.kind!=='completed')throw Error('自主活动未完成：'+(result.reason?.kind??'未取得回执'))

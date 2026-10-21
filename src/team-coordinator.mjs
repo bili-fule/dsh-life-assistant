@@ -75,10 +75,14 @@ export class TeamCoordinator {
       }catch{controller.abort(Error('任务权限已失效'))}
     },30000)
     deadline.unref?.()
+    const runStarted=this.tasks.clock()
     slot.promise=Promise.resolve().then(()=>this.adapter.run({
       agentId,task:{id,role:task.role,goal:task.goal,expiresAt:task.expires_at},
       invoke,signal:controller.signal,
     })).then(()=>{
+      // Model-response latency of one executor run, kept apart from the event
+      // delivery latency the store records at each native boundary.
+      this.tasks.metrics?.count('worker_run');this.tasks.metrics?.time('worker_run',this.tasks.clock()-runStarted)
       if(!conclusion)throw Error('原生轮次结束但任务没有明确结束决定')
       const state=conclusion==='completed'?'completed':'cancelled'
       this.tasks.finish(agentId,state)

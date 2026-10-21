@@ -34,8 +34,8 @@ export const QA_ROUND_LIMIT=4
 // Host-only API. Agent identity, view and lease tokens must never come from
 // model-supplied tool arguments. No production worker is enabled by this store.
 export class TeamStore {
-  constructor(social, clock=Date.now) {
-    this.social=social;this.db=social.db;this.clock=clock
+  constructor(social, clock=Date.now, metrics=null) {
+    this.social=social;this.db=social.db;this.clock=clock;this.metrics=metrics
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS yoyo_team_tasks(
         id TEXT PRIMARY KEY, run_key TEXT UNIQUE NOT NULL, role TEXT NOT NULL,
@@ -275,6 +275,10 @@ export class TeamStore {
       const through=event.id
       this.db.prepare('INSERT INTO yoyo_team_cursors(task_id,topic,cursor,updated_at) VALUES(?,?,?,?) ON CONFLICT(task_id,topic) DO UPDATE SET cursor=max(cursor,excluded.cursor),updated_at=excluded.updated_at').run(taskId,event.topic,through,now)
       this.db.prepare('UPDATE yoyo_team_events SET delivered_count=delivered_count+1 WHERE id=?').run(through)
+      // Handing an event over is not the same latency as the model reading it:
+      // this measures storage-to-boundary, so a slow branch shows up as a slow
+      // delivery instead of hiding inside its own turn time.
+      if(Number.isSafeInteger(event.created_at))this.metrics?.time('event_delivery',now-event.created_at)
     }
     return events.length
   }
