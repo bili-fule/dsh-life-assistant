@@ -50,7 +50,10 @@ class Model extends LlmAdapter {
     {type:'text-delta',index:0,text},
     {type:'block-end',index:0,block:{type:'text',text}},
     {type:'finish',reason:{kind:'stop'}}]
-  if(flat.includes('"recorded":true')){for(const e of stop('完成'))yield e;return}
+  // The explicit-completion contract applies to this scripted model too: a turn
+  // that stops with plain text is steered by the guard, so the branch ends by
+  // calling team_finish and only then stops.
+  if(flat.includes('"decision":"completed"')){for(const e of stop('完成'))yield e;return}
   const askTo=(goal.match(/问向任务 ([0-9a-f-]{36})/)??[])[1]??null
   const questionId=(goal.match(/问题编号 ([0-9a-f-]{36})/)??[])[1]??null
   // A tool result tells the model what it already did: an asked question comes
@@ -59,8 +62,8 @@ class Model extends LlmAdapter {
   const answered=flat.includes('"kind":"answer"')
   if(askTo&&!asked){for(const e of call('team_ask',{toTask:askTo,question:'那个游戏叫什么名字？'}))yield e;return}
   if(questionId&&!answered){for(const e of call('team_answer',{question:questionId,answer:'叫「双人地牢」，今晚开'}))yield e;return}
-  if(asked||answered){for(const e of call('team_report',{body:'问题与答复已写入事件。'}))yield e;return}
-  for(const e of stop('没有可做的'))yield e
+  if((asked||answered)&&!flat.includes('"recorded":true')){for(const e of call('team_report',{body:'问题与答复已写入事件。'}))yield e;return}
+  for(const e of call('team_finish',{decision:'completed',reason:'问题与答复已写入事件，没有其他要做的。'}))yield e
  }
 }
 export const name='team-events-model'

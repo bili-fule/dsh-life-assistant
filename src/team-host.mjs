@@ -101,13 +101,22 @@ export class TeamHost {
     for(const [name,tool] of [['read','yoyo_read'],['search','yoyo_search'],['message','yoyo_message'],['file','yoyo_file'],
       ['attachment','yoyo_attachment'],['forward','yoyo_forward'],['recall','yoyo_recall'],['web','yoyo_web'],
       ['memory_recall','memory_recall'],['memory_inspect','memory_inspect'],['memory_propose','memory_propose'],
-      ['memory_segments','memory_segments'],['memory_generalize','memory_generalize']])
-      this.coordinator.tools[name]=async({args,view,agentId,signal,key})=>{
-        if(!social.peerTools?.has(tool))throw Error('该工具对执行者未启用')
+      ['memory_segments','memory_segments'],['memory_generalize','memory_generalize']]){
+      // The host's own implementation stays as the fallback for read/recall: a
+      // subject that has no peer bridge must not silently lose the ability to give
+      // a branch its own window.
+      const hostTool=this.coordinator.tools[name]
+      this.coordinator.tools[name]=async context=>{
+        if(!social.peerTools?.has(tool)){
+          if(hostTool&&['read','recall'].includes(name))return hostTool(context)
+          throw Error('该工具对执行者未启用')
+        }
+        const {args,view,agentId,signal,key}=context
         const {task}=this.tasks.authority(agentId)
         const receipt=key??'team-'+createHash('sha256').update(task.id+':'+tool+':'+JSON.stringify(args??null)).digest('hex').slice(0,24)
         return social.peerTools.get(tool)(args,{agent:{id:social.sessionId},signal,callId:receipt},receipt,view)
       }
+    }
   }
   register(define) {
     define('team_overview','查看团队安全状态，不含其他窗口正文。',{},[],async()=>({tasks:this.tasks.overview()}))
