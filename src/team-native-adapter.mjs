@@ -45,9 +45,13 @@ export class TeamNativeAdapter {
       const result=await harness.run(JSON.stringify({role:task.role,goal:task.goal,expiresAt:task.expiresAt,persona:cfg.persona?.()}),{sessionId:agentId})
       signal.throwIfAborted()
       if(result.events.findLast(e=>e.type==='turn/end')?.data.reason?.kind!=='completed')throw Error('Native worker did not complete')
-      // Record real token usage when the runtime reports it; never estimate.
-      const tokens=Number(result.usage?.totalTokens??result.usage?.tokens??0)
-      if(Number.isSafeInteger(tokens)&&tokens>0)await invoke('usage',{tokens})
+      // Record real token usage when the runtime reports it; never estimate. The
+      // host keeps "not reported" apart from a measured zero, so a missing usage
+      // interface cannot look like a free run.
+      const usage=result.usage??result.tokenUsage??result.stats?.usage??null
+      const tokens=Number(usage?.totalTokens??usage?.total??usage?.outputTokens??0)
+      const reported=Number.isSafeInteger(tokens)&&tokens>0
+      await invoke('usage',{tokens:reported?tokens:0,reported})
       if(result.finalResponse?.trim())await invoke('report',{body:result.finalResponse.slice(0,12000)})
     }finally{
       signal.removeEventListener('abort',abort)

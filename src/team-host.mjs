@@ -173,6 +173,7 @@ export class TeamHost {
     const tasks=this.db.prepare(`SELECT t.id,t.role,t.state,t.attempt,t.failures,t.retry_at,t.renewed_at,t.expires_at,
       coalesce((SELECT sum(u.steps) FROM yoyo_team_usage u WHERE u.task_id=t.id),0) steps,
       coalesce((SELECT sum(u.tokens) FROM yoyo_team_usage u WHERE u.task_id=t.id),0) tokens,
+      coalesce((SELECT max(u.tokens_reported) FROM yoyo_team_usage u WHERE u.task_id=t.id),0) tokensReported,
       (SELECT s.target FROM yoyo_team_speakers s WHERE s.task_id=t.id AND s.expires_at>?) leaseTarget,
       (SELECT s.expires_at FROM yoyo_team_speakers s WHERE s.task_id=t.id AND s.expires_at>?) leaseExpires,
       (SELECT count(*) FROM yoyo_team_reports r WHERE r.task_id=t.id) reports,
@@ -180,7 +181,7 @@ export class TeamHost {
       FROM yoyo_team_tasks t ORDER BY t.created_at DESC LIMIT 50`).all(Date.now(),Date.now())
     return {concurrency:{running:this.coordinator.running.size,max:this.coordinator.maxConcurrent},tasks:tasks.map(row=>{
       const depends=this.db.prepare('SELECT depends_on FROM yoyo_team_tasks WHERE id=?').get(row.id).depends_on
-      const task={...row,dependsOn:depends?JSON.parse(depends).length:0}
+      const task={...row,tokensReported:row.tokensReported===1,dependsOn:depends?JSON.parse(depends).length:0}
       return {...task,waitReason:this.waitReason(task)}
     })}
   }

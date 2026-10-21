@@ -24,7 +24,7 @@ export class TeamCoordinator {
       // A task may narrow the role's toolset, never widen it.
       const allowed=task.toolset?roleTools.filter(name=>JSON.parse(task.toolset).includes(name)):roleTools
       if(!allowed.includes(name))throw Error('角色没有该工具权限')
-      if(name==='usage')return this.tasks.recordTokens(agentId,Number(args?.tokens??0))
+      if(name==='usage')return this.tasks.recordTokens(agentId,Number(args?.tokens??0),args?.reported!==false)
       if(name==='step'){
         const result=await this.tools.step({agentId})
         // Steering arrives at a native boundary, after the budget gate.

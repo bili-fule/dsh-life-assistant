@@ -249,14 +249,14 @@ test('task budgets are counted per attempt in the database, not in memory',t=>{
   assert.equal(team.recordStep('worker-x',3).steps,1)
   assert.equal(team.recordStep('worker-x',3).steps,2)
   team.recordTokens('worker-x',120)
-  assert.deepEqual(team.usage(x.id),{steps:2,tokens:120,attempts:1})
+  assert.deepEqual(team.usage(x.id),{steps:2,tokens:120,tokensReported:true,attempts:1,note:null})
   assert.equal(team.recordStep('worker-x',3).steps,3)
   assert.throws(()=>team.recordStep('worker-x',3),/预算/)
   assert.throws(()=>team.recordTokens('worker-x',-1),/用量/)
   assert.throws(()=>team.recordTokens('worker-y',10),/授权/)
   // The counters are durable: a fresh store over the same database agrees.
   const reopened=new TeamStore(team.social)
-  assert.deepEqual(reopened.usage(x.id),{steps:3,tokens:120,attempts:1})
+  assert.deepEqual(reopened.usage(x.id),{steps:3,tokens:120,tokensReported:true,attempts:1,note:null})
   assert.equal(reopened.overview().find(row=>row.id===x.id).steps,3)
   assert.equal(JSON.stringify(reopened.overview()).includes('secret'),false)
   // A second attempt keeps its own row instead of resetting the first.
@@ -264,7 +264,37 @@ test('task budgets are counted per attempt in the database, not in memory',t=>{
   team.db.prepare("UPDATE yoyo_team_tasks SET state='ready' WHERE id=?").run(x.id)
   team.claim(x.id,'worker-x2')
   assert.equal(team.recordStep('worker-x2',3).steps,1)
-  assert.deepEqual(team.usage(x.id),{steps:4,tokens:120,attempts:2})
+  assert.equal(team.usage(x.id).tokens,120)
+  assert.equal(team.usage(x.id).attempts,2)
+})
+
+test('missing token reporting is kept apart from a measured zero',t=>{
+  const {team,a,create}=fixture(t),x=create('x')
+  team.claim(x.id,'worker-x')
+  team.recordStep('worker-x',3)
+  // The runtime does not report usage at all: the ledger must not look free.
+  assert.deepEqual(team.recordTokens('worker-x',0,false),{tokens:0,reported:false})
+  const unknown=team.usage(x.id)
+  assert.equal(unknown.tokens,0)
+  assert.equal(unknown.tokensReported,false)
+  assert.match(unknown.note,/未测量/)
+  // A later real report flips the flag and the note disappears.
+  team.recordTokens('worker-x',900,true)
+  const measured=team.usage(x.id)
+  assert.equal(measured.tokens,900)
+  assert.equal(measured.tokensReported,true)
+  assert.equal(measured.note,null)
+  // A reported zero cannot be told apart from "no interface", so it stays marked
+  // as unmeasured instead of pretending we counted zero tokens.
+  assert.equal(team.recordTokens('worker-x',0,true).reported,false)
+  // Databases created before the flag existed gain the column on open.
+  team.db.exec('ALTER TABLE yoyo_team_usage RENAME TO legacy_usage')
+  team.db.exec('CREATE TABLE yoyo_team_usage(task_id TEXT NOT NULL,attempt INTEGER NOT NULL,steps INTEGER NOT NULL DEFAULT 0,tokens INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(task_id,attempt))')
+  team.db.prepare('INSERT INTO yoyo_team_usage VALUES(?,0,2,55,?)').run(x.id,Date.now())
+  const upgraded=new TeamStore(team.social)
+  assert.equal(upgraded.db.prepare('PRAGMA table_info(yoyo_team_usage)').all().some(column=>column.name==='tokens_reported'),true)
+  // A positive count from before the flag existed did come from a real report.
+  assert.deepEqual(upgraded.usage(x.id),{steps:2,tokens:55,tokensReported:true,attempts:1,note:null})
 })
 
 test('a lease heartbeat renews within a ceiling and retries stay bounded',t=>{

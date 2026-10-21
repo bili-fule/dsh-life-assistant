@@ -37,7 +37,8 @@ export class TeamStore {
         created_at INTEGER NOT NULL, applied_at INTEGER, agent_id TEXT);
       CREATE TABLE IF NOT EXISTS yoyo_team_usage(
         task_id TEXT NOT NULL, attempt INTEGER NOT NULL, steps INTEGER NOT NULL DEFAULT 0,
-        tokens INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(task_id,attempt));
+        tokens INTEGER NOT NULL DEFAULT 0, tokens_reported INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL, PRIMARY KEY(task_id,attempt));
       CREATE TABLE IF NOT EXISTS yoyo_team_memory_candidates(
         id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, attempt INTEGER NOT NULL, scopes TEXT NOT NULL,
         kind TEXT NOT NULL, claim_type TEXT, statement TEXT NOT NULL, body TEXT NOT NULL,
@@ -51,6 +52,15 @@ export class TeamStore {
       ['parent_id','TEXT'],['depends_on','TEXT'],['toolset','TEXT'],['authorization_version','INTEGER'],
       ['persona_version','INTEGER'],['max_steps','INTEGER']])
       if(!columns.includes(name))this.db.exec(`ALTER TABLE yoyo_team_tasks ADD COLUMN ${name} ${type}`)
+    // Databases created before usage reporting was distinguished keep their rows;
+    // an existing 0 simply means "not reported", which is what the flag defaults to.
+    const usageColumns=this.db.prepare('PRAGMA table_info(yoyo_team_usage)').all().map(column=>column.name)
+    if(!usageColumns.includes('tokens_reported')){
+      this.db.exec('ALTER TABLE yoyo_team_usage ADD COLUMN tokens_reported INTEGER NOT NULL DEFAULT 0')
+      // Older rows only ever recorded tokens after a real report, so a positive
+      // count is evidence of reporting; zeros stay marked as not reported.
+      this.db.exec('UPDATE yoyo_team_usage SET tokens_reported=1 WHERE tokens>0')
+    }
   }
   transaction(fn) {
     this.db.exec('BEGIN IMMEDIATE')
@@ -362,17 +372,25 @@ export class TeamStore {
       return {steps,tokens:row?.tokens??0,maxSteps:maxSteps??null}
     })
   }
-  recordTokens(agentId,tokens) {
+  // A runtime that does not report usage must not look like a free run: the
+  // count and the fact that it was never reported are stored separately.
+  recordTokens(agentId,tokens,reported=true) {
     if(!Number.isSafeInteger(tokens)||tokens<0||tokens>10000000)throw Error('用量记录无效')
     const {task}=this.authority(agentId)
+    const flag=reported===true&&tokens>0?1:0
     const row=this.db.prepare('SELECT steps FROM yoyo_team_usage WHERE task_id=? AND attempt=?').get(task.id,task.attempt)
-    if(row)this.db.prepare('UPDATE yoyo_team_usage SET tokens=tokens+?,updated_at=? WHERE task_id=? AND attempt=?').run(tokens,this.clock(),task.id,task.attempt)
-    else this.db.prepare('INSERT INTO yoyo_team_usage(task_id,attempt,steps,tokens,updated_at) VALUES(?,?,0,?,?)').run(task.id,task.attempt,tokens,this.clock())
-    return {tokens}
+    if(row)this.db.prepare('UPDATE yoyo_team_usage SET tokens=tokens+?,tokens_reported=max(tokens_reported,?),updated_at=? WHERE task_id=? AND attempt=?')
+      .run(tokens,flag,this.clock(),task.id,task.attempt)
+    else this.db.prepare('INSERT INTO yoyo_team_usage(task_id,attempt,steps,tokens,tokens_reported,updated_at) VALUES(?,?,0,?,?,?)')
+      .run(task.id,task.attempt,tokens,flag,this.clock())
+    return {tokens,reported:flag===1}
   }
   usage(taskId) {
-    const row=this.db.prepare('SELECT coalesce(sum(steps),0) steps,coalesce(sum(tokens),0) tokens,count(*) attempts FROM yoyo_team_usage WHERE task_id=?').get(taskId)
-    return {steps:Number(row?.steps??0),tokens:Number(row?.tokens??0),attempts:Number(row?.attempts??0)}
+    const row=this.db.prepare('SELECT coalesce(sum(steps),0) steps,coalesce(sum(tokens),0) tokens,coalesce(max(tokens_reported),0) reported,count(*) attempts FROM yoyo_team_usage WHERE task_id=?').get(taskId)
+    const tokens=Number(row?.tokens??0),reported=Number(row?.reported??0)===1
+    return {steps:Number(row?.steps??0),tokens,tokensReported:reported,attempts:Number(row?.attempts??0),
+      // Zero tokens with no report is unknown usage, never a measured zero.
+      note:reported||tokens>0?null:'原生运行时没有上报 Token；0 表示未测量，不代表没有消耗'}
   }
   // A heartbeat extends a live lease within a hard ceiling. It never revives a
   // finished, cancelled or revoked task.

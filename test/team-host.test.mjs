@@ -99,9 +99,19 @@ test('the operational status exposes executors, leases and usage without task co
   assert.equal(blocked.state,'blocked')
   assert.match(blocked.waitReason,/重试|复查/)
   // The admin panel reads exactly these fields; keep the contract explicit.
-  for(const field of ['id','role','state','attempt','failures','retry_at','steps','tokens','reports','evidence','leaseExpires','dependsOn','waitReason'])
+  for(const field of ['id','role','state','attempt','failures','retry_at','steps','tokens','tokensReported','reports','evidence','leaseExpires','dependsOn','waitReason'])
     assert.equal(field in blocked,true,'status row carries '+field)
-  assert.ok(view)
+  assert.equal(typeof blocked.tokensReported,'boolean')
+  assert.equal(blocked.tokensReported,true,'a real token report is visible as reported')
+  assert.equal(host.tasks.usage(task.id).note,null)
+  // A run whose runtime never reported usage is not shown as a free run.
+  const silent=host.tasks.create({key:'silent',role:'reader',goal:'g',viewId:view.id,expiresAt:Date.now()+60000})
+  host.tasks.claim(silent.id,'worker-2')
+  host.tasks.recordStep('worker-2',5)
+  const silentStatus=host.status().tasks.find(row=>row.id===silent.id)
+  assert.equal(silentStatus.tokens,0)
+  assert.equal(silentStatus.tokensReported,false)
+  assert.match(host.tasks.usage(silent.id).note,/未测量/)
 })
 test('the admin page renders the team panel from the operational status only',t=>{
   const page=readFileSync(new URL('../public/index.html',import.meta.url),'utf8')
@@ -112,6 +122,7 @@ test('the admin page renders the team panel from the operational status only',t=
   // The panel states the privacy boundary instead of quietly showing everything.
   assert.match(page,/任务目的与报告正文留在各自的资料范围/)
   assert.match(script,/任务目的与报告正文不在本页展示/)
+  assert.match(script,/Token 未上报/,'an unreported token count is not rendered as zero')
   assert.equal(/goal|PRIVATE|报告正文.*innerHTML/.test(script.split('function renderTeam')[1].split('function renderYoyo')[0].replace(/任务目的与报告正文不在本页展示/,'')),false,'the panel never renders task text')
 })
 test('cancellation stops steering and a foreign window cannot steer or read the board',t=>{
@@ -131,10 +142,10 @@ test('worker steps are metered in the database and survive a new host',async t=>
   assert.equal(first.allowed,true);assert.equal(first.step,1)
   assert.equal((await host.coordinator.tools.step({agentId:'worker'})).step,2)
   await host.coordinator.tools.usage({agentId:'worker',tokens:900})
-  assert.deepEqual(host.tasks.usage(task.id),{steps:2,tokens:900,attempts:1})
+  assert.deepEqual(host.tasks.usage(task.id),{steps:2,tokens:900,tokensReported:true,attempts:1,note:null})
   // A fresh store over the same database still sees the same counters.
   const reopened=new TeamStore(social.data)
-  assert.deepEqual(reopened.usage(task.id),{steps:2,tokens:900,attempts:1})
+  assert.deepEqual(reopened.usage(task.id),{steps:2,tokens:900,tokensReported:true,attempts:1,note:null})
   assert.equal(reopened.overview().find(row=>row.id===task.id).tokens,900)
   // A paused subject cannot spend more budget.
   social.store.set('yoyo_settings',{paused:true,observeOnly:false})

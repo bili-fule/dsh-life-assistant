@@ -53,7 +53,7 @@ function renderTeam(team){
   const state=teamLabels[t.state]||t.state
   const facts=['#'+String(t.id).slice(0,8)+' · '+t.role+' · '+state+(t.waitReason&&t.waitReason!==state?' · '+t.waitReason:''),
    '尝试 '+(t.attempt??0)+' 次 · 失败 '+(t.failures??0)+' 次'+(t.retry_at?' · 计划重试 '+format(t.retry_at):''),
-   (t.steps??0)+' 步 · '+(t.tokens??0)+' Token · 报告 '+(t.reports??0)+' 条 · 证据 '+(t.evidence??0)+' 条',
+   (t.steps??0)+' 步 · '+(t.tokensReported?(t.tokens??0)+' Token':'Token 未上报（0 表示未测量，不代表没有消耗）')+' · 报告 '+(t.reports??0)+' 条 · 证据 '+(t.evidence??0)+' 条',
    t.leaseExpires?'发言租约到 '+format(t.leaseExpires):'当前没有发言租约',
    t.dependsOn?'依赖 '+t.dependsOn+' 个任务':'无依赖']
   root.append(el('div',facts.join('\n'),'card text-block'))
