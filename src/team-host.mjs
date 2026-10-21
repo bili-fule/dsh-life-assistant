@@ -322,7 +322,7 @@ export class TeamHost {
     for(const candidate of this.tasks.chatWakeCandidates({now,quietMs:this.social.config?.quietMs??5000})){
       if(this.coordinator.running.size>=this.coordinator.maxConcurrent)break
       let started=null
-      try{started=this.coordinator.start(candidate.id,{wake:{kind:'new_messages',after:candidate.after,through:candidate.through,count:candidate.count}})}catch{continue}
+      try{started=this.coordinator.start(candidate.id,{wake:{kind:'new_messages',after:candidate.after,through:candidate.through,count:candidate.count,messages:candidate.messages}})}catch{continue}
       if(!started.started)break
       // The cursor moves when the delivery is handed over, not when the branch
       // paused: a message that arrived during the run is never lost, at worst it
@@ -409,6 +409,7 @@ export class TeamHost {
     // Attempt state follows the task, then the queue is served by priority, aging,
     // dependencies and the real slot count.
     this.intents.syncFromTasks(now)
+    this.coordinator.reapResident({now})
     this.routeChatMessages(now)
     for(const intent of this.intents.ready({now})){
       if(this.coordinator.running.size>=this.coordinator.maxConcurrent)break
@@ -457,5 +458,6 @@ export class TeamHost {
   stop() {
     for(const slot of this.coordinator.running.values())slot.controller.abort(Error('主服务停止'))
     return Promise.allSettled([...this.coordinator.running.values()].map(s=>s.promise))
+      .then(async settled=>{(await this.coordinator.closeAllResidents?.())??[];return settled})
   }
 }

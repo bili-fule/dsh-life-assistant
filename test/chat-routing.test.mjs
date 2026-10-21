@@ -142,6 +142,50 @@ test('a branch reply records how long the message waited, apart from event deliv
   assert.equal(timing.p50>=7000,true,'the wait for a reply is measured from the real inbound message')
 })
 
+test('a chat branch keeps one resident native session across a suspend and a wake',async t=>{
+  const {host,view,message}=fixture(t)
+  const opened=[],prompts=[]
+  let closed=0
+  // The installed SDK resumes a session id only inside one process, so the honest
+  // way to continue a conversation is one resident session, not a second create.
+  host.coordinator.adapter={async open({agentId,task}){
+    const tag=Symbol('session')
+    opened.push({agentId,goal:task.goal,tag})
+    return {close:async()=>{closed++},prompt:async(runTask,call)=>{
+      prompts.push({tag,wake:runTask.wake??null})
+      if(runTask.wake){await call('finish',{decision:'completed',reason:'read the follow-up'});return {}}
+      await call('pause',{reason:'等对方接着说'})
+      return {}
+    }}
+  }}
+  const task=host.tasks.create({key:'chat-resident',role:'chat',goal:'接话',viewId:view.id,expiresAt:Date.now()+600000})
+  host.coordinator.start(task.id)
+  assert.equal(await until(()=>host.tasks.inspect(task.id,view.id).state==='suspended'),true)
+  assert.equal(opened.length,1)
+  assert.equal(prompts.length,1)
+  message('接着说')
+  host.tick()
+  assert.equal(await until(()=>host.tasks.inspect(task.id,view.id).state==='completed'),true)
+  assert.equal(opened.length,1,'the wake reused the resident process, not a new session')
+  assert.equal(prompts.length,2)
+  assert.equal(prompts[1].tag,prompts[0].tag,'the same session object answered the follow-up')
+  assert.equal(prompts[1].wake.count,1)
+  assert.equal(await until(()=>closed===1),true,'the session is closed once the activity ends')
+})
+
+test('an idle resident session is reaped instead of living forever',async t=>{
+  const {host,view}=fixture(t)
+  let closed=0
+  host.coordinator.adapter={async open(){return {close:async()=>{closed++},prompt:async(runTask,call)=>{await call('pause',{reason:'等'});return {}}}}}
+  const task=host.tasks.create({key:'chat-idle',role:'chat',goal:'接话',viewId:view.id,expiresAt:Date.now()+600000})
+  host.coordinator.start(task.id)
+  assert.equal(await until(()=>host.coordinator.resident.size===1),true)
+  const reaped=host.coordinator.reapResident({now:Date.now()+20*60000,idleMs:600000})
+  assert.deepEqual(reaped,[task.id])
+  assert.equal(await until(()=>closed===1),true)
+  assert.equal(host.coordinator.resident.size,0)
+})
+
 test('only chat and peer tasks may suspend themselves',async t=>{
   const {host,view}=fixture(t)
   const task=host.tasks.create({key:'reader-1',role:'reader',goal:'只读',viewId:view.id,expiresAt:Date.now()+60000})

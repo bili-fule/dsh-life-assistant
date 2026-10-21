@@ -10,7 +10,7 @@
 | 版本号 | `package.json` 0.40.0 |
 | 测试 | `npm run check` 通过；`npm test` 281/281 |
 | 原生验证（需要本机 SDK） | `node test/team-native-smoke.mjs`、`node test/team-native-events.mjs` 均 `PASS` |
-| 真实模型验证（可选、需要密钥） | `node test/team-native-real.mjs`（串行/并行对照）、`node test/team-native-intent.mjs`（意图队列 → 真实执行者）均 `PASS`，见 [真实模型运行记录](../docs/real-model-run-2026-10-21.md) |
+| 真实模型验证（可选、需要密钥） | `node test/team-native-real.mjs`（串行/并行对照）、`node test/team-native-intent.mjs`（意图队列 → 真实执行者）、`node test/team-native-chat.mjs`（聊天挂起与唤醒，常驻会话）、`node test/team-native-resume-probe.mjs`（SDK 会话续接能力探测）均 `PASS`，见 [真实模型运行记录](../docs/real-model-run-2026-10-21.md) |
 
 上线前把实际提交 SHA 写进 `deploy/STATUS.md` 顶部的「生产最新」段落，不要用「最新代码」这种说法。
 
@@ -28,7 +28,7 @@
 ## 3. 行为变化（上线后立刻会看到的）
 
 1. **主体默认工具面变小**：启用 `team` 时，隔离浏览器、`yoyo_execute`/`yoyo_job`/`yoyo_projects`、`yoyo_debug*` 默认不出现在主体工具里，需要 `yoyo_takeover`（写理由、默认 10 分钟、最多 60 分钟、记入 `yoyo_takeovers`）才临时恢复。没有 `team` 时不改变。
-2. **聊天续接**：聊天任务可 `team_pause` 挂起（进程释放、发言租约交回）；窗口有新消息时宿主用真实游标唤醒同一个执行者与同一个原生 Session。被执行者拥有的窗口不再唤醒主体。
+2. **聊天续接**：聊天任务可 `team_pause` 挂起（交回发言租约）；窗口有新消息时宿主用真实游标与消息原文唤醒**同一个常驻会话**。被执行者拥有的窗口不再唤醒主体。常驻会话默认最多 4 个，闲置 15 分钟回收；任务结束、取消或过期时关闭；服务重启后旧会话不再续接，改为新会话 + 续接简报（当前 SDK 不支持跨进程复用同一 session id，已在文档标注）。
 3. **意图队列**：主体可用 `team_intent` 排队；宿主按优先级 + 等待提升 + 依赖 + 并发启动。没有空位时排队并可见，不会自动推回主体。
 4. **新增只读视图**：`team_graph`、`team_expand`；主体 `state()` 增加 `orchestration`、`folded`。
 
@@ -52,5 +52,6 @@
 - 真实模型是否稳定先写意图再分派，以及是否会在合适时机 `team_pause` 并接着读。
 - 无空闲额度时的排队在真实负载下是否合理（饥饿提升每 5 分钟 +1、上限 +20）。
 - 冷分支折叠阈值（6 小时）是否合适；被折叠内容是否会被误当新事实。
+- 常驻会话的数量与内存占用（默认上限 4、闲置 15 分钟回收），以及服务重启后「新会话 + 续接简报」是否会让多轮话题显得突然失忆。
 - Token/成本计量仍缺接口：未上报显示「未测量」，不记 0。
 - 真实 QQ 下的社交判断与内容边界（提示词层面）仍需观察。

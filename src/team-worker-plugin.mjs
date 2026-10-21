@@ -64,11 +64,15 @@ export function apply(ctx) {
   // once as dynamic state, so the worker never polls for instructions.
   let steering=[],pack=null,packLoaded=false,inbox=[]
   ctx.on('agent/pre-step',async(payload,next)=>{
+    // One process may serve several prompts for a chat branch. A new step means the
+    // branch is working again, so the earlier pause is history: keeping it would let
+    // the completion guard accept a plain text stop as if the task were decided.
+    paused=false
     const result=await call('step',{},AbortSignal.timeout(15000))
-    if(Array.isArray(result?.steers)&&result.steers.length)steering=result.steers.map(String).slice(0,5)
-    // Sibling events are drained by the host at this boundary, so the cursor
-    // moves exactly when the branch could act on them.
-    if(Array.isArray(result?.events)&&result.events.length)inbox=result.events.slice(0,8)
+    // Steering and sibling events are shown exactly as delivered at this boundary;
+    // an empty delivery clears them instead of replaying an earlier one.
+    steering=Array.isArray(result?.steers)?result.steers.map(String).slice(0,5):[]
+    inbox=Array.isArray(result?.events)?result.events.slice(0,8):[]
     // The working-memory pack is fixed for this task, so it is fetched once.
     if(!packLoaded){
       packLoaded=true

@@ -5,9 +5,14 @@ import { ROLE_TOOLS } from './team-store.mjs'
 // It must launch an isolated native DSH runtime and expose only the supplied
 // task-bound callbacks. The main Agent remains free to work while it runs.
 export class TeamCoordinator {
-  constructor({tasks,adapter,tools,maxConcurrent=2,retry=null}) {
+  constructor({tasks,adapter,tools,maxConcurrent=2,retry=null,maxResident=4}) {
     if(!Number.isInteger(maxConcurrent)||maxConcurrent<1||maxConcurrent>8)throw Error('并发限制无效')
     this.tasks=tasks;this.adapter=adapter;this.tools=tools;this.maxConcurrent=maxConcurrent;this.running=new Map();this.retry=retry
+    // A chat branch keeps its native process and session between messages. The SDK
+    // can resume an id inside one process but refuses an existing id in a fresh
+    // one, so a resident session is the only way to truly continue the same
+    // conversation; the cap and the idle reaper bound what that costs.
+    this.resident=new Map();this.maxResident=Math.max(1,Math.min(8,maxResident))
   }
   start(id,{wake=null}={}) {
     if(this.running.size>=this.maxConcurrent)return {started:false,reason:'capacity'}
@@ -85,10 +90,19 @@ export class TeamCoordinator {
     },30000)
     deadline.unref?.()
     const runStarted=this.tasks.clock()
-    slot.promise=Promise.resolve().then(()=>this.adapter.run({
-      agentId,task:{id,role:task.role,goal:task.goal,expiresAt:task.expires_at,wake},
-      invoke,signal:controller.signal,
-    })).then(()=>{
+    const resident=this.residentRoles().includes(task.role)&&typeof this.adapter.open==='function'
+    const attempt=()=>({id,role:task.role,goal:task.goal,expiresAt:task.expires_at,wake})
+    slot.promise=Promise.resolve().then(async()=>{
+      if(!resident)return this.adapter.run({agentId,task:attempt(),invoke,signal:controller.signal})
+      let entry=this.resident.get(id)
+      if(!entry||entry.agentId!==agentId){
+        if(this.resident.size>=this.maxResident)await this.closeResident(this.oldestResident())
+        entry={session:await this.adapter.open({agentId,task:attempt(),invoke,signal:controller.signal}),agentId,lastUsed:this.tasks.clock()}
+        this.resident.set(id,entry)
+      }
+      entry.lastUsed=this.tasks.clock()
+      return entry.session.prompt(attempt(),invoke)
+    }).then(()=>{
       // Model-response latency of one executor run, kept apart from the event
       // delivery latency the store records at each native boundary.
       this.tasks.metrics?.count('worker_run');this.tasks.metrics?.time('worker_run',this.tasks.clock()-runStarted)
@@ -109,8 +123,34 @@ export class TeamCoordinator {
       try{this.tasks.noteFailure(id,this.retry??{})}
       catch{this.tasks.db.prepare("UPDATE yoyo_team_tasks SET state='blocked' WHERE id=? AND agent_id=? AND state IN ('running','waiting')").run(id,agentId)}
       return {state:this.tasks.db.prepare('SELECT state FROM yoyo_team_tasks WHERE id=?').get(id).state}
-    }).finally(()=>{clearInterval(deadline);this.running.delete(id)})
+    }).finally(()=>{
+      clearInterval(deadline);this.running.delete(id)
+      // A suspended chat branch keeps its session for the next message; every
+      // other ending closes it, so an idle process never lingers unowned.
+      const state=this.tasks.db.prepare('SELECT state FROM yoyo_team_tasks WHERE id=?').get(id)?.state
+      if(state!=='suspended')void this.closeResident(id)
+    })
     return {started:true,id,agentId}
+  }
+  residentRoles(){return ['chat','peer']}
+  closeResident(id){
+    const entry=this.resident.get(id)
+    if(!entry)return Promise.resolve(false)
+    this.resident.delete(id)
+    return Promise.resolve(entry.session?.close?.()).then(()=>true).catch(()=>false)
+  }
+  closeAllResidents(){return Promise.allSettled([...this.resident.keys()].map(id=>this.closeResident(id)))}
+  oldestResident(){
+    let oldest=null
+    for(const [id,entry] of this.resident)if(oldest===null||entry.lastUsed<this.resident.get(oldest).lastUsed)oldest=id
+    return oldest
+  }
+  // An abandoned session is a cost, not a feature: idle residents are reaped so a
+  // forgotten conversation does not keep a process alive forever.
+  reapResident({idleMs=900000,now=this.tasks.clock()}={}){
+    const closed=[]
+    for(const [id,entry] of [...this.resident])if(now-entry.lastUsed>idleMs){closed.push(id);void this.closeResident(id)}
+    return closed
   }
   async settle(id){return this.running.get(id)?.promise}
   cancel(id,viewId){
@@ -122,6 +162,7 @@ export class TeamCoordinator {
       this.tasks.db.prepare('UPDATE yoyo_team_speakers SET generation=generation+1,expires_at=0 WHERE task_id=?').run(id)
     })
     slot?.controller.abort(Error('任务取消'))
+    void this.closeResident(id)
     // Tell the siblings, but never let a notification failure block the fence.
     try{this.tasks.publishEvent({fromTask:id,activityId:this.tasks.db.prepare('SELECT activity_id FROM yoyo_team_tasks WHERE id=?').get(id).activity_id??null,kind:'cancel',body:'任务已被取消',viewId})}catch{/* Revoked or expired work stays cancelled. */}
   }

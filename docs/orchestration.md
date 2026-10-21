@@ -58,7 +58,8 @@
 | 起点 | 聊天任务创建时记录该窗口的消息游标 `chat_through`，已有消息不算这个执行者的新工作 | `TeamStore.create()` | `test/chat-routing.test.mjs`「a new chat task starts after what is already there」 |
 | 挂起 | 执行者要等对方接着说时用 `team_pause`；宿主把任务置为 `suspended`、写挂起原因与一条进展、释放进程并交回发言租约 | `TeamStore.pause()`、`TeamCoordinator.start()` 的 `pause` 分支 | 同文件（`paused_reason`、租约 `expires_at=0`、只有聊天类角色可以挂起） |
 | 唤醒 | `TeamHost.tick()` → `routeChatMessages()`：按 `quietMs` 合并突发、只对真有新消息的挂起任务启动；开场是 `{kind:'new_messages',after,through,count}` 的真实投递 | `TeamHost.routeChatMessages()`、`TeamNativeAdapter` | 「the burst wakes the executor」+ 断言 `count/after/through` |
-| 身份与 Session | agentId 由任务编号派生，唤醒复用同一身份 → 同一原生 Session，不重复 `create` | `TeamCoordinator.start()` | 「the same executor identity, so the same native session」 |
+| 身份与 Session | **常驻会话**：聊天/peer 任务在一个进程里保持同一个原生 Session，挂起时不关闭、唤醒时用同一个 Session 再提一次；SDK 实测「同进程可续、跨进程拒绝已存在的 id」（`test/team-native-resume-probe.mjs`），所以常驻是唯一诚实的复用方式；会话数有上限、闲置 15 分钟回收，进程重启后退化为「新会话 + 续接简报」（如实记录的残余限制） | `TeamCoordinator.resident`、`TeamNativeAdapter.open()` | 「a chat branch keeps one resident native session…」+ 真实运行 `test/team-native-chat.mjs` |
+| 唤醒投递 | 唤醒简报直接带新消息原文（最多 10 条、每条 800 字），不必猜游标；`team_read` 仍可从游标回看更早内容 | `TeamStore.chatWakeCandidates()`、`TeamNativeAdapter.opening()` | 真实运行里第二次 `team_read` 的 `after` 正是上次游标 |
 | 不重复投递 | 游标在**交付**时前进；运行期间到达的消息最多多花一次唤醒，不会丢 | `TeamStore.ackChatThrough()` | 「a new message that arrives during the run costs one more wake」 |
 | 容量 | 并发满时不启动、消息保持排队，下一轮 tick 再试；主体不会被默默拉来代做 | `routeChatMessages()` 的 capacity 分支 | 「no free executor slot leaves the message queued」 |
 | 过期 | 过期挂起先在 `tick()` 里置为 `cancelled`，不再路由 | `TeamHost.tick()` | 「an expired suspension ends the activity」 |
@@ -123,7 +124,7 @@
 | 用例 | 状态 | 证据 / 缺口 |
 | --- | --- | --- |
 | 请去 xmfu 看星洛 | ✅ | `test/team-intents.test.mjs`：主体只写意图（读窗口 + 读网页 → peer），宿主建任务并由执行者推进，主体 `subject_exec` 为 0；意图与活动通过 `yoyo_activity_links` 相连 |
-| 持续普通聊天 | ✅ | `test/chat-routing.test.mjs`：后续消息由宿主按真实游标唤醒同一个执行者身份与 Session；窗口被执行者拥有时主体不会被唤醒（`test/orchestration.test.mjs`）；挂起即暂停，不是完成 |
+| 持续普通聊天 | ✅ | `test/chat-routing.test.mjs`：后续消息由宿主按真实游标唤醒同一个执行者；窗口被执行者拥有时主体不会被唤醒（`test/orchestration.test.mjs`）；挂起即暂停，不是完成；常驻会话跨挂起只创建一次。真实模型：`test/team-native-chat.mjs`（两次提示同一常驻会话、唤醒带 2 条原文、游标推进到 5、回复编号去重） |
 | 聊天同时研究 | ⏳ | 已有并行分支与事件（`test/team-events.test.mjs`）与真实回放（并行 9.4 s vs 串行 46.2 s），但「中途分享 + 主体仍能处理新要求」需在新的默认委派下重跑 |
 | 方向变更 | ✅ | `test/team-events.test.mjs`（`direction_changed` 带活动版本送达，旧结果不算完成新目标） |
 | 无空闲额度 | ✅ | `test/team-intents.test.mjs`：并发满时意图保持 ready、不建任务、等待原因可见；有空位后下一轮 tick 启动。主体没有「默默接手」的路径（重执行工具仍默认关闭） |

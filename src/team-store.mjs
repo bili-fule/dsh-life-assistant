@@ -157,7 +157,13 @@ export class TeamStore {
     for(const row of rows){
       if(!row.focus_key)continue
       const fresh=this.db.prepare("SELECT count(*) n,max(id) through FROM yoyo_events WHERE target=? AND kind<>'outgoing' AND id>? AND received_at<=?").get(row.focus_key,row.chat_through,cutoff)
-      if(fresh.n>0)out.push({id:row.id,viewId:row.view_id,target:row.focus_key,after:row.chat_through,through:fresh.through,count:fresh.n,reason:row.paused_reason??null})
+      if(!fresh.n)continue
+      // The wake brief carries the real new text, so the branch does not have to
+      // guess a cursor to see what arrived. It stays bounded and it is this
+      // window's content, which the task already had the right to read.
+      const messages=this.db.prepare("SELECT id,sender,text FROM yoyo_events WHERE target=? AND kind<>'outgoing' AND id>? AND id<=? ORDER BY id LIMIT 10").all(row.focus_key,row.chat_through,fresh.through)
+        .map(message=>({id:message.id,sender:message.sender,text:String(message.text).slice(0,800)}))
+      out.push({id:row.id,viewId:row.view_id,target:row.focus_key,after:row.chat_through,through:fresh.through,count:fresh.n,reason:row.paused_reason??null,messages})
     }
     return out
   }
