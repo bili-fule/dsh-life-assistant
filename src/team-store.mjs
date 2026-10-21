@@ -4,20 +4,20 @@ import { boundedText, mayRead, sourceScopes } from './scope.mjs'
 // Each role is a fixed set of host methods. A task may narrow its role, never
 // widen it; the model cannot name a tool outside its role.
 export const ROLE_TOOLS={
-  chat:['read','wait','recall','send','report','evidence','board','remember','pack','usage','step','ask','answer','events'],
-  research:['web','report','evidence','board','remember','pack','usage','step','ask','answer','events'],
-  reader:['read','recall','report','evidence','board','remember','pack','usage','step','ask','answer','events'],
-  verify:['board','recall','report','evidence','pack','usage','step','answer','events'],
+  chat:['read','wait','recall','send','report','evidence','board','remember','pack','usage','step','ask','answer','events','wait_event'],
+  research:['web','report','evidence','board','remember','pack','usage','step','ask','answer','events','wait_event'],
+  reader:['read','recall','report','evidence','board','remember','pack','usage','step','ask','answer','events','wait_event'],
+  verify:['board','recall','report','evidence','pack','usage','step','answer','events','wait_event'],
   // Engineering runs code in the isolated runner and reports back; it cannot talk
   // to anyone, cannot read a private window and cannot reach the debug container.
-  engineer:['execute','job','report','evidence','board','remember','pack','usage','step','answer','events'],
+  engineer:['execute','job','report','evidence','board','remember','pack','usage','step','answer','events','wait_event'],
   // A peer works with nearly the subject's own reach (same reads, searches, files,
   // public browsing, memory tools and code runner). It still has no control plane:
   // no orchestration of other executors, no attention/focus, no own-state or
   // settings tools, and no debug container. The subject keeps cancelling, steering,
   // taking over and bounding it.
   peer:['read','wait','search','message','file','attachment','forward','recall','web','execute','job','send',
-    'report','evidence','board','remember','pack','memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize','usage','step','ask','answer','events'],
+    'report','evidence','board','remember','pack','memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize','usage','step','ask','answer','events','wait_event'],
 }
 
 // A branch talks to its siblings and to the subject through durable events, not
@@ -279,6 +279,20 @@ export class TeamStore {
     if(events.length)this.acknowledgeEvents(taskId,events,now)
     return events.map(({event_id,kind,body,ref,base_revision,from_task,to_task,created_at})=>({eventId:event_id,kind,body,ref,baseRevision:base_revision,from:from_task,to:to_task,at:created_at}))
   }
+  // A branch that answered "nothing to do" because the question had not been
+  // written yet is a real failure mode, not a bad model. The host therefore owns
+  // a bounded wait: it sleeps here, in the host process, and hands the branch the
+  // event that arrived. The model is never woken up to poll.
+  async waitForEvent(taskId,{seconds=20,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),pollMs=100,now=()=>this.clock()}={}) {
+    if(!Number.isInteger(seconds)||seconds<1||seconds>30)throw Error('等待时长无效')
+    const started=now(),deadline=started+seconds*1000
+    for(;;){
+      const events=this.drainEvents(taskId,{now:now()})
+      if(events.length)return {events,waitedMs:Math.max(0,now()-started),timedOut:false}
+      if(now()>=deadline)return {events:[],waitedMs:now()-started,timedOut:true,note:'这段时间没有可领取的事件'}
+      await sleep(Math.min(pollMs,Math.max(1,deadline-now())))
+    }
+  }
   // Branch-to-branch question and answer, with the correlation kept in `ref` so an
   // answer can be matched to its question without a relay through the subject.
   ask(fromTask,{toTask,question,baseRevision=null,expiresAt=null,viewId}) {
@@ -287,11 +301,15 @@ export class TeamStore {
     return {...asked,question}
   }
   answer(fromTask,{questionEventId,answer,viewId}) {
-    if(typeof questionEventId!=='string'||!questionEventId)throw Error('问题编号无效')
-    const question=this.db.prepare("SELECT * FROM yoyo_team_events WHERE event_id=? AND kind='question'").get(questionEventId)
-    if(!question)throw Error('问题不存在')
+    // A model may quote the question or name it instead of passing its id, so the
+    // id is preferred and the newest unanswered question addressed to this task is
+    // the fallback. Either way the host decides which question is being answered.
+    const raw=String(questionEventId??'').trim()
+    let question=raw?this.db.prepare("SELECT * FROM yoyo_team_events WHERE event_id=? AND kind='question'").get(raw):null
+    if(!question)question=this.db.prepare("SELECT q.* FROM yoyo_team_events q WHERE q.kind='question' AND q.to_task=? AND NOT EXISTS(SELECT 1 FROM yoyo_team_events a WHERE a.kind='answer' AND a.ref=q.event_id) ORDER BY q.id DESC LIMIT 1").get(fromTask)
+    if(!question)throw Error('问题不存在，或没有发给你的未答问题')
     if(question.to_task&&question.to_task!==fromTask)throw Error('这个问题不是发给你的')
-    return this.publishEvent({fromTask,toTask:question.from_task??null,kind:'answer',body:answer,ref:questionEventId,viewId})
+    return this.publishEvent({fromTask,toTask:question.from_task??null,kind:'answer',body:answer,ref:question.event_id,viewId})
   }
   // Subject-side view: what happened under one activity or task, and which
   // questions are still open.

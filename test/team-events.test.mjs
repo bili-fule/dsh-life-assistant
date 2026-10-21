@@ -221,6 +221,36 @@ test('a contradiction gets a recorded ruling instead of a silent overwrite',t=>{
   assert.throws(()=>tasks.decideSource(view.id,{source:'https://example.com/a',decision:'refuted',chosenBody:'x',reason:'y'}),/采纳内容/)
 })
 
+test('a branch waits in the host for a sibling instead of finishing early',async t=>{
+  const {tasks,view,create}=fixture(t)
+  const asker=create('读群'),sibling=create('查证')
+  tasks.claim(asker.id,'worker-asker');tasks.claim(sibling.id,'worker-sibling')
+  // The wait starts before anything is published, the way a real parallel run
+  // looks when the asker is still working.
+  const pending=tasks.waitForEvent(sibling.id,{seconds:5,pollMs:5})
+  await new Promise(resolve=>setTimeout(resolve,20))
+  tasks.publishEvent({fromTask:asker.id,toTask:sibling.id,kind:'question',body:'那个游戏叫什么',viewId:view.id})
+  const got=await pending
+  assert.equal(got.timedOut,false)
+  assert.equal(got.events.length,1)
+  assert.equal(got.events[0].kind,'question')
+  // Waiting is delivery: the event is not handed over a second time.
+  assert.deepEqual(tasks.drainEvents(sibling.id),[])
+  // Nothing to receive: the host says so instead of the model polling.
+  const idle=await tasks.waitForEvent(sibling.id,{seconds:1,pollMs:20})
+  assert.equal(idle.timedOut,true)
+  assert.deepEqual(idle.events,[])
+  assert.match(idle.note,/没有可领取/)
+  // An event addressed to someone else does not end my wait.
+  const other=create('另一个')
+  const waiting=tasks.waitForEvent(sibling.id,{seconds:1,pollMs:20})
+  tasks.publishEvent({fromTask:asker.id,toTask:other.id,kind:'question',body:'给别人的',viewId:view.id})
+  assert.equal((await waiting).timedOut,true)
+  // The wait is bounded.
+  await assert.rejects(()=>tasks.waitForEvent(sibling.id,{seconds:0}),/等待时长/)
+  await assert.rejects(()=>tasks.waitForEvent(sibling.id,{seconds:31}),/等待时长/)
+})
+
 test('a restart resumes from the acknowledged position instead of replaying',t=>{
   const {tasks,view,create,data}=fixture(t)
   const reader=create('读群'),researcher=create('查资料')

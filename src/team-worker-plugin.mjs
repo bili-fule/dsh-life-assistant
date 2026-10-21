@@ -1,4 +1,4 @@
-// Loaded only in the separate, restricted worker DSH process.
+﻿// Loaded only in the separate, restricted worker DSH process.
 export const name='yoyo-team-worker'
 export const inject=['tools','systemPrompt']
 const schemas={
@@ -13,6 +13,7 @@ const schemas={
   ask:{toTask:{type:'string',minLength:1,maxLength:80},question:{type:'string',minLength:1,maxLength:2000},baseRevision:{type:'integer',minimum:1}},
   answer:{question:{type:'string',minLength:1,maxLength:80},answer:{type:'string',minLength:1,maxLength:2000}},
   events:{after:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:20}},
+  wait_event:{seconds:{type:'integer',minimum:1,maximum:30}},
   execute:{code:{type:'string',minLength:1,maxLength:50000},language:{type:'string',enum:['node','python','shell']},
     project:{type:['string','null']},outputs:{type:'array',maxItems:8,items:{type:'string',maxLength:160}}},
   job:{id:{type:'string',pattern:'^[a-f0-9]{64}$'}},
@@ -43,15 +44,15 @@ export function apply(ctx) {
   const role=process.env.YOYO_TEAM_ROLE
   // The role fixes the tool surface. A reader and a verifier can look and report
   // but never speak; only chat may send.
-  const methods=({chat:['read','wait','recall','send','report','evidence','board','remember','ask','answer','events'],
-    research:['web','report','evidence','board','remember','ask','answer','events'],
-    reader:['read','recall','report','evidence','board','remember','ask','answer','events'],
-    verify:['board','recall','report','evidence','answer','events'],
-    engineer:['execute','job','report','evidence','board','remember','answer','events'],
+  const methods=({chat:['read','wait','recall','send','report','evidence','board','remember','ask','answer','events','wait_event'],
+    research:['web','report','evidence','board','remember','ask','answer','events','wait_event'],
+    reader:['read','recall','report','evidence','board','remember','ask','answer','events','wait_event'],
+    verify:['board','recall','report','evidence','answer','events','wait_event'],
+    engineer:['execute','job','report','evidence','board','remember','answer','events','wait_event'],
     // A peer has the subject's own reach for reading, searching, files, browsing,
     // code and memory, but none of the subject's control plane.
     peer:['read','wait','search','message','file','attachment','forward','recall','web','execute','job','send',
-      'report','evidence','board','remember','memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize','ask','answer','events']})[role]??[]
+      'report','evidence','board','remember','memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize','ask','answer','events','wait_event']})[role]??[]
   const names=new Set(methods.map(n=>'team_'+n))
   // Steering is delivered by the host at a native step boundary and then shown
   // once as dynamic state, so the worker never polls for instructions.
@@ -92,7 +93,7 @@ export function apply(ctx) {
   for(const [method,properties] of Object.entries(schemas)){
     if(!methods.includes(method))continue
     ctx.tools.register({
-      name:'team_'+method,description:({read:'Read this task’s chat window.',wait:'Wait for actual new messages after a message id; no polling the model. New messages use a five-second batch.',recall:'Recall scoped memories.',send:'Send a reply to this task’s window.',web:'Read a public HTTPS page.',report:'Report progress to the main Agent.',evidence:'Publish a finding, source or excerpt you actually read to this task’s evidence board.',board:'Read this task’s evidence board.',ask:'Ask another branch of the same subject a direct question; the answer arrives as an event at your next boundary, without the subject relaying it.',answer:'Answer a question another branch or the subject asked you.',events:'Read the events other branches and the subject published under this activity, plus questions still open.',remember:'Hand the main Agent a memory candidate with its real sources. It is not saved as a memory: the subject decides later, and a worker report never becomes an observation.',execute:'Run Node, Python or Shell in the isolated, networkless runner. The same code sent twice for this task is one job.',job:'Read a code job’s exit state, output and exported files.',search:'Search this task’s window, like the subject would.',message:'Page through one long original message by offset.',file:'Read a file this task may see; long text comes in pages.',attachment:'Read a QQ attachment this task may see.',forward:'Page through a merged forward of this task’s window.',memory_recall:'Recall memory inside this task’s scope.',memory_inspect:'Check the originals behind one memory.',memory_propose:'Propose an experience or claim with its sources.',memory_segments:'List candidate segments of this window.',memory_generalize:'Generalize one claim from several independent experiences.'})[method],
+      name:'team_'+method,description:({read:'Read this task’s chat window.',wait:'Wait for actual new messages after a message id; no polling the model. New messages use a five-second batch.',recall:'Recall scoped memories.',send:'Send a reply to this task’s window.',web:'Read a public HTTPS page.',report:'Report progress to the main Agent.',evidence:'Publish a finding, source or excerpt you actually read to this task’s evidence board.',board:'Read this task’s evidence board.',ask:'Ask another branch of the same subject a direct question; the answer arrives as an event at your next boundary, without the subject relaying it.',answer:'Answer a question another branch or the subject asked you.',events:'Read the events other branches and the subject published under this activity, plus questions still open.',wait_event:'Wait here, in the host, for a sibling event (max 30 s). Use it instead of finishing early or polling: it returns the event that arrived or says nothing came.',remember:'Hand the main Agent a memory candidate with its real sources. It is not saved as a memory: the subject decides later, and a worker report never becomes an observation.',execute:'Run Node, Python or Shell in the isolated, networkless runner. The same code sent twice for this task is one job.',job:'Read a code job’s exit state, output and exported files.',search:'Search this task’s window, like the subject would.',message:'Page through one long original message by offset.',file:'Read a file this task may see; long text comes in pages.',attachment:'Read a QQ attachment this task may see.',forward:'Page through a merged forward of this task’s window.',memory_recall:'Recall memory inside this task’s scope.',memory_inspect:'Check the originals behind one memory.',memory_propose:'Propose an experience or claim with its sources.',memory_segments:'List candidate segments of this window.',memory_generalize:'Generalize one claim from several independent experiences.'})[method],
       parameters:{type:'object',properties,required:({send:['text','replyId'],web:['url'],report:['body'],evidence:['body'],execute:['code'],job:['id'],ask:['toTask','question'],answer:['question','answer']})[method]??[],additionalProperties:false},
       output:{schema:{type:'object',additionalProperties:true},render:(_,value)=>[{type:'text',text:JSON.stringify(value)}]},
       execute:async(args,exec)=>call(method,args,exec.signal),

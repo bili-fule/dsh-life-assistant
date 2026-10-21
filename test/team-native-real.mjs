@@ -44,7 +44,7 @@ async function phase(name,{parallel}){
   const reader=tasks.create({key:name+'-reader',role:'reader',viewId:view.id,expiresAt:Date.now()+600000,activityId:activity.activityId,maxSteps:8,
     goal:'你只读这个 XP 群窗口。用 team_read 读完最近的消息，找出星洛提到的游戏名字和开服时间。用 team_evidence 把读到的那句原话记成 finding，source 写 "群消息2"。然后用 team_ask 问向任务 '+`__SIBLING__`+'，问题写「那个游戏叫什么名字、几点开服？」。最后用 team_report 说明你查到了什么。'})
   const sibling=tasks.create({key:name+'-sibling',role:'reader',viewId:view.id,expiresAt:Date.now()+600000,activityId:activity.activityId,maxSteps:8,
-    goal:'你和另一个分支在查同一件事。用 team_read 读这个 XP 群窗口，自己确认星洛说的游戏名字和开服时间。用 team_events 查看同一活动的事件；如果看到另一个分支提出的问题，用 team_answer 回答它（答案必须来自你读到的原话）。然后 team_report 说明你答了什么。'})
+    goal:'你和另一个分支在查同一件事。用 team_read 读这个 XP 群窗口，自己确认星洛说的游戏名字和开服时间。用 team_events 查看同一活动的事件；如果暂时没有别分支的问题，就用 team_wait_event(seconds=25) 在宿主里等一次（不要空转、不要提前结束），拿到问题后用 team_answer 回答它（答案必须来自你读到的原话）。最后 team_report 说明你答了什么。'})
   data.db.prepare('UPDATE yoyo_team_tasks SET goal=replace(goal,?,?) WHERE id=?').run('__SIBLING__',sibling.id,reader.id)
   const steps=new Map(),started=[]
   const tools={pack:async()=>({pack:null}),read:async({view:runView,args})=>({target:runView.focus,window:'xmfu',messages:data.read(runView.id,{limit:args?.limit??20}).map(m=>({id:m.id,sender:m.sender,text:m.text}))}),recall:async()=>({results:[]}),step:async({agentId})=>{
@@ -85,8 +85,8 @@ const summary={model,
   reports:concurrent.reports.map(row=>row.body.slice(0,200)),states:concurrent.states.map(row=>({role:row.role,state:row.state})),
   tokensNote:'Token 未测量：这里没有接原生计量，不记为 0'}
 console.log(JSON.stringify(summary,null,2))
-if(!concurrent.question)console.log('OBSERVED: the real model did not ask a question this run')
-if(!concurrent.answer)console.log('OBSERVED GAP: a sibling that checks events once and finishes never sees a question published later; no wait primitive yet')
-if(concurrent.answer&&concurrent.question)assert.equal(concurrent.answer.ref,concurrent.question.event_id,'the answer points at the question')
+assert.ok(concurrent.question,'a real model asked its sibling a question')
+assert.ok(concurrent.answer,'a real model answered it after waiting in the host')
+assert.equal(concurrent.answer.ref,concurrent.question.event_id,'the answer points at the question')
 assert.ok(concurrent.reports.length>=2,'both branches reported')
-console.log('DONE: real-model run recorded; read the OBSERVED lines above. Traces: '+root)
+console.log('PASS: two real-model workers asked and answered through the bus. Traces: '+root)

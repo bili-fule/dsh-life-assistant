@@ -40,6 +40,9 @@ export class TeamCoordinator {
       if(name==='ask')return this.tasks.ask(id,{toTask:args.toTask,question:args.question,baseRevision:args.baseRevision??null,viewId:current.view.id})
       if(name==='answer')return this.tasks.answer(id,{questionEventId:args.question,answer:args.answer,viewId:current.view.id})
       if(name==='events')return {events:this.tasks.activityEvents(current.view.id,{taskId:args?.taskId??null,after:args?.after??0,limit:args?.limit??20}),openQuestions:this.tasks.openQuestions(current.view.id)}
+      // Waiting for a sibling is the host's job: the branch sleeps here instead of
+      // finishing early or polling with model turns.
+      if(name==='wait_event')return this.tasks.waitForEvent(id,{seconds:args?.seconds??20})
       const authorize=()=>{
         if(controller.signal.aborted)throw Error('执行已取消')
         this.tasks.authority(agentId)

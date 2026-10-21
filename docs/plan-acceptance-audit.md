@@ -1,4 +1,4 @@
-# 三份计划的验收自查表
+﻿# 三份计划的验收自查表
 
 更新：2026-10-21（对应包版本 0.34.0）。这份表把三份计划里的每一条验收项对照到**仓库里能核对的东西**，用来回答一个问题：这一条到底是「有测试证明」，还是「只有规则和文档」，还是「必须真实部署才能证明」。
 
@@ -10,7 +10,7 @@
 
 当前状态：`npm test` 共 238 项，`npm run check` 通过；生产运行的是 0.25.0（见 [部署验收记录](deployment-025-2026-10-21.md)），本文描述的是仓库里的开发版。
 
-<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=251 -->
+<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=252 -->
 
 ## 1. 动机计划 §12
 
@@ -83,15 +83,15 @@
 | 并行分支计划 §10 验收场景 | 状态 | 证据 |
 | --- | --- | --- |
 | 1. 一个观察分支与一个网页分支运行时间重叠，共享同一目标 | ✅ | `test/team-events.test.mjs`（两个任务同时经 `TeamCoordinator` 运行，发现事件序号早于完成事件）；真实环境的重叠耗时仍属于第 10 行的待测项 |
-| 2. 研究分支的发现能在任务结束前被另一分支收到 | ✅ | `test/team-events.test.mjs`（兄弟分支在原生边界收到 finding，送达时作者尚未发布完成事件）；另有可选的原生双进程验证 `test/team-native-events.mjs` |
-| 3. 分支直接问答，不依赖主 Agent 转述 | ✅ | `test/team-events.test.mjs`（question → answer，`ref` 指回原问题，未答问题清空） |
+| 2. 研究分支的发现能在任务结束前被另一分支收到 | ✅ | `test/team-events.test.mjs`（兄弟分支在原生边界收到 finding，送达时作者尚未发布完成事件；`team_wait_event` 让分支在宿主里等而不早退）；另有原生双进程验证 `test/team-native-events.mjs` 与真实模型回放 `test/team-native-real.mjs` |
+| 3. 分支直接问答，不依赖主 Agent 转述 | ✅ | `test/team-events.test.mjs`（question → answer，`ref` 指回原问题，未答问题清空）与真实模型 `deepseek-flash` 双进程回放：并行 9.4 s，提问、等待、答复、回传全部成功 |
 | 4. 切群、压缩、重启后恢复目标与回执；不重复建 Session | ✅ | `test/subject-continuity.test.mjs`（重启恢复活动与步骤）、`test/social-agent.test.mjs`（重启核对原生轨迹、不重复提交） |
 | 5. 主体改变目标：新版本到达相关分支，旧结果不把新目标标为完成 | ✅ | `test/team-events.test.mjs`（`announceDirection` 写入 `direction_changed`，带 `base_revision`、同版本只写一次，运行中的分支下次边界收到）、`test/subject-continuity.test.mjs`（过期 revision 被拒绝而不是覆盖） |
 | 6. 两分支争用同群发言：只有有效 generation 能发 | ✅ | `test/team-store.test.mjs`（接管使旧租约失效）、`test/team-host.test.mjs` |
 | 7. 相反发现：保留来源与冲突，不静默覆盖 | ✅ | `test/team-events.test.mjs`（两种说法并存、`conflict:true`、主体裁定追加而不删除原说法、裁定理由与新说法进事件） |
 | 8. 重复事件、崩溃、未知发送结果：状态幂等 | ✅ | `test/social-store.test.mjs`（去重、uncertain、重启不重发） |
 | 9. 微信边界：QQ 分支读不到微信数据库、凭据、Session | ✅ | `test/team-store.test.mjs`、`test/social-store.test.mjs` |
-| 10. 同任务串行与并行对照：耗时、调用数、Token、质量 | ⏳ | 尚无真实运行对照；计量缺失仍会显示「未上报」，不记为 0 |
+| 10. 同任务串行与并行对照：耗时、调用数、Token、质量 | ⏳ | 已有一次真实模型对照（并行 9.4 s / 串行 46.2 s，见 [真实模型记录](real-model-run-2026-10-21.md)）；Token 未接计量仍显示「未上报」，不记为 0，样本也太小不能外推 |
 
 ## 5. 汇总
 
