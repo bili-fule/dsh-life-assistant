@@ -8,9 +8,9 @@ import { SocialStore } from '../src/social-store.mjs'
 import { TeamHost } from '../src/team-host.mjs'
 import { TeamStore } from '../src/team-store.mjs'
 
-function fixture(t){
+function fixture(t,config={}){
   const root=mkdtempSync(join(tmpdir(),'team-host-')),store=new Store(join(root,'test.sqlite')),data=new SocialStore(store)
-  const social={store,data,separate:true,sessionId:'main',qq:null},host=new TeamHost(social,{})
+  const social={store,data,separate:true,sessionId:'main',qq:null},host=new TeamHost(social,config)
   const target=data.discover({platform:'qq',account:'1',kind:'private',peer:'2'})
   data.approve(target.handle,true)
   const view=data.open(target.handle),task=host.tasks.create({key:'test',role:'chat',goal:'chat',viewId:view.id,expiresAt:Date.now()+60000})
@@ -96,4 +96,31 @@ test('worker steps are metered in the database and survive a new host',async t=>
   // A paused subject cannot spend more budget.
   social.store.set('yoyo_settings',{paused:true,observeOnly:false})
   await assert.rejects(()=>host.coordinator.tools.step({agentId:'worker'}),/暂停|预算/)
+})
+test('a failed task is retried only when enabled, bounded, and never after an uncertain send',t=>{
+  const {host,view,data}=fixture(t,{retryBlocked:true,retryAttempts:2,retryDelayMs:0})
+  const concern=data.concern(view.id,{title:'t',why:'w',origin:'o',next:'n',doneWhen:'d',stopWhen:'s'})
+  const args={concernId:concern.id,rationale:'继续聊',role:'chat',goal:'聊天',viewId:view.id,expiresAt:Date.now()+60000}
+  const task=host.motivation.delegate({...args,key:'retry-1'})
+  host.tasks.claim(task.id,'worker')
+  host.tasks.noteFailure(task.id,{maxAttempts:2,backoffMs:0})
+  assert.equal(host.tasks.inspect(task.id,view.id).state,'blocked')
+  const started=[];host.coordinator.start=id=>{started.push(id);return {started:true,id}}
+  host.tick()
+  assert.deepEqual(started,[task.id])
+  // A task whose last reply is uncertain must never be replayed automatically.
+  host.db.prepare("UPDATE yoyo_team_tasks SET state='cancelled' WHERE id=?").run(task.id)
+  host.db.prepare('UPDATE yoyo_team_speakers SET expires_at=0').run()
+  const second=host.motivation.delegate({...args,key:'retry-2'})
+  host.tasks.claim(second.id,'worker2')
+  host.db.prepare("INSERT INTO yoyo_team_deliveries VALUES(?,?,?,'uncertain',NULL)").run('retry-key',second.id,'text')
+  host.tasks.noteFailure(second.id,{maxAttempts:2,backoffMs:0})
+  started.length=0;host.tick()
+  assert.deepEqual(started,[])
+  // Without the switch nothing is resumed at all.
+  host.config.retryBlocked=false
+  host.db.prepare("UPDATE yoyo_team_deliveries SET state='sent' WHERE task_id=?").run(second.id)
+  host.tasks.noteFailure(second.id,{maxAttempts:3,backoffMs:0})
+  started.length=0;host.tick()
+  assert.deepEqual(started,[])
 })

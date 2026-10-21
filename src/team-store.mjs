@@ -28,6 +28,9 @@ export class TeamStore {
         task_id TEXT NOT NULL, attempt INTEGER NOT NULL, steps INTEGER NOT NULL DEFAULT 0,
         tokens INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(task_id,attempt));
     `)
+    const columns=this.db.prepare('PRAGMA table_info(yoyo_team_tasks)').all().map(column=>column.name)
+    for(const [name,type] of [['failures','INTEGER NOT NULL DEFAULT 0'],['retry_at','INTEGER'],['renewed_at','INTEGER']])
+      if(!columns.includes(name))this.db.exec(`ALTER TABLE yoyo_team_tasks ADD COLUMN ${name} ${type}`)
   }
   transaction(fn) {
     this.db.exec('BEGIN IMMEDIATE')
@@ -187,6 +190,36 @@ export class TeamStore {
   usage(taskId) {
     const row=this.db.prepare('SELECT coalesce(sum(steps),0) steps,coalesce(sum(tokens),0) tokens,count(*) attempts FROM yoyo_team_usage WHERE task_id=?').get(taskId)
     return {steps:Number(row?.steps??0),tokens:Number(row?.tokens??0),attempts:Number(row?.attempts??0)}
+  }
+  // A heartbeat extends a live lease within a hard ceiling. It never revives a
+  // finished, cancelled or revoked task.
+  renew(agentId,ms=900000) {
+    const {task}=this.authority(agentId)
+    const now=this.clock(),until=now+Math.max(60000,Math.min(Number.isFinite(ms)?ms:900000,3600000))
+    this.db.prepare('UPDATE yoyo_team_tasks SET renewed_at=?,expires_at=max(expires_at,?) WHERE id=?').run(now,until,task.id)
+    this.db.prepare('UPDATE yoyo_team_speakers SET expires_at=max(expires_at,?) WHERE task_id=?').run(until,task.id)
+    return {expiresAt:Math.max(task.expires_at,until)}
+  }
+  // Failures are counted per task. A retry is only ever scheduled while the
+  // configured attempt allowance lasts, and never for a task whose last send
+  // is still uncertain.
+  noteFailure(taskId,{maxAttempts=0,backoffMs=60000,now=this.clock()}={}) {
+    const row=this.db.prepare('SELECT failures,state FROM yoyo_team_tasks WHERE id=?').get(taskId)
+    if(!row)throw Error('任务不存在')
+    if(!['ready','running','waiting','blocked'].includes(row.state))throw Error('已完成或已取消的任务不需要重试')
+    const failures=Number(row.failures??0)+1
+    const retryAt=failures<maxAttempts?now+Math.max(0,backoffMs):null
+    this.db.prepare("UPDATE yoyo_team_tasks SET state='blocked',failures=?,retry_at=? WHERE id=?").run(failures,retryAt,taskId)
+    return {failures,retryAt}
+  }
+  resumable({now=this.clock(),limit=10}={}) {
+    const deliveries=!!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='yoyo_team_deliveries'").get()
+    return this.db.prepare("SELECT id,view_id,failures FROM yoyo_team_tasks WHERE state='blocked' AND retry_at IS NOT NULL AND retry_at<=? ORDER BY retry_at LIMIT ?")
+      .all(now,limit)
+      .filter(row=>!deliveries||!this.db.prepare("SELECT 1 FROM yoyo_team_deliveries WHERE task_id=? AND state IN ('uncertain','sending')").get(row.id))
+  }
+  requeue(id) {
+    return !!this.db.prepare("UPDATE yoyo_team_tasks SET state='ready',retry_at=NULL WHERE id=? AND state='blocked' AND retry_at IS NOT NULL").run(id).changes
   }
   finish(agentId,state='completed') {
     if(!['completed','cancelled','blocked'].includes(state))throw Error('结束状态无效')

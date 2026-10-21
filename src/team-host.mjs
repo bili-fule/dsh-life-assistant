@@ -14,6 +14,7 @@ export const TEAM_POLICY=`你可以用 team_deliberate 查看关切和团队进�
 export class TeamHost {
   constructor(social,config) {
     if(!social.separate)throw Error('团队仅用于独立 QQ 主体')
+    this.config=config
     this.social=social;this.tasks=new TeamStore(social.data);this.motivation=new TeamMotivation(this.tasks,social.motivation??null)
     this.db=social.data.db
     this.db.exec(`CREATE TABLE IF NOT EXISTS yoyo_team_deliveries(
@@ -23,9 +24,9 @@ export class TeamHost {
     `)
     // Process restarts never silently replay an unconfirmed external send.
     this.db.prepare("UPDATE yoyo_team_deliveries SET state='uncertain' WHERE state='sending'").run()
-    this.db.prepare("UPDATE yoyo_team_tasks SET state='blocked' WHERE state IN ('running','waiting')").run()
+    this.db.prepare("UPDATE yoyo_team_tasks SET state='blocked',failures=failures+1 WHERE state IN ('running','waiting')").run()
     this.db.prepare('UPDATE yoyo_team_speakers SET expires_at=0,generation=generation+1').run()
-    this.coordinator=new TeamCoordinator({tasks:this.tasks,adapter:new TeamNativeAdapter({...config,persona:()=>social.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算。')}),maxConcurrent:config.maxConcurrent??2,tools:{
+    this.coordinator=new TeamCoordinator({tasks:this.tasks,adapter:new TeamNativeAdapter({...config,persona:()=>social.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算。')}),maxConcurrent:config.maxConcurrent??2,retry:config.retryBlocked?{maxAttempts:config.retryAttempts??1,backoffMs:config.retryDelayMs??60000}:null,tools:{
       step:async({agentId})=>{
         const settings=social.store.get('yoyo_settings',{}),day=localParts().date
         const used=this.db.prepare('SELECT steps FROM yoyo_usage WHERE day=?').get(day)?.steps??0
@@ -33,8 +34,11 @@ export class TeamHost {
         // Per-task counters are durable, so a restart cannot hand out a fresh
         // budget; the daily budget stays a separate host-wide number.
         const counter=this.tasks.recordStep(agentId,config.maxSteps??20)
+        // Each metered step also renews the lease within a hard ceiling, so a
+        // long but progressing activity is not cut off by its first deadline.
+        const lease=this.tasks.renew(agentId,config.leaseMs??900000)
         this.db.prepare('INSERT INTO yoyo_usage(day,steps) VALUES(?,1) ON CONFLICT(day) DO UPDATE SET steps=steps+1').run(day)
-        return {allowed:true,step:counter.steps,maxSteps:counter.maxSteps}
+        return {allowed:true,step:counter.steps,maxSteps:counter.maxSteps,expiresAt:lease.expiresAt}
       },
       usage:async({agentId,tokens})=>this.tasks.recordTokens(agentId,tokens),
       read:async({args,view})=>{
@@ -122,6 +126,10 @@ export class TeamHost {
   tick() {
     const settings=this.social.store.get('yoyo_settings',{})
     if(settings.paused)return
+    // Retries are opt-in. A task whose last send is uncertain is never retried.
+    if(this.config.retryBlocked)for(const row of this.tasks.resumable({now:Date.now()})){
+      try{this.tasks.inspect(row.id,row.view_id);this.tasks.requeue(row.id)}catch{/* Revoked work stays blocked. */}
+    }
     for(const task of this.db.prepare("SELECT id,view_id,expires_at FROM yoyo_team_tasks WHERE state='ready' ORDER BY created_at LIMIT 20").all()){
       if(this.coordinator.running.size>=this.coordinator.maxConcurrent)break
       try{

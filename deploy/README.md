@@ -40,6 +40,19 @@ autonomy:
     eventTokenEnv: SNOWLUMA_EVENT_TOKEN
   executor:
     socketPath: /run/yoyo-executor/runner.sock
+  team:
+    enabled: false
+    root: /var/lib/yoyo-team          # 独立执行者目录，不能与生产 DSH_HOME 重合
+    sdkModule: /path/to/@deepseek-ai/dsh-sdk-client/lib/index.js
+    providerPatch: /etc/yoyo/team-provider.patch.yml
+    provider: xuanluo
+    model: cn:deepseek-v4.1-flash
+    maxConcurrent: 2
+    maxSteps: 20
+    leaseMs: 900000                   # 每步续租后的租约长度，上限一小时
+    retryBlocked: false               # 打开后才按 retryAttempts 重排失败任务
+    retryAttempts: 1
+    retryDelayMs: 60000
 ```
 
 动机层与记忆层都默认关闭；关闭时没有对应的工具，行为与之前相同。打开后动机层只记录期待、体验与有界偏好，记忆层只记录来源、经历、主张与撤回，都不改变权限、提醒或预算，也不自动创建任务或唤醒。字段与验收状态见 [以开心为方向的自主选择](../docs/humanlike-motivation.md) 与 [类人记忆层](../docs/memory-layer.md)。
