@@ -42,6 +42,8 @@ export class SocialStore {
       CREATE TABLE IF NOT EXISTS yoyo_learning_versions(id INTEGER PRIMARY KEY,learning_id INTEGER NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_concerns(id INTEGER PRIMARY KEY,body TEXT NOT NULL,scopes TEXT NOT NULL,updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_concern_feedback(id INTEGER PRIMARY KEY,concern_id INTEGER NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_concern_wakes(id INTEGER PRIMARY KEY,concern_id INTEGER NOT NULL,scopes TEXT NOT NULL,
+        reason TEXT NOT NULL DEFAULT 'review',outcome TEXT,created_at INTEGER NOT NULL,resolved_at INTEGER);
       INSERT OR IGNORE INTO yoyo_activity(id,updated_at) VALUES(1,0);
     `)
     if(!this.db.prepare('PRAGMA table_info(yoyo_outbox)').all().some(c=>c.name==='content'))this.db.exec('ALTER TABLE yoyo_outbox ADD COLUMN content TEXT')
@@ -200,13 +202,15 @@ export class SocialStore {
   activityHistory(viewId){const view=this.view(viewId);return this.db.prepare("SELECT state,body,created_at FROM yoyo_activity_log l WHERE NOT EXISTS(SELECT 1 FROM json_each(l.scopes) s WHERE s.value NOT IN(SELECT value FROM json_each(?))) ORDER BY id DESC LIMIT 20").all(JSON.stringify(view.scopes)).map(r=>({...r,body:JSON.parse(r.body)}))}
   concerns(viewId) {
     const view=this.view(viewId)
-    return this.db.prepare('SELECT * FROM yoyo_concerns c WHERE NOT EXISTS(SELECT 1 FROM json_each(c.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?))) ORDER BY updated_at DESC LIMIT 100').all(JSON.stringify(view.scopes)).map(r=>({id:r.id,...JSON.parse(r.body),updatedAt:r.updated_at}))
+    const wakes=this.concernWakeStats(viewId)
+    return this.db.prepare('SELECT * FROM yoyo_concerns c WHERE NOT EXISTS(SELECT 1 FROM json_each(c.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?))) ORDER BY updated_at DESC LIMIT 100').all(JSON.stringify(view.scopes))
+      .map(r=>({id:r.id,...JSON.parse(r.body),wakes:wakes.get(r.id)??{delivered:0,effective:0,deferred:0,dropped:0,ignored:0,open:0},updatedAt:r.updated_at}))
   }
   concern(viewId,args) {
     const visible=this.concerns(viewId),view=this.view(viewId)
     const previous=args.id===undefined?null:visible.find(r=>r.id===args.id)
     if(args.id!==undefined&&!previous)throw Error('关切不存在或不在当前资料范围')
-    const body={...previous,...args};delete body.id;delete body.updatedAt
+    const body={...previous,...args};delete body.id;delete body.updatedAt;delete body.wakes
     for(const field of ['title','why','origin','next','doneWhen','stopWhen'])body[field]=boundedText(body[field],field==='title'?300:1500)
     body.state??='active'
     if(!['active','waiting','done','abandoned'].includes(body.state))throw Error('关切状态无效')
@@ -217,6 +221,9 @@ export class SocialStore {
     const scopes=JSON.stringify(sourceScopes(view.scopes)),now=Date.now()
     if(previous)this.db.prepare('UPDATE yoyo_concerns SET body=?,scopes=?,updated_at=? WHERE id=?').run(JSON.stringify(body),scopes,now,previous.id)
     const id=previous?.id??Number(this.db.prepare('INSERT INTO yoyo_concerns(body,scopes,updated_at) VALUES(?,?,?)').run(JSON.stringify(body),scopes,now).lastInsertRowid)
+    // Closing a concern is a decision about the concern itself, so the wakes that
+    // led here are resolved instead of staying open forever.
+    if(body.state==='done'||body.state==='abandoned')this.decideConcernWake(id,body.state==='done'?'done':'abandon')
     return {id,state:body.state}
   }
   learning(viewId) {
@@ -269,7 +276,43 @@ export class SocialStore {
   }
   consumeConcernReview(id,reviewAt) {
     // Compare-and-clear so a new decision made while this turn runs survives.
-    this.db.prepare("UPDATE yoyo_concerns SET body=json_set(body,'$.reviewAt',NULL) WHERE id=? AND json_extract(body,'$.reviewAt')=?").run(id,reviewAt)
+    const result=this.db.prepare("UPDATE yoyo_concerns SET body=json_set(body,'$.reviewAt',NULL) WHERE id=? AND json_extract(body,'$.reviewAt')=?").run(id,reviewAt)
+    // A delivered review is a wake. Being woken again before deciding anything
+    // means the earlier one achieved nothing, so only counts are kept honest.
+    if(result.changes){
+      const row=this.db.prepare('SELECT scopes FROM yoyo_concerns WHERE id=?').get(id)
+      if(row)this.noteConcernWake(id,row.scopes)
+    }
+  }
+  noteConcernWake(concernId,scopes,reason='review') {
+    const now=Date.now()
+    this.db.prepare("UPDATE yoyo_concern_wakes SET outcome='ignored',resolved_at=? WHERE concern_id=? AND outcome IS NULL").run(now,concernId)
+    this.db.prepare('INSERT INTO yoyo_concern_wakes(concern_id,scopes,reason,outcome,created_at) VALUES(?,?,?,NULL,?)')
+      .run(concernId,Array.isArray(scopes)?JSON.stringify(scopes):String(scopes),reason,now)
+  }
+  // A decision is the only thing that turns a wake into a result. "任务完成"
+  // is not a concern decision, so team reviews never resolve these.
+  decideConcernWake(concernId,decision) {
+    const outcome=decision==='done'?'effective':decision==='abandon'?'dropped':'deferred'
+    this.db.prepare('UPDATE yoyo_concern_wakes SET outcome=?,resolved_at=? WHERE concern_id=? AND outcome IS NULL')
+      .run(outcome,Date.now(),concernId)
+    return outcome
+  }
+  concernWakeStats(viewId) {
+    const view=this.view(viewId),stats=new Map()
+    for(const row of this.db.prepare(`SELECT w.concern_id,w.outcome,count(*) n FROM yoyo_concern_wakes w
+      WHERE NOT EXISTS(SELECT 1 FROM json_each(w.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?))) GROUP BY w.concern_id,w.outcome`)
+      .all(JSON.stringify(view.scopes))){
+      const entry=stats.get(row.concern_id)??{delivered:0,effective:0,deferred:0,dropped:0,ignored:0,open:0}
+      entry.delivered+=row.n
+      if(row.outcome==='effective')entry.effective+=row.n
+      else if(row.outcome==='dropped')entry.dropped+=row.n
+      else if(row.outcome==='deferred')entry.deferred+=row.n
+      else if(row.outcome==='ignored')entry.ignored+=row.n
+      else entry.open+=row.n
+      stats.set(row.concern_id,entry)
+    }
+    return stats
   }
   concernFeedback(viewId,{id,outcome,decision,receipt}) {
     const view=this.view(viewId),concern=this.concerns(viewId).find(r=>r.id===id)
@@ -282,6 +325,8 @@ export class SocialStore {
     }
     const body={outcome,decision,receipt:receipt??null,evidence:receipt?'tool_receipt':'self_report'}
     const result=this.db.prepare('INSERT INTO yoyo_concern_feedback(concern_id,body,scopes,created_at) VALUES(?,?,?,?)').run(id,JSON.stringify(body),JSON.stringify(sourceScopes(view.scopes)),Date.now())
+    // Only a concern-level decision resolves the wake that led here.
+    this.decideConcernWake(id,decision)
     // Feedback is a report, not automatic proof of success. Update the explicit
     // concern via its tool when next/criteria/state need changing.
     return {id:Number(result.lastInsertRowid),...body}

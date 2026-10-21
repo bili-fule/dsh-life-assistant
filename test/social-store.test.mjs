@@ -42,6 +42,36 @@ test('feedback distinguishes a self report from scoped tool evidence and review 
  assert.deepEqual(data.concernFeedbacks(b.id),[])
 })
 
+test('concern wakes are counted and only a concern decision resolves them',t=>{
+  const {data,target}=fixture(t),a=data.open(target('123').handle),b=data.open(target('456').handle),now=Date.now()
+  const c=data.concern(a.id,{title:'experiment',why:'question',origin:'experience',next:'run',doneWhen:'measured',stopWhen:'no progress',reviewAt:now+1000})
+  const wakes=()=>data.concerns(a.id).find(row=>row.id===c.id).wakes
+  assert.deepEqual(wakes(),{delivered:0,effective:0,deferred:0,dropped:0,ignored:0,open:0})
+  // The first review is delivered; a second one before any decision means the
+  // first reminder achieved nothing.
+  data.consumeConcernReview(c.id,now+1000)
+  assert.deepEqual(wakes(),{delivered:1,effective:0,deferred:0,dropped:0,ignored:0,open:1})
+  data.concern(a.id,{id:c.id,reviewAt:now+2000})
+  data.consumeConcernReview(c.id,now+2000)
+  assert.deepEqual(wakes(),{delivered:2,effective:0,deferred:0,dropped:0,ignored:1,open:1})
+  // Continuing defers; it is not a success.
+  data.concernFeedback(a.id,{id:c.id,outcome:'slow progress',decision:'continue'})
+  assert.deepEqual(wakes(),{delivered:2,effective:0,deferred:1,dropped:0,ignored:1,open:0})
+  // Closing the concern resolves the wake that led here.
+  data.concern(a.id,{id:c.id,reviewAt:now+3000})
+  data.consumeConcernReview(c.id,now+3000)
+  data.concern(a.id,{id:c.id,state:'done'})
+  assert.deepEqual(wakes(),{delivered:3,effective:1,deferred:1,dropped:0,ignored:1,open:0})
+  // Abandoning is recorded as dropped, not as an effective reminder.
+  const second=data.concern(a.id,{title:'other',why:'q',origin:'e',next:'run',doneWhen:'measured',stopWhen:'stop',reviewAt:now+4000})
+  data.consumeConcernReview(second.id,now+4000)
+  data.concern(a.id,{id:second.id,state:'abandoned'})
+  assert.equal(data.concerns(a.id).find(row=>row.id===second.id).wakes.dropped,1)
+  // Counts never leak into another window, nor into the stored concern body.
+  assert.deepEqual(data.concerns(b.id),[])
+  assert.equal('wakes' in JSON.parse(data.db.prepare('SELECT body FROM yoyo_concerns WHERE id=?').get(c.id).body),false)
+})
+
 test('learning selects one admired identity, requires a real trial before adoption and retains retirement history',t=>{
  const {data,target}=fixture(t),a=target('123'),b=target('456'),v=data.open(a.handle),other=data.open(b.handle)
  const first=data.ingest({target:a.handle,sender:'123',externalId:'learn-1',text:'先把问题说清楚'})

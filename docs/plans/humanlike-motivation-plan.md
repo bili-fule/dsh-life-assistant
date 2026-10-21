@@ -147,7 +147,7 @@
 
 首期不训练模型权重，不引入自动强化学习训练，不承诺凭评分机制产生人类感受。它是基于可检索经历的行为策略与偏好更新。
 
-当前状态：阶段 1（`self_options/self_choose/self_appraise/self_preferences` 与五张有范围的表）、阶段 2（候选、继续、饱和、休息）、阶段 3（`team_delegate` 关联自己的选择，事件级去重）和阶段 4（事后复查、反例待确认修订、撤销链、选择性模仿仍走 `yoyo_learning`）已实现并有测试；阶段 5 尚未进行，数值也尚未用行为回放校准。详见 [实现文档](../humanlike-motivation.md)。
+当前状态：阶段 1（`self_options/self_choose/self_appraise/self_preferences` 与五张有范围的表）、阶段 2（候选、继续、饱和、休息）、阶段 3（`team_delegate` 关联自己的选择，事件级去重）和阶段 4（事后复查、反例待确认修订、撤销链、选择性模仿仍走 `yoyo_learning`）已实现并有测试；关切的唤醒效果已能计数（有效／延后／放弃／未被理会，0.25.0，见 [实现文档](../humanlike-motivation.md#关切的唤醒效果)）；阶段 5 尚未进行，数值也尚未用行为回放校准。详见 [实现文档](../humanlike-motivation.md)。
 
 ## 12. 验收场景
 
