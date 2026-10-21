@@ -33,7 +33,8 @@ export class TeamHost {
         if(settings.paused||used>=(settings.dailySteps??0))throw Error('主体暂停或每日执行预算已用尽')
         // Per-task counters are durable, so a restart cannot hand out a fresh
         // budget; the daily budget stays a separate host-wide number.
-        const counter=this.tasks.recordStep(agentId,config.maxSteps??20)
+        const {task:live}=this.tasks.authority(agentId)
+        const counter=this.tasks.recordStep(agentId,live.max_steps??config.maxSteps??20)
         // Each metered step also renews the lease within a hard ceiling, so a
         // long but progressing activity is not cut off by its first deadline.
         const lease=this.tasks.renew(agentId,config.leaseMs??900000)
@@ -65,7 +66,7 @@ export class TeamHost {
   register(define) {
     define('team_overview','查看团队安全状态，不含其他窗口正文。',{},[],async()=>({tasks:this.tasks.overview()}))
     define('team_deliberate','结合当前范围内关切、分工和证据，自主决定下一步；无事允许休息。',{},[],async(a,e,k,v)=>this.motivation.deliberate(v.id))
-    define('team_delegate','委派一个有动机的聊天或公开研究活动。聊天可直接回复当前窗口；研究仅 public。执行环境独立。可分派属于自己某次选择的活动，但活动体验仍按真实事件去重。',{concernId:{type:'integer'},choiceId:{type:'integer'},role:{type:'string',enum:['chat','research']},goal:{type:'string',maxLength:6000},rationale:{type:'string',maxLength:2000},durationSeconds:{type:'integer',minimum:30,maximum:900}},['concernId','role','goal','rationale'],async(a,e,k,v)=>{
+    define('team_delegate','委派一个有动机的聊天、公开研究、阅读或核对活动。chat 直接在窗口交流；reader 只读不发言；research 仅 public；verify 只核对证据。可分派属于自己某次选择的活动，但活动体验仍按真实事件去重。',{concernId:{type:'integer'},choiceId:{type:'integer'},role:{type:'string',enum:['chat','research','reader','verify']},goal:{type:'string',maxLength:6000},rationale:{type:'string',maxLength:2000},durationSeconds:{type:'integer',minimum:30,maximum:900},dependsOn:{type:'array',maxItems:3,items:{type:'string',maxLength:60}},maxSteps:{type:'integer',minimum:1,maximum:200}},['concernId','role','goal','rationale'],async(a,e,k,v)=>{
       const task=this.motivation.delegate({...a,key:k,viewId:v.id,expiresAt:Date.now()+1000*(a.durationSeconds??300)})
       // Transfer this window's main lease to the delegated conversation.
       if(a.role==='chat')this.db.prepare('UPDATE yoyo_team_speakers SET expires_at=0,generation=generation+1 WHERE target=? AND agent_id=?').run(v.focus,this.social.sessionId)
@@ -130,8 +131,10 @@ export class TeamHost {
     if(this.config.retryBlocked)for(const row of this.tasks.resumable({now:Date.now()})){
       try{this.tasks.inspect(row.id,row.view_id);this.tasks.requeue(row.id)}catch{/* Revoked work stays blocked. */}
     }
-    for(const task of this.db.prepare("SELECT id,view_id,expires_at FROM yoyo_team_tasks WHERE state='ready' ORDER BY created_at LIMIT 20").all()){
+    for(const task of this.db.prepare("SELECT id,view_id,expires_at,depends_on FROM yoyo_team_tasks WHERE state='ready' ORDER BY created_at LIMIT 20").all()){
       if(this.coordinator.running.size>=this.coordinator.maxConcurrent)break
+      // A dependent task waits for its dependencies instead of starting early.
+      if(task.depends_on&&!JSON.parse(task.depends_on).every(id=>this.db.prepare('SELECT state FROM yoyo_team_tasks WHERE id=?').get(id)?.state==='completed'))continue
       try{
         const intent=this.db.prepare('SELECT concern_id FROM yoyo_team_intents WHERE task_id=?').get(task.id)
         const concern=this.social.data.concerns(task.view_id).find(c=>c.id===intent?.concern_id)

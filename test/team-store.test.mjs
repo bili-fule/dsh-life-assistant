@@ -204,3 +204,39 @@ test('a retried task keeps the same executor identity so its native session can 
   await coordinator.settle(x.id)
   assert.equal(team.inspect(x.id,a.id).attempt,2)
 })
+
+test('roles differ in whether they may speak, and a task can only narrow its own tools',t=>{
+  const {team,social,a,create}=fixture(t)
+  const reader=team.create({key:'reader',role:'reader',goal:'读一遍这段对话并概括',viewId:a.id,expiresAt:1000})
+  assert.equal(reader.authorization_version,social.target(a.focus).version)
+  assert.equal(reader.depends_on,null)
+  // A reader takes no speaker lease; the window stays available.
+  team.claim(reader.id,'reader-1')
+  assert.equal(team.db.prepare('SELECT count(*) n FROM yoyo_team_speakers').get().n,0)
+  team.finish('reader-1')
+  const verify=team.create({key:'verify',role:'verify',goal:'核对证据',viewId:a.id,expiresAt:1000})
+  assert.equal(verify.authorization_version,null)
+  assert.throws(()=>team.create({key:'narrow',role:'verify',goal:'g',viewId:a.id,expiresAt:1000,toolset:['send']}),/工具集/)
+  const narrowed=team.create({key:'narrow-ok',role:'chat',goal:'g',viewId:a.id,expiresAt:1000,toolset:['read','report']})
+  assert.deepEqual(JSON.parse(narrowed.toolset),['read','report'])
+  assert.throws(()=>team.create({key:'bad-role',role:'admin',goal:'g',viewId:a.id,expiresAt:1000}),/角色/)
+  assert.throws(()=>team.create({key:'no-focus',role:'reader',goal:'g',viewId:social.planningView().id,expiresAt:1000}),/绑定窗口/)
+  // An authorisation change invalidates a task created under the old version.
+  const stale=team.create({key:'stale',role:'chat',goal:'g',viewId:a.id,expiresAt:1000})
+  social.approve(a.focus,false);social.approve(a.focus,true)
+  assert.throws(()=>team.claim(stale.id,'worker-stale'),/授权/)
+  // A task created from the current view carries the current version and runs.
+  const reopened=social.open(a.focus)
+  const fresh=team.create({key:'fresh',role:'chat',goal:'g',viewId:reopened.id,expiresAt:1000})
+  assert.equal(fresh.authorization_version,social.target(a.focus).version)
+  team.claim(fresh.id,'worker-fresh')
+})
+
+test('a dependent task cannot be claimed or started before its dependency completes',t=>{
+  const {team,a,create}=fixture(t),first=create('first')
+  const second=team.create({key:'second',role:'reader',goal:'g',viewId:a.id,expiresAt:1000,dependsOn:[first.id]})
+  assert.throws(()=>team.claim(second.id,'worker-2'),/依赖/)
+  team.claim(first.id,'worker-1');team.finish('worker-1')
+  team.claim(second.id,'worker-2')
+  assert.equal(team.authority('worker-2').task.state,'running')
+})

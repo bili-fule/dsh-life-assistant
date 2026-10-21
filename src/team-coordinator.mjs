@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { ROLE_TOOLS } from './team-store.mjs'
 
 // The adapter is a trusted host component, never an object supplied by a model.
 // It must launch an isolated native DSH runtime and expose only the supplied
@@ -19,7 +20,9 @@ export class TeamCoordinator {
     const invoke=async(name,args)=>{
       if(controller.signal.aborted)throw Error('执行已取消')
       const current=this.tasks.authority(agentId)
-      const allowed=task.role==='chat'?['read','recall','send','wait','report','evidence','board','usage','step']:['web','report','evidence','board','usage','step']
+      const roleTools=ROLE_TOOLS[task.role]??[]
+      // A task may narrow the role's toolset, never widen it.
+      const allowed=task.toolset?roleTools.filter(name=>JSON.parse(task.toolset).includes(name)):roleTools
       if(!allowed.includes(name))throw Error('角色没有该工具权限')
       if(name==='usage')return this.tasks.recordTokens(agentId,Number(args?.tokens??0))
       if(name==='step'){
