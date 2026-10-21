@@ -125,7 +125,7 @@
 | --- | --- | --- |
 | 请去 xmfu 看星洛 | ✅ | `test/team-intents.test.mjs`：主体只写意图（读窗口 + 读网页 → peer），宿主建任务并由执行者推进，主体 `subject_exec` 为 0；意图与活动通过 `yoyo_activity_links` 相连 |
 | 持续普通聊天 | ✅ | `test/chat-routing.test.mjs`：后续消息由宿主按真实游标唤醒同一个执行者；窗口被执行者拥有时主体不会被唤醒（`test/orchestration.test.mjs`）；挂起即暂停，不是完成；常驻会话跨挂起只创建一次。真实模型：`test/team-native-chat.mjs`（两次提示同一常驻会话、唤醒带 2 条原文、游标推进到 5、回复编号去重） |
-| 聊天同时研究 | ⏳ | 已有并行分支与事件（`test/team-events.test.mjs`）与真实回放（并行 9.4 s vs 串行 46.2 s），但「中途分享 + 主体仍能处理新要求」需在新的默认委派下重跑 |
+| 聊天同时研究 | ✅ | `test/team-events.test.mjs`「two generic peer branches on two windows overlap and share a finding mid-run」：两个**通用 peer** 分支同时运行，finding 在作者仍在运行时被兄弟分支在边界收到；主体侧 `test/orchestration.test.mjs` 断言执行者占用一个窗口时，另一个窗口的消息仍会唤醒主体；真实模型复跑并行 39.0 s vs 串行 146.5 s |
 | 方向变更 | ✅ | `test/team-events.test.mjs`（`direction_changed` 带活动版本送达，旧结果不算完成新目标） |
 | 无空闲额度 | ✅ | `test/team-intents.test.mjs`：并发满时意图保持 ready、不建任务、等待原因可见；有空位后下一轮 tick 启动。主体没有「默默接手」的路径（重执行工具仍默认关闭） |
 | 分支显式完成 | ✅ | `test/explicit-completion.test.mjs`、`test/team-events.test.mjs`（分支终态与活动终态分开） |

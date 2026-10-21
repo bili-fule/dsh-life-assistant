@@ -101,11 +101,17 @@ test('follow-up messages in an owned window go to the executor instead of waking
   assert.equal(agent.team.ownsWindow(handle),true,'a suspended activity still owns its window')
   assert.equal(agent.choose(Date.now()+agent.config.ordinaryMs+1000),null,'the subject is not asked to approve each follow-up')
   assert.equal(agent.metrics.summary().counts.subject_planned_message??0,0,'a routed message does not count as subject planning')
+  // …and the subject is still free for other windows while that branch works.
+  const other=agent.data.discover({platform:'qq',account:'1000',kind:'group',peer:'other-group'})
+  agent.data.approve(other.handle,true)
+  agent.data.ingest({target:other.handle,sender:'999',externalId:'other-1',text:'另一个群在找你',receivedAt:Date.now()-10000})
+  assert.notEqual(agent.choose(Date.now()+agent.config.ordinaryMs+500),null,'a message in another window still reaches the subject')
+  assert.equal(agent.metrics.summary().counts.subject_planned_message,1)
   // Once the activity is gone the same window reaches the subject again.
   agent.team.coordinator.cancel(task.id,view.id)
   assert.equal(agent.team.ownsWindow(handle),false)
   assert.notEqual(agent.choose(Date.now()+agent.config.ordinaryMs+2000),null)
-  assert.equal(agent.metrics.summary().counts.subject_planned_message,1,'now the subject really did plan for a message')
+  assert.equal(agent.metrics.summary().counts.subject_planned_message,2,'after the activity ends the same window plans again')
 })
 
 test('metrics keep counts, separate latencies and a missing meter apart from zero',()=>{

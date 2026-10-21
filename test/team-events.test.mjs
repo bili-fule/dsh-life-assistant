@@ -301,3 +301,49 @@ test('a restart resumes from the acknowledged position instead of replaying',t=>
   assert.equal(revived.drainEvents(researcher.id).length,1)
   assert.ok(event.eventId)
 })
+
+test('two generic peer branches on two windows overlap and share a finding mid-run',async t=>{
+  const {tasks,data,view}=fixture(t)
+  const second=data.discover({platform:'qq',account:'1',kind:'group',peer:'g2'})
+  data.approve(second.handle,true)
+  const viewB=data.open(second.handle)
+  // peer is the generic executor: the subject's own reach inside its own window.
+  const a=tasks.create({key:'peer-a',role:'peer',goal:'读这个窗口并把发现放到证据板',viewId:view.id,expiresAt:Date.now()+600000})
+  const b=tasks.create({key:'peer-b',role:'peer',goal:'读另一个窗口，同时留意兄弟分支的发现',viewId:viewB.id,expiresAt:Date.now()+600000})
+  const agentA='worker-'+createHash('sha256').update(a.id).digest('hex').slice(0,20)
+  const agentB='worker-'+createHash('sha256').update(b.id).digest('hex').slice(0,20)
+  const gate={open:false,waiters:[]}
+  const openGate=()=>{gate.open=true;for(const waiter of gate.waiters.splice(0))waiter()}
+  const waitGate=()=>gate.open?Promise.resolve():new Promise(resolve=>gate.waiters.push(resolve))
+  const bothRunning=[]
+  const adapter={run:async({agentId,invoke})=>{
+    bothRunning.push(agentId)
+    if(agentId===agentA){
+      await invoke('evidence',{kind:'finding',body:'这个窗口提到周四聚会',source:'群消息 #7'})
+      await waitGate()
+      await invoke('finish',{decision:'completed',reason:'A 读完'})
+      return {}
+    }
+    let seen=null
+    for(let attempt=0;attempt<40&&!seen;attempt++){
+      const boundary=await invoke('step')
+      if(boundary.events.some(event=>event.kind==='finding')){seen=boundary;break}
+      await waitGate()
+      await new Promise(resolve=>setTimeout(resolve,5))
+    }
+    const completedYet=!!tasks.db.prepare("SELECT 1 FROM yoyo_team_events WHERE kind='completed' AND from_task=?").get(a.id)
+    assert.equal(completedYet,false,'the finding arrived while the author was still running')
+    await invoke('finish',{decision:'completed',reason:'B 收到了兄弟分支的发现'})
+    return {seen:!!seen}
+  }}
+  const coordinator=new TeamCoordinator({tasks,adapter,tools:{step:async()=>({ok:true})},maxConcurrent:2})
+  assert.equal(coordinator.start(a.id).started,true)
+  assert.equal(coordinator.start(b.id).started,true)
+  assert.equal(coordinator.running.size,2,'two generic branches really run at the same time')
+  for(let i=0;i<200&&!tasks.db.prepare("SELECT 1 FROM yoyo_team_events WHERE kind='finding'").get();i++)await new Promise(resolve=>setTimeout(resolve,5))
+  openGate()
+  await Promise.all([coordinator.settle(a.id),coordinator.settle(b.id)])
+  assert.deepEqual([...new Set(bothRunning)].sort(),[agentA,agentB].sort())
+  assert.equal(tasks.db.prepare("SELECT count(*) n FROM yoyo_team_tasks WHERE state='completed'").get().n,2)
+  assert.equal(tasks.drainEvents(b.id).some(event=>event.kind==='finding'),false,'the finding was already consumed at a boundary, not left waiting')
+})
