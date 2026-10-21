@@ -155,6 +155,38 @@ test('task material is readable one task at a time, only with confirmation and a
   assert.throws(()=>host.detail({id:task.id,confirm:true}),/授权|范围/)
   assert.throws(()=>host.detail({id:'no-such-task',confirm:true}),/不存在/)
 })
+test('an engineering worker runs code in the isolated runner and reads only its own jobs',async t=>{
+  const {host,social,view,task,data}=fixture(t),started=[]
+  social.executor={
+    async start(args,runView,key){started.push({key,scopes:runView.scopes,language:args.language});return {id:'a'.repeat(64),state:'running'}},
+    async call(path,body){return {state:'done',exitCode:0,stdout:'1+1=2',id:body.id}}
+  }
+  const publicView=data.publicView()
+  const engineered=host.tasks.create({key:'eng',role:'engineer',goal:'算一下',viewId:publicView.id,expiresAt:Date.now()+60000})
+  host.tasks.claim(engineered.id,'worker-eng')
+  const tools=host.coordinator.tools
+  const started1=await tools.execute({args:{code:'console.log(1+1)',language:'node'},view:publicView,taskId:engineered.id,signal:undefined})
+  assert.equal(started1.id,'a'.repeat(64))
+  assert.equal(started[0].language,'node')
+  assert.deepEqual(started[0].scopes,['public'],'only public material reaches the runner')
+  // The same code twice for one task is one job, not two.
+  const again=await tools.execute({args:{code:'console.log(1+1)',language:'node'},view:publicView,taskId:engineered.id,signal:undefined})
+  assert.equal(started[1].key,started[0].key)
+  assert.equal(again.id,started1.id)
+  const status=await tools.job({args:{id:started1.id},view:publicView,signal:undefined})
+  assert.equal(status.exitCode,0)
+  // A public job is readable anywhere, a private one is not: scope still rules.
+  assert.equal((await tools.job({args:{id:started1.id},view:task.view_id?data.publicView():publicView})).exitCode,0)
+  data.db.prepare("INSERT INTO yoyo_jobs(id,run_key,scopes,created_at,view_id,state) VALUES(?,?,?,?,?,?)")
+    .run('c'.repeat(64),'private-key',JSON.stringify(view.scopes),Date.now(),view.id,'done')
+  await assert.rejects(()=>tools.job({args:{id:'c'.repeat(64)},view:publicView}),/范围/)
+  data.db.prepare("INSERT INTO yoyo_jobs(id,run_key,scopes,created_at,view_id,state,backend) VALUES(?,?,?,?,?,?,?)")
+    .run('b'.repeat(64),'debug-key','["public"]',Date.now(),publicView.id,'done','debug')
+  await assert.rejects(()=>tools.job({args:{id:'b'.repeat(64)},view:publicView}),/排障/)
+  // Without an isolated runner the worker is told so instead of silently failing.
+  social.executor=null
+  await assert.rejects(()=>tools.execute({args:{code:'x',language:'node'},view:publicView,taskId:engineered.id}),/隔离执行服务/)
+})
 test('the admin page renders the team panel from the operational status only',t=>{
   const page=readFileSync(new URL('../public/index.html',import.meta.url),'utf8')
   const script=readFileSync(new URL('../public/app.js',import.meta.url),'utf8')

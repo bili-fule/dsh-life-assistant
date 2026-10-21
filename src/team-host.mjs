@@ -3,7 +3,7 @@ import { TeamStore } from './team-store.mjs'
 import { TeamMotivation } from './team-motivation.mjs'
 import { TeamCoordinator } from './team-coordinator.mjs'
 import { TeamNativeAdapter } from './team-native-adapter.mjs'
-import { boundedText } from './scope.mjs'
+import { boundedText, mayRead } from './scope.mjs'
 import { readPublicPage } from './public-web.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { localParts } from './time.mjs'
@@ -67,13 +67,29 @@ export class TeamHost {
         return {available:false,after:args.after}
       },
       web:async({args,signal})=>readPublicPage(args.url,{signal}),
+      // Engineering work runs in the same isolated, networkless runner as the main
+      // agent's yoyo_execute. The worker can start a bounded job and read its
+      // status; it never gets a shell, host files or the debug container.
+      execute:async({args,view,taskId,signal})=>{
+        if(!social.executor)throw Error('隔离执行服务未配置')
+        const job=await social.executor.start({code:args.code,language:args.language,project:args.project??null,outputs:args.outputs??[]},view,this.executionKey(taskId,args.code),signal)
+        this.db.prepare('INSERT OR IGNORE INTO yoyo_jobs(id,run_key,scopes,created_at,view_id,state) VALUES(?,?,?,?,?,?)').run(job.id,this.executionKey(taskId,args.code),JSON.stringify(view.scopes),Date.now(),view.id,job.state)
+        return {id:job.id,state:job.state,message:'任务在隔离环境运行，稍后用 team_job 查看结果。'}
+      },
+      job:async({args,view,signal})=>{
+        if(!social.executor)throw Error('隔离执行服务未配置')
+        const row=this.db.prepare('SELECT scopes,backend FROM yoyo_jobs WHERE id=?').get(args.id)
+        if(row?.backend==='debug')throw Error('独立排障任务不向执行者开放')
+        if(!row||!JSON.parse(row.scopes).every(scope=>mayRead(view,scope)))throw Error('任务不存在或不在当前资料范围')
+        return social.executor.call('/status',{id:args.id},signal)
+      },
       send:context=>this.send(context),
     }})
   }
   register(define) {
     define('team_overview','查看团队安全状态，不含其他窗口正文。',{},[],async()=>({tasks:this.tasks.overview()}))
     define('team_deliberate','结合当前范围内关切、分工和证据，自主决定下一步；无事允许休息。',{},[],async(a,e,k,v)=>this.motivation.deliberate(v.id))
-    define('team_delegate','委派一个有动机的聊天、公开研究、阅读或核对活动。chat 直接在窗口交流；reader 只读不发言；research 仅 public；verify 只核对证据。可分派属于自己某次选择的活动，但活动体验仍按真实事件去重。可选 recall 给出线索，宿主会从记忆层挑几条摘要装成这个任务的记忆包（只是摘要，执行者仍需核对原文）。',{concernId:{type:'integer'},choiceId:{type:'integer'},role:{type:'string',enum:['chat','research','reader','verify']},goal:{type:'string',maxLength:6000},rationale:{type:'string',maxLength:2000},durationSeconds:{type:'integer',minimum:30,maximum:900},dependsOn:{type:'array',maxItems:3,items:{type:'string',maxLength:60}},maxSteps:{type:'integer',minimum:1,maximum:200},recall:{type:'string',maxLength:300}},['concernId','role','goal','rationale'],async(a,e,k,v)=>{
+    define('team_delegate','委派一个有动机的聊天、公开研究、阅读、核对或工程活动。chat 直接在窗口交流；reader 只读不发言；research 仅 public；verify 只核对证据；engineer 只从 public 视图分派，在隔离、无网络的执行环境里跑代码并把结果写成证据，不能发言也读不到私人窗口。可分派属于自己某次选择的活动，但活动体验仍按真实事件去重。可选 recall 给出线索，宿主会从记忆层挑几条摘要装成这个任务的记忆包（只是摘要，执行者仍需核对原文）。',{concernId:{type:'integer'},choiceId:{type:'integer'},role:{type:'string',enum:['chat','research','reader','verify','engineer']},goal:{type:'string',maxLength:6000},rationale:{type:'string',maxLength:2000},durationSeconds:{type:'integer',minimum:30,maximum:900},dependsOn:{type:'array',maxItems:3,items:{type:'string',maxLength:60}},maxSteps:{type:'integer',minimum:1,maximum:200},recall:{type:'string',maxLength:300}},['concernId','role','goal','rationale'],async(a,e,k,v)=>{
       const task=this.motivation.delegate({...a,key:k,viewId:v.id,expiresAt:Date.now()+1000*(a.durationSeconds??300)})
       // Transfer this window's main lease to the delegated conversation.
       if(a.role==='chat')this.db.prepare('UPDATE yoyo_team_speakers SET expires_at=0,generation=generation+1 WHERE target=? AND agent_id=?').run(v.focus,this.social.sessionId)
@@ -117,6 +133,11 @@ export class TeamHost {
     }
     const steered=this.tasks.steer(row.view_id,{taskId:row.id,message})
     return {id:row.id,action,...steered}
+  }
+  // The same code submitted twice for one task is one job, so a retried step does
+  // not fan out duplicate work.
+  executionKey(taskId,code) {
+    return 'team-'+createHash('sha256').update(String(taskId)+':'+String(code??'')).digest('hex').slice(0,24)
   }
   // Reading a task's own material is a separate, deliberate act: it needs the
   // caller to confirm, it never aggregates several windows into one answer, and a

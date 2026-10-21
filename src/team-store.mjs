@@ -8,6 +8,9 @@ export const ROLE_TOOLS={
   research:['web','report','evidence','board','remember','pack','usage','step'],
   reader:['read','recall','report','evidence','board','remember','pack','usage','step'],
   verify:['board','recall','report','evidence','pack','usage','step'],
+  // Engineering runs code in the isolated runner and reports back; it cannot talk
+  // to anyone, cannot read a private window and cannot reach the debug container.
+  engineer:['execute','job','report','evidence','board','remember','pack','usage','step'],
 }
 
 const WORKER_CLAIM_TYPES=['fact','knowledge','preference','procedure','self']
@@ -76,6 +79,8 @@ export class TeamStore {
     if(['chat','reader'].includes(role)&&!view.focus)throw Error('该角色需要绑定窗口')
     // Until an audited declassification path exists, public work starts public.
     if(role==='research'&&view.scopes.some(s=>s!=='public'))throw Error('公开研究必须从公开视图分派')
+    // Engineering must not carry private material into a code runner.
+    if(role==='engineer'&&view.scopes.some(s=>s!=='public'))throw Error('工程任务必须从公开视图分派')
     if(!Number.isSafeInteger(expiresAt)||expiresAt<=this.clock())throw Error('任务期限无效')
     let tools=null
     if(toolset!==null){

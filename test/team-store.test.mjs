@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { Store } from '../src/store.mjs'
 import { SocialStore } from '../src/social-store.mjs'
 import { TeamStore } from '../src/team-store.mjs'
+import { ROLE_TOOLS } from '../src/team-store.mjs'
 import { TeamCoordinator } from '../src/team-coordinator.mjs'
 import { TeamMotivation } from '../src/team-motivation.mjs'
 
@@ -219,6 +220,25 @@ test('a memory pack belongs to one task and one window',t=>{
   assert.deepEqual(team.memoryPack(x.id,a.id).items,[])
   assert.throws(()=>team.writeMemoryPack(x.id,a.id,{clue:'',items:[]}),/线索/)
   assert.throws(()=>team.writeMemoryPack(x.id,a.id,{clue:'聊过的电影',items:new Array(9).fill({})}),/条数/)
+})
+
+test('the engineering role starts public, cannot speak and can only narrow its tools',t=>{
+  const {team,social,a,create}=fixture(t),publicView=social.publicView()
+  // Private material never reaches a code runner.
+  assert.throws(()=>create('eng-private',a,'engineer'),/公开/)
+  const task=create('eng',publicView,'engineer')
+  assert.equal(task.role,'engineer')
+  assert.deepEqual(ROLE_TOOLS.engineer.filter(name=>['send','read','wait','web'].includes(name)),[],
+    'engineering has no speaking, window or web tools')
+  assert.equal(ROLE_TOOLS.engineer.includes('execute'),true)
+  assert.equal(ROLE_TOOLS.engineer.includes('job'),true)
+  team.claim(task.id,'worker-e')
+  assert.equal(team.authority('worker-e').task.role,'engineer')
+  assert.throws(()=>team.authorizeSend('worker-e','public',1),/权限|发言|失效|窗口/)
+  // Narrowing is allowed, widening is not.
+  const narrowed=team.create({key:'eng-narrow',role:'engineer',goal:'g',viewId:publicView.id,expiresAt:1000,toolset:['execute','report']})
+  assert.deepEqual(JSON.parse(narrowed.toolset),['execute','report'])
+  assert.throws(()=>team.create({key:'eng-wide',role:'engineer',goal:'g',viewId:publicView.id,expiresAt:1000,toolset:['send']}),/属于该角色/)
 })
 
 test('the source registry shows repeated readings and cross-task disagreements',t=>{
