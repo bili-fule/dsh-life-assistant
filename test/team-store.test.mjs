@@ -17,8 +17,7 @@ function fixture(t){
   const create=(key,v=a,role='chat')=>team.create({key,role,goal:'secret goal',viewId:v.id,expiresAt:1000})
   return {team,social,store,a,b,create}
 }
-test('parallel task authorities never inherit the current window, reports stay scoped',t=>{
-  const {team,a,b,create}=fixture(t),x=create('x'),y=create('y',b)
+test('parallel task authorities never inherit the current window, reports stay scoped',t=>{  const {team,a,b,create}=fixture(t),x=create('x'),y=create('y',b)
   team.claim(x.id,'worker-x');team.claim(y.id,'worker-y')
   assert.equal(team.authority('worker-x').view.id,a.id)
   assert.equal(team.authority('worker-y').view.id,b.id)
@@ -124,4 +123,25 @@ test('motivated delegation preserves reasons, scope and explicit stopping condit
   assert.throws(()=>motivation.review(b.id,{taskId:task.id,decision:'done',reason:'bad'}),/范围/)
   social.concern(a.id,{id:concern.id,state:'abandoned'})
   assert.throws(()=>motivation.delegate({...args,key:'new'}),/活跃/)
+})
+
+test('a task evidence board stays inside the task view and steering is consumed once',t=>{
+  const {team,a,b,create}=fixture(t),x=create('x'),y=create('y',b)
+  team.claim(x.id,'worker-x');team.claim(y.id,'worker-y')
+  const shared=team.evidence('worker-x',{kind:'finding',body:'只在这个窗口读到的材料',source:'event:42'})
+  assert.equal(shared.taskId,x.id)
+  assert.equal(team.board(a.id,{taskId:x.id}).length,1)
+  assert.equal(team.board(a.id,{taskId:x.id})[0].body,'只在这个窗口读到的材料')
+  assert.deepEqual(team.board(b.id),[])
+  assert.throws(()=>team.board(b.id,{taskId:x.id}),/范围/)
+  assert.throws(()=>team.evidence('nobody',{body:'伪造的证据'}),/授权/)
+  assert.throws(()=>team.evidence('worker-x',{kind:'rumour',body:'x'}),/证据类型/)
+  // The worker's own board never leaks another task's material.
+  assert.deepEqual(team.board(b.id,{taskId:y.id}),[])
+  assert.equal(team.steer(a.id,{taskId:x.id,message:'顺便看一下评论区'}).delivered,false)
+  assert.deepEqual(team.takeSteers('worker-x'),['顺便看一下评论区'])
+  assert.deepEqual(team.takeSteers('worker-x'),[])
+  team.finish('worker-x')
+  assert.throws(()=>team.steer(a.id,{taskId:x.id,message:'太晚了'}),/进行中/)
+  assert.throws(()=>team.steer(b.id,{taskId:x.id,message:'越范围'}),/范围/)
 })

@@ -70,3 +70,13 @@ test('restart blocks active execution and preserves uncertainty without resubmit
   assert.equal(host.db.prepare('SELECT state FROM yoyo_team_deliveries').get().state,'uncertain')
   assert.throws(()=>host.tasks.authority('worker'))
 })
+test('cancellation stops steering and a foreign window cannot steer or read the board',t=>{
+  const {host,view,task,data}=fixture(t),other=data.discover({platform:'qq',account:'1',kind:'private',peer:'9'})
+  data.approve(other.handle,true)
+  const foreign=data.open(other.handle)
+  host.tasks.claim(task.id,'worker')
+  assert.throws(()=>host.tasks.steer(foreign.id,{taskId:task.id,message:'越范围'}),/范围/)
+  assert.throws(()=>host.tasks.board(foreign.id,{taskId:task.id}),/范围/)
+  host.coordinator.cancel(task.id,view.id)
+  assert.throws(()=>host.tasks.steer(view.id,{taskId:task.id,message:'已经取消'}),/进行中/)
+})

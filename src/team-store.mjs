@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { boundedText, assertPublish, mayRead } from './scope.mjs'
+import { boundedText, assertPublish, mayRead, sourceScopes } from './scope.mjs'
 
 // Host-only API. Agent identity, view and lease tokens must never come from
 // model-supplied tool arguments. No production worker is enabled by this store.
@@ -18,6 +18,12 @@ export class TeamStore {
       CREATE TABLE IF NOT EXISTS yoyo_team_speakers(
         target TEXT PRIMARY KEY, agent_id TEXT NOT NULL, task_id TEXT,
         generation INTEGER NOT NULL, expires_at INTEGER NOT NULL, view_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_team_evidence(
+        id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, attempt INTEGER NOT NULL, scopes TEXT NOT NULL,
+        kind TEXT NOT NULL, source TEXT NOT NULL DEFAULT '', body TEXT NOT NULL, created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_team_steers(
+        id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, attempt INTEGER NOT NULL, body TEXT NOT NULL,
+        created_at INTEGER NOT NULL, applied_at INTEGER, agent_id TEXT);
     `)
   }
   transaction(fn) {
@@ -112,6 +118,44 @@ export class TeamStore {
   reports(id,viewId) {
     this.inspect(id,viewId)
     return this.db.prepare('SELECT id,body,created_at FROM yoyo_team_reports WHERE task_id=? ORDER BY id DESC LIMIT 50').all(id)
+  }
+  // A worker may publish what it actually found to a task-scoped board. The
+  // board inherits the task's source scopes, so a private window's evidence can
+  // never surface in another window or in the public view.
+  evidence(agentId,{kind='finding',body,source=''}) {
+    const {task,view}=this.authority(agentId)
+    if(!['finding','source','excerpt'].includes(kind))throw Error('证据类型无效')
+    body=boundedText(body,4000,'证据')
+    source=source===undefined||source===null||source===''?'':boundedText(String(source),500,'来源标注')
+    const id=Number(this.db.prepare('INSERT INTO yoyo_team_evidence(task_id,attempt,scopes,kind,source,body,created_at) VALUES(?,?,?,?,?,?,?)')
+      .run(task.id,task.attempt,JSON.stringify(sourceScopes(view.scopes)),kind,source,body,this.clock()).lastInsertRowid)
+    return {id,taskId:task.id,kind,shared:true}
+  }
+  board(viewId,{taskId,limit=20}={}) {
+    const view=this.social.view(viewId)
+    if(!Number.isInteger(limit)||limit<1||limit>50)throw Error('证据条数无效')
+    if(taskId!==undefined)this.inspect(taskId,viewId)
+    const filter="NOT EXISTS(SELECT 1 FROM json_each(e.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?)))"
+    const rows=this.db.prepare(`SELECT e.id,e.task_id,e.kind,e.source,e.body,e.created_at FROM yoyo_team_evidence e
+      WHERE ${filter}${taskId!==undefined?' AND e.task_id=?':''} ORDER BY e.id DESC LIMIT ?`)
+      .all(...(taskId!==undefined?[JSON.stringify(view.scopes),taskId,limit]:[JSON.stringify(view.scopes),limit]))
+    return rows
+  }
+  // A steering note belongs to one task and is consumed once at a native step
+  // boundary; a cancelled or finished task cannot receive another.
+  steer(viewId,{taskId,message}) {
+    const task=this.inspect(taskId,viewId)
+    if(!['ready','running','waiting'].includes(task.state))throw Error('只能给进行中的任务追加提示')
+    message=boundedText(message,2000,'追加提示')
+    const id=Number(this.db.prepare('INSERT INTO yoyo_team_steers(task_id,attempt,body,created_at) VALUES(?,?,?,?)')
+      .run(task.id,task.attempt,message,this.clock()).lastInsertRowid)
+    return {id,taskId:task.id,state:task.state,delivered:false,message:'追加提示已排队，在执行者下一个原生边界送达。'}
+  }
+  takeSteers(agentId) {
+    const {task}=this.authority(agentId)
+    const rows=this.db.prepare('SELECT id,body FROM yoyo_team_steers WHERE task_id=? AND applied_at IS NULL ORDER BY id LIMIT 5').all(task.id)
+    for(const row of rows)this.db.prepare('UPDATE yoyo_team_steers SET applied_at=?,agent_id=? WHERE id=? AND applied_at IS NULL').run(this.clock(),agentId,row.id)
+    return rows.map(row=>row.body)
   }
   finish(agentId,state='completed') {
     if(!['completed','cancelled','blocked'].includes(state))throw Error('结束状态无效')

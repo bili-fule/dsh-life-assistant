@@ -15,9 +15,16 @@ export class TeamCoordinator {
     const invoke=async(name,args)=>{
       if(controller.signal.aborted)throw Error('执行已取消')
       const current=this.tasks.authority(agentId)
-      const allowed=task.role==='chat'?['read','recall','send','wait','report','step']:['web','report','step']
+      const allowed=task.role==='chat'?['read','recall','send','wait','report','evidence','board','step']:['web','report','evidence','board','step']
       if(!allowed.includes(name))throw Error('角色没有该工具权限')
+      if(name==='step'){
+        const result=await this.tools.step({agentId})
+        // Steering arrives at a native boundary, after the budget gate.
+        return {...result,steers:this.tasks.takeSteers(agentId)}
+      }
       if(name==='report'){this.tasks.report(agentId,args.body);return {recorded:true}}
+      if(name==='evidence')return this.tasks.evidence(agentId,args)
+      if(name==='board')return {evidence:this.tasks.board(current.view.id,{limit:args?.limit})}
       const authorize=()=>{
         if(controller.signal.aborted)throw Error('执行已取消')
         this.tasks.authority(agentId)
