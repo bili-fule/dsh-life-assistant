@@ -47,6 +47,14 @@
 
 唤醒时交给执行者的开场不是固定的「继续当前活动」提示，而是这份真实投递：角色、目标、期限、窗口与消息编号区间。
 
+## 意图队列
+
+主体不直接开工，而是先把可委派的工作写成意图：`team_intent` 记录目标、为什么、所需能力、优先级、依赖、开始时间与完成/停止条件。宿主 `TeamHost.tick()` 依次：把任务状态镜像回意图（completed→completed、cancelled→abandoned、blocked→blocked、suspended→waiting）→ 路由聊天续接 → 按「优先级 + 每等待 5 分钟 +1（上限 +20）」挑选 ready 意图，检查依赖与开始时间，再在有空闲并发时插入任务并领取。没有空位时意图保持 ready，等待原因可观察，不会把工作悄悄推回主体。
+
+能力到角色的映射取「能做这件事的最窄角色」：`read`+`web` 或 `chat`+`web` 需要 peer（读窗口与读公开网页同时做），单独的 `read` 是 reader，`web`/`research` 是 research，`verify` 是 verify，`code`/`engineer` 是 engineer。同一窗口、同一活动、同能力、同目标只保留一个排队意图；已结束的可以重新尝试，届时 `revision` 自增并保留历史。放弃用 `team_intent{id,cancel:true}`：先取消它的任务（发言权一并失效），再写理由。
+
+
+
 ## 执行者的记忆候选
 
 执行者可以提交记忆候选（`team_remember`），但候选不是记忆：它连同真实来源一起存进 `yoyo_team_memory_candidates`，等主体回到同一个窗口时用 `team_memory` 决定。

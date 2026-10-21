@@ -251,7 +251,7 @@ export class SocialStore {
   }
   activityLinks(activityId) {return this.db.prepare('SELECT kind,ref,created_at FROM yoyo_activity_links WHERE activity_id=? ORDER BY created_at').all(activityId).map(r=>({kind:r.kind,ref:r.ref,at:r.created_at}))}
   linkActivity(activityId,kind,ref) {
-    if(typeof kind!=='string'||!['concern','plan','task','memory_intent','receipt','document'].includes(kind)||typeof ref!=='string'||!ref||ref.length>200)throw Error('关联类型无效')
+    if(typeof kind!=='string'||!['concern','plan','task','intent','memory_intent','receipt','document'].includes(kind)||typeof ref!=='string'||!ref||ref.length>200)throw Error('关联类型无效')
     this.db.prepare('INSERT OR IGNORE INTO yoyo_activity_links(activity_id,kind,ref,created_at) VALUES(?,?,?,?)').run(activityId,kind,String(ref),Date.now())
     return this.activityLinks(activityId)
   }

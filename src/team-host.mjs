@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { TeamStore } from './team-store.mjs'
+import { TeamIntents } from './team-intents.mjs'
 import { TeamMotivation } from './team-motivation.mjs'
 import { TeamCoordinator } from './team-coordinator.mjs'
 import { TeamNativeAdapter } from './team-native-adapter.mjs'
@@ -8,8 +9,8 @@ import { readPublicPage } from './public-web.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { localParts } from './time.mjs'
 
-export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_inspect','team_cancel','team_takeover','team_review','team_steer','team_search','team_ask','team_answer','team_events','team_memory','team_sources','team_source_decide']
-export const TEAM_POLICY=`默认分工：你决定意图、方向、优先级和例外，执行者实际推进。读群、浏览网页、跑代码和排障容器默认不在你的工具面里；需要亲自处理时先用 yoyo_takeover 写明理由，完成后 yoyo_handback。接管是例外，不是日常路径。已有聊天活动的后续消息由宿主直接交给那个执行者，不经你逐句转述或逐句批准。需要你决定的只有：超出当前任务的新目标、重要承诺、需要追加执行者、分支之间冲突、持续受阻、目标完成或放弃、调整关注策略。
+export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_intent','team_inspect','team_cancel','team_takeover','team_review','team_steer','team_search','team_ask','team_answer','team_events','team_memory','team_sources','team_source_decide']
+export const TEAM_POLICY=`默认分工：你决定意图、方向、优先级和例外，执行者实际推进。读群、浏览网页、跑代码和排障容器默认不在你的工具面里；需要亲自处理时先用 yoyo_takeover 写明理由，完成后 yoyo_handback。接管是例外，不是日常路径。已有聊天活动的后续消息由宿主直接交给那个执行者，不经你逐句转述或逐句批准。需要你决定的只有：超出当前任务的新目标、重要承诺、需要追加执行者、分支之间冲突、持续受阻、目标完成或放弃、调整关注策略。可委派的工作先放进意图队列（team_intent，写明目标、为什么、能力、优先级、依赖与完成条件），宿主会在有空闲额度、依赖完成时启动；没有额度时它排队并保持可见，不要因为排队就自己接手。同一活动同一目的只会有一个排队意图。
 你可以用 team_deliberate 查看关切和团队进展，用 team_delegate 分派聊天或公开研究，自己继续其他活动或一起研究。分派前创建真实的 yoyo_concern，说明为何关心、下一步、完成和停止条件。聊天执行者会在当前窗口直接交流；主 Agent 需要发言前用 team_takeover 接管。研究只能从 public 视图分派，不能把私聊问题洗成公开输入。执行中可用 team_steer 追加一条有界提示，它在执行者下一个原生边界送达一次。执行者可以把自己真正读到的证据放到任务证据板，证据沿用任务来源范围，team_inspect 可查看，team_search 可按线索跨任务检索本窗口可见的证据；重复的同一条来源只算一条，同一来源的不同说法会被标出冲突，team_sources 列出这些来源被读过几次、有几个说法。执行者也能提交记忆候选（team_remember），候选不是记忆：team_memory 列出待决定的候选，采纳时在你自己的视图里重新核对原文，并且只记成执行者报告，不会变成观察。执行结果是证据材料，不等于动机已满足。用 team_review 判断继续、调整、等待或放弃。无事可做允许休息，不高频轮询、不制造任务。`
 
 export class TeamHost {
@@ -17,6 +18,7 @@ export class TeamHost {
     if(!social.separate)throw Error('团队仅用于独立 QQ 主体')
     this.config=config
     this.social=social;this.tasks=new TeamStore(social.data,undefined,social.metrics??null);this.motivation=new TeamMotivation(this.tasks,social.motivation??null)
+    this.intents=new TeamIntents(social.data,undefined,social.metrics??null)
     this.memory=social.memoryLayer??null
     this.db=social.data.db
     this.db.exec(`CREATE TABLE IF NOT EXISTS yoyo_team_deliveries(
@@ -114,6 +116,17 @@ export class TeamHost {
       const started=this.coordinator.start(task.id)
       return {id:task.id,...started,...(pack?{memoryPack:pack}:{})}
     })
+    // The queue is the subject's own instrument: it states the piece of work and
+    // why, the host decides when it can start. This is what makes "the subject
+    // decides, executors advance" observable instead of rhetorical.
+    define('team_intent','把一件可委派的工作放进意图队列：活动是持续目标，意图是其中一件可交接的事，执行者是它的一次尝试。写清目标、为什么、需要哪些能力（chat 读群并发言、read 只读、web 研究公开资料、verify 核对证据、code 工程、peer 全能力）、优先级、依赖和完成/停止条件；宿主按优先级加等待时间（每等 5 分钟提一级，最多 20）挑选，并受并发与依赖限制。同一活动同一目的重复创建会复用原意图。不带 goal 时列出队列；带 id 可调整排队中的优先级或开始时间，cancel 则放弃。',{id:{type:'string',maxLength:80},goal:{type:'string',minLength:1,maxLength:6000},why:{type:'string',maxLength:2000},activityId:{type:'string',maxLength:80},concernId:{type:'integer'},capabilities:{type:'array',minItems:1,maxItems:4,items:{type:'string',enum:['chat','read','web','research','verify','code','engineer','peer']}},priority:{type:'integer',minimum:0,maximum:100},notBefore:{type:'integer'},dependsOn:{type:'array',maxItems:4,items:{type:'string',maxLength:80}},doneWhen:{type:'string',maxLength:1500},stopWhen:{type:'string',maxLength:1500},target:{type:'string',maxLength:200},cancel:{type:'boolean'},reason:{type:'string',maxLength:1000}},[],
+      async(a,e,k,v)=>{
+        if(a.id&&a.cancel)return {intent:this.cancelIntent(a.id,a.reason??'',v)}
+        if(a.id)return {intent:this.intents.adjust(a.id,{priority:a.priority,notBefore:a.notBefore})}
+        if(!a.goal)return {intents:this.intents.summary({limit:20}),note:'ready 才会被调度；等待原因与已等待时长一并列出。'}
+        const intent=this.intents.create({activityId:a.activityId??null,concernId:a.concernId??null,goal:a.goal,why:a.why??'',capabilities:a.capabilities??['peer'],priority:a.priority??0,notBefore:a.notBefore??null,dependsOn:a.dependsOn??[],doneWhen:a.doneWhen??'',stopWhen:a.stopWhen??'',target:a.target??null,viewId:v.id})
+        return {intent,...(intent.reused?{note:'同一活动与目的已有排队意图，复用原意图'}:{}),queued:'宿主会在有空闲执行额度且依赖完成时启动它，你不必守着它。'}
+      })
     define('team_inspect','查看当前资料范围内任务的真实状态、增量报告、执行者提交的证据板、这个任务的记忆包与用量汇总。',{id:{type:'string'}},['id'],async(a,e,k,v)=>({task:this.tasks.inspect(a.id,v.id),reports:this.tasks.reports(a.id,v.id),evidence:this.tasks.board(v.id,{taskId:a.id}),memoryPack:this.tasks.memoryPack(a.id,v.id),usage:this.tasks.usage(a.id)}))
     define('team_steer','给进行中的任务追加一条有界提示，在执行者下一个原生边界送达一次；不能借此扩大任务权限或改变全局人设。',{id:{type:'string'},message:{type:'string',minLength:1,maxLength:2000}},['id','message'],async(a,e,k,v)=>this.tasks.steer(v.id,{taskId:a.id,message:a.message}))
     define('team_cancel','取消当前范围内任务并撤销其后续发言权。',{id:{type:'string'}},['id'],async(a,e,k,v)=>{this.coordinator.cancel(a.id,v.id);return {cancelled:true}})
@@ -247,6 +260,27 @@ export class TeamHost {
     const row=this.db.prepare('SELECT * FROM yoyo_team_main_outbox WHERE key=?').get(key)
     if(row)this.tasks.authorizeSend(this.social.sessionId,row.target,row.generation)
   }
+  // Starting queued work is a host decision: a free slot, ready dependencies and
+  // its own time. The subject's priority only orders the queue; it cannot bypass
+  // the concurrency limit, so the subject is not silently forced to do the work.
+  startIntent(intent,now=Date.now()){
+    const role=this.intents.roleFor(intent)
+    const task=this.tasks.create({key:'intent:'+intent.id+':'+intent.revision,role,goal:intent.goal,viewId:intent.view_id,expiresAt:now+(this.config.taskMs??900000),activityId:intent.activity_id??null})
+    this.intents.claim(intent.id,{taskId:task.id,now})
+    const started=this.coordinator.start(task.id)
+    if(!started.started){this.intents.note(intent.id,'ready','插入任务后没有空位');return {started:false,reason:'capacity'}}
+    return {...started,intentId:intent.id,role}
+  }
+  cancelIntent(id,reason,view=null){
+    const intent=this.intents.get(id)
+    if(!intent)throw Error('意图不存在')
+    if(view)this.social.data.view(intent.view_id)
+    if(intent.task_id){
+      const row=this.db.prepare('SELECT state FROM yoyo_team_tasks WHERE id=?').get(intent.task_id)
+      if(row&&!['completed','cancelled','blocked'].includes(row.state))this.coordinator.cancel(intent.task_id,intent.view_id)
+    }
+    return this.intents.cancel(id,reason)
+  }
   activeWindow(target) {
     return !!this.db.prepare("SELECT 1 FROM yoyo_team_speakers s JOIN yoyo_team_tasks t ON t.id=s.task_id WHERE s.target=? AND s.expires_at>? AND t.state IN ('running','waiting')").get(target,Date.now())
   }
@@ -288,7 +322,7 @@ export class TeamHost {
       (SELECT count(*) FROM yoyo_team_reports r WHERE r.task_id=t.id) reports,
       (SELECT count(*) FROM yoyo_team_evidence e WHERE e.task_id=t.id) evidence
       FROM yoyo_team_tasks t ORDER BY t.created_at DESC LIMIT 50`).all(Date.now(),Date.now())
-    return {concurrency:{running:this.coordinator.running.size,max:this.coordinator.maxConcurrent},tasks:tasks.map(row=>{
+    return {concurrency:{running:this.coordinator.running.size,max:this.coordinator.maxConcurrent},intents:this.intents.summary(),tasks:tasks.map(row=>{
       const depends=this.db.prepare('SELECT depends_on FROM yoyo_team_tasks WHERE id=?').get(row.id).depends_on
       const task={...row,tokensReported:row.tokensReported===1,dependsOn:depends?JSON.parse(depends).length:0}
       return {...task,waitReason:this.waitReason(task),waitingFor:this.db.prepare("SELECT count(*) n FROM yoyo_team_events q WHERE q.kind='question' AND q.to_task=? AND NOT EXISTS(SELECT 1 FROM yoyo_team_events a WHERE a.kind='answer' AND a.ref=q.event_id)").get(row.id).n}
@@ -316,7 +350,10 @@ export class TeamHost {
       const tasks=this.db.prepare("SELECT id,role,state,expires_at,failures,retry_at FROM yoyo_team_tasks WHERE state IN ('ready','running','waiting','blocked','suspended') ORDER BY created_at DESC LIMIT 8").all()
         .map(row=>({id:row.id,role:row.role,state:row.state,waitReason:this.waitReason(row)}))
       const events=this.tasks.activityEvents(view.id,{limit:5}).map(({eventId,kind,from,to,at})=>({eventId,kind,from,to,at}))
-      return {running:this.coordinator.running.size,max:this.coordinator.maxConcurrent,tasks,openQuestions:this.tasks.openQuestions(view.id).length,recentEvents:events}
+      const queue=this.intents.summary({limit:20})
+      return {running:this.coordinator.running.size,max:this.coordinator.maxConcurrent,tasks,openQuestions:this.tasks.openQuestions(view.id).length,recentEvents:events,
+        queue:{ready:queue.filter(item=>item.state==='ready').length,running:queue.filter(item=>item.state==='running').length,
+          blocked:queue.filter(item=>item.state==='blocked').length,next:queue.filter(item=>item.state==='ready').slice(0,3).map(item=>({id:item.id,capabilities:item.capabilities,waitedMs:item.waitedMs,waitReason:item.waitReason}))}}
     }catch{return null}
   }
   // When the subject changes what an activity is for, the branches working on it
@@ -345,7 +382,15 @@ export class TeamHost {
     // model-side polling. Expired suspensions end their activity instead.
     const now=Date.now()
     this.db.prepare("UPDATE yoyo_team_tasks SET state='cancelled' WHERE state='suspended' AND expires_at<=?").run(now)
+    // Attempt state follows the task, then the queue is served by priority, aging,
+    // dependencies and the real slot count.
+    this.intents.syncFromTasks(now)
     this.routeChatMessages(now)
+    for(const intent of this.intents.ready({now})){
+      if(this.coordinator.running.size>=this.coordinator.maxConcurrent)break
+      try{this.startIntent(intent,now)}
+      catch(error){this.intents.note(intent.id,'blocked','无法启动：'+String(error?.message??'').slice(0,200))}
+    }
     // Retries are opt-in. A task whose last send is uncertain is never retried.
     if(this.config.retryBlocked)for(const row of this.tasks.resumable({now:Date.now()})){
       try{this.tasks.inspect(row.id,row.view_id);this.tasks.requeue(row.id)}catch{/* Revoked work stays blocked. */}
@@ -355,10 +400,18 @@ export class TeamHost {
       // A dependent task waits for its dependencies instead of starting early.
       if(task.depends_on&&!JSON.parse(task.depends_on).every(id=>this.db.prepare('SELECT state FROM yoyo_team_tasks WHERE id=?').get(id)?.state==='completed'))continue
       try{
-        const intent=this.db.prepare('SELECT concern_id FROM yoyo_team_intents WHERE task_id=?').get(task.id)
-        const concern=this.social.data.concerns(task.view_id).find(c=>c.id===intent?.concern_id)
-        if(!concern||concern.state!=='active'||task.expires_at<=Date.now()){
-          this.db.prepare("UPDATE yoyo_team_tasks SET state='cancelled' WHERE id=?").run(task.id);continue
+        const motivation=this.db.prepare('SELECT concern_id FROM yoyo_team_intents WHERE task_id=?').get(task.id)
+        const queued=this.db.prepare('SELECT id,state,concern_id FROM yoyo_intents WHERE task_id=?').get(task.id)
+        const concernId=queued?.concern_id??motivation?.concern_id
+        const concern=this.social.data.concerns(task.view_id).find(c=>c.id===concernId)
+        // Queued work answers to its intent; delegated work keeps answering to the
+        // concern it was created for. Either way a dead or expired task never starts.
+        const dead=queued?['abandoned','completed'].includes(queued.state):(!concern||concern.state!=='active')
+        const concernLost=queued?.concern_id&&(!concern||concern.state!=='active')
+        if(dead||concernLost||task.expires_at<=Date.now()){
+          this.db.prepare("UPDATE yoyo_team_tasks SET state='cancelled' WHERE id=?").run(task.id)
+          if(queued)this.intents.note(queued.id,'abandoned','任务启动前已失效')
+          continue
         }
         this.coordinator.start(task.id)
       }catch{this.db.prepare("UPDATE yoyo_team_tasks SET state='blocked' WHERE id=? AND state='ready'").run(task.id)}

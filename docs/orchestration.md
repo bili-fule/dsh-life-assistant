@@ -9,7 +9,7 @@
 | 1. 现场审计与基线 | 已实现、已核对 | 本文 §1；基线 `npm test` 257/257（提交 `ffb1b8f`） |
 | 2. 默认委派（工具面 + 接管例外） | 已实现、已测试、未部署 | `test/orchestration.test.mjs`（默认隐藏重执行工具、陈旧工具列表不能执行、接管需理由、到期/归还后失效） |
 | 2b. 后续聊天消息直达执行者 | 已实现、已测试、未部署 | `test/chat-routing.test.mjs`（挂起释放进程与租约、真实新消息才唤醒、突发一次唤醒、身份与 Session 复用、游标不重复、并发满排队、过期取消） |
-| 3. 意图队列 | 已设计、未实现 | §4.2 |
+| 3. 意图队列 | 已实现、已测试、未部署 | `test/team-intents.test.mjs`（能力映射到角色、去重与修订、优先级 + 等待提升、依赖与开始时间、并发排队、尝试记录） |
 | 4. 活动图与按需观察 | 已设计、未实现（证据板/来源登记/裁定已存在） | §4.3 |
 | 5. 冷分支与反思 | 已设计、未实现 | §4.4 |
 | 6. 真实模型验收与上线 | 未完成（既有真实回放见 `docs/real-model-run-2026-10-21.md`，不是本计划的验收） | §4.5 |
@@ -66,6 +66,23 @@
 
 
 
+## 2c. 已实现：意图队列（计划 §4）
+
+| 环节 | 现在怎么做 | 代码 | 证据 |
+| --- | --- | --- | --- |
+| 三层权威 | 活动（持续目标，`yoyo_activities`）→ 意图（可委派的一段工作，`yoyo_intents`）→ 任务（一次尝试，`yoyo_team_tasks`）。意图是队列的唯一权威，任务仍是一次尝试的唯一权威 | `src/team-intents.mjs` | `test/team-intents.test.mjs` |
+| 能力→角色 | 主体只写能力（chat/read/web/research/verify/code/engineer/peer），宿主映射到最窄的固定角色；「读私聊窗口 + 读公开网页」这类组合只能是 peer，不会被猜成 reader | `TeamIntents.roleFor()` | 「reading a window and browsing public pages needs a peer」 |
+| 去重 | 同窗口、同活动、同能力、同目标 = 一个意图；已结束的意图可以被重新尝试，届时 `revision` 自增、`dedupe_key` 加后缀，历史保留 | `create()` | 「the same purpose is one intent」+ 修订断言 |
+| 排序与饥饿 | 有效优先级 = 主体给的优先级 + 每等待 5 分钟 +1（上限 +20）；依赖未完成、`not_before` 未到的不进候选 | `effectivePriority()`、`ready()` | 「priority orders the queue…」+ 老化提升断言 |
+| 领取与租约 | 宿主插入任务后 `claim()` 记 `claimed_by/task_id/lease_expires/attempts+1`，并写 `yoyo_intent_attempts` 一行 | `claim()`、`note()` | 「the host starts queued work…」 |
+| 尝试状态映射 | 任务状态镜像到意图：completed→completed、cancelled→abandoned、blocked→blocked、suspended→waiting；反向不成立，意图不会偷偷改回 running | `syncFromTasks()` | 同上（任务完成后意图 completed） |
+| 并发与排队 | 没有空位时不建任务、不起进程，意图保持 ready，等待原因可观察；有空位后下一轮 tick 启动 | `TeamHost.startIntent()`、`tick()` | 「a full slot leaves the intent queued…」 |
+| 放弃 | `team_intent{id, cancel:true}` 先取消其任务（发言权一并失效）再把意图置为 abandoned 并写理由 | `TeamHost.cancelIntent()` | 「an abandoned intent cancels its branch…」 |
+
+主体工具面：`team_intent`（不放 goal 即列出队列，带 id 可调优先级/开始时间或放弃）。队列摘要同时进入 `team_overview`/`state().team.queue` 与运维状态 `intents`，因此「无空闲额度时工作排队且可观察」是可检查的。
+
+
+
 ## 3. 验收口径
 
 本计划的验收必须可重复观察「主体决定与协调、执行者实际推进」，并且保持一个连续身份和活动图。判读规则：
@@ -79,11 +96,11 @@
 
 | 用例 | 状态 | 证据 / 缺口 |
 | --- | --- | --- |
-| 请去 xmfu 看星洛 | ⬜ | 需要意图队列（§4.2）才能把「观察意图 → 执行者读群+浏览 → 主体零重执行」做成可断言路径；主体零重执行的**工具面前提**已由 §2 提供 |
+| 请去 xmfu 看星洛 | ✅ | `test/team-intents.test.mjs`：主体只写意图（读窗口 + 读网页 → peer），宿主建任务并由执行者推进，主体 `subject_exec` 为 0；意图与活动通过 `yoyo_activity_links` 相连 |
 | 持续普通聊天 | ✅ | `test/chat-routing.test.mjs`：后续消息由宿主按真实游标唤醒同一个执行者身份与 Session；窗口被执行者拥有时主体不会被唤醒（`test/orchestration.test.mjs`）；挂起即暂停，不是完成 |
 | 聊天同时研究 | ⏳ | 已有并行分支与事件（`test/team-events.test.mjs`）与真实回放（并行 9.4 s vs 串行 46.2 s），但「中途分享 + 主体仍能处理新要求」需在新的默认委派下重跑 |
 | 方向变更 | ✅ | `test/team-events.test.mjs`（`direction_changed` 带活动版本送达，旧结果不算完成新目标） |
-| 无空闲额度 | ⬜ | 需要 §4.2 的队列可观察性（ready/running/waiting 与等待原因） |
+| 无空闲额度 | ✅ | `test/team-intents.test.mjs`：并发满时意图保持 ready、不建任务、等待原因可见；有空位后下一轮 tick 启动。主体没有「默默接手」的路径（重执行工具仍默认关闭） |
 | 分支显式完成 | ✅ | `test/explicit-completion.test.mjs`、`test/team-events.test.mjs`（分支终态与活动终态分开） |
 | 未完成活动跨压缩/重启 | ✅ | `test/subject-continuity.test.mjs`（重启恢复活动与步骤；压缩后重新投影）；「不重复 create Session」见 `test/team-store.test.mjs` 的 run_key/agentId 派生 |
 | 冷分支展开 | ⬜ | 需要 §4.4 |
@@ -95,9 +112,8 @@
 ### 4.1 后续聊天消息直达执行者（计划 §5）—— 已实现，见 §2b
 机制已落地并被 `test/chat-routing.test.mjs` 断言。剩余的是观察项：真实模型是否会在合适的时候用 `team_pause` 挂起、被唤醒后是否从游标处接着读、以及频繁续接时的成本。
 
-### 4.2 意图队列（计划 §4）
-目标：活动（持续目标）→ 意图（可委派的一段工作）→ 任务（执行尝试）三层权威，状态 `ready/claimed/running/waiting/blocked/completed/abandoned`，带优先级、依赖、去重（同活动同目的先检索）、领取与租约、等待时间提升、以及旧状态映射。
-现状缺口：`yoyo_team_intents` 只有分工理由；没有队列与领取。
+### 4.2 意图队列（计划 §4）—— 已实现，见 §2c
+剩余的是真实模型观察项：主体是否会稳定地先写意图再分派、优先级是否被合理使用、饥饿提升是否在真实节奏下需要调整。
 
 ### 4.3 活动图与按需观察（计划 §6）
 目标：节点 activity/intent/observation/decision/artifact，边 derived_from/depends_on/produced/supports/contradicts/supersedes，能回答「为什么做、什么改变了方向、谁验证过、还缺什么、当前结论依赖什么」；主体默认只消费变化摘要。
