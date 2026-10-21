@@ -12,11 +12,11 @@
 | 3. 意图队列 | 已实现、已测试、未部署 | `test/team-intents.test.mjs`（能力映射到角色、去重与修订、优先级 + 等待提升、依赖与开始时间、并发排队、尝试记录） |
 | 4. 活动图与按需观察 | 已实现、已测试、未部署 | `test/activity-graph.test.mjs`（为什么做、方向变更、谁验证、还缺什么、依赖什么；裁定不静默变成支持；跨平台不可见） |
 | 5. 冷分支与反思 | 已实现、已测试、未部署 | `test/branch-folding.test.mjs`（热链路保留未完成工作/承诺/未解决冲突；折叠只留摘要与引用、可展开回原记录；折叠不删数据） |
-| 6. 真实模型验收与上线 | 真实模型部分已跑通（默认委派、并行、同级问答、意图队列驱动执行者）；**未部署** | `test/team-native-real.mjs` 复跑（串行 146.5 s / 并行 39.0 s）、`test/team-native-intent.mjs`（意图 → 真实执行者 completed，21.5 s，`subject_exec` 0），记录见 [real-model-run-2026-10-21.md](real-model-run-2026-10-21.md) |
+| 6. 真实模型验收与上线 | 真实模型部分已跑通（默认委派、并行、同级问答、意图队列驱动执行者、聊天挂起续接、成本实测）；**未部署** | HEAD 复跑：`team-native-real` 串行 61.4 s / 并行 13.0 s（37,371 / 26,123 Token）、`team-native-intent` 8.2 s / 9,787 Token、`team-native-chat` 两提示 18,757 Token，均 `PASS`；记录见 [real-model-run-2026-10-21.md](real-model-run-2026-10-21.md) |
 
 ## 1. 审计基线（本轮动手前的真实现场）
 
-- 版本：工作树 HEAD `ffb1b8f`，包版本 0.39.0；生产 0.38.0。测试 257/257 通过，`npm run check` 通过。
+- 版本：工作树 HEAD `ffb1b8f`，包版本 0.39.0；当时生产 0.38.0（现已升到 0.39.0）。测试 257/257 通过，`npm run check` 通过。
 - **主体工具面（改动前）**：`COMMON_TOOLS` + `TEAM_TOOLS` + 动机 + 记忆 + `mcp__playwright-mcp__browser_*` + `yoyo_execute/yoyo_job/yoyo_projects` + `yoyo_debug*`。主体只要愿意，就能自己开隔离浏览器、跑代码、进排障容器——「尽量少做具体执行」当时只是一句提示词。
 - **后续消息路径（改动前）**：`SocialData.attention()` → `SocialAgent.choose()` → 唤醒主体。只有在该窗口另有执行者持有发言租约（`TeamHost.activeWindow`）时，主体才不会被这条消息唤醒；而执行者本身只在**它自己那次原生运行期间**用 `wait` 看到新消息。执行者的原生轮次一旦结束，同一话题的后续消息又回到主体，由主体重新分派或自己回复。
 - **并发**：`TeamHost` 的 `maxConcurrent` 默认 2，`deploy/README.md` 写 2；生产 0.38 的 `team` 段并未启用。计划 §4 要求「先测容量再逐步启用两个分支」，这一点仍未在服务器上验证。
@@ -118,10 +118,12 @@
 
 | 场景 | 墙钟 | 步数 | Token |
 | --- | --- | --- | --- |
-| 两分支串行 | 79.3 s | 9 / 7 | 31,293 |
-| 两分支并行 | 10.5 s | 5 / 5 | 26,611 |
-| 意图队列 → 单个执行者 | 21.5 s | 5 | 12,469 |
-| 聊天挂起 → 唤醒（两次提示） | 约 40 s | 7 | 18,838 |
+| 两分支串行 | 61.4 s | 5 / 6 | 37,371 |
+| 两分支并行 | 13.0 s | 5 / 5 | 26,123 |
+| 意图队列 → 单个执行者 | 8.2 s | 4 | 9,787 |
+| 聊天挂起 → 唤醒（两次提示） | 约 30 s | 7 | 18,757 |
+
+（2026-10-21 23:50 在 HEAD 上复跑；更早一次同样方向的对照见 [真实模型运行记录](real-model-run-2026-10-21.md) 的表格。）
 
 
 - ✅ 有确定性测试：行内写测试文件与关键断言。
@@ -135,7 +137,7 @@
 | --- | --- | --- |
 | 请去 xmfu 看星洛 | ✅ | `test/team-intents.test.mjs`：主体只写意图（读窗口 + 读网页 → peer），宿主建任务并由执行者推进，主体 `subject_exec` 为 0；意图与活动通过 `yoyo_activity_links` 相连 |
 | 持续普通聊天 | ✅ | `test/chat-routing.test.mjs`：后续消息由宿主按真实游标唤醒同一个执行者；窗口被执行者拥有时主体不会被唤醒（`test/orchestration.test.mjs`）；挂起即暂停，不是完成；常驻会话跨挂起只创建一次。真实模型：`test/team-native-chat.mjs`（两次提示同一常驻会话、唤醒带 2 条原文、游标推进到 5、回复编号去重） |
-| 聊天同时研究 | ✅ | `test/team-events.test.mjs`「two generic peer branches on two windows overlap and share a finding mid-run」：两个**通用 peer** 分支同时运行，finding 在作者仍在运行时被兄弟分支在边界收到；主体侧 `test/orchestration.test.mjs` 断言执行者占用一个窗口时，另一个窗口的消息仍会唤醒主体；真实模型复跑并行 39.0 s vs 串行 146.5 s |
+| 聊天同时研究 | ✅ | `test/team-events.test.mjs`「two generic peer branches on two windows overlap and share a finding mid-run」：两个**通用 peer** 分支同时运行，finding 在作者仍在运行时被兄弟分支在边界收到；主体侧 `test/orchestration.test.mjs` 断言执行者占用一个窗口时，另一个窗口的消息仍会唤醒主体；真实模型 HEAD 复跑并行 13.0 s vs 串行 61.4 s（同一次对照，Token 26,123 vs 37,371） |
 | 方向变更 | ✅ | `test/team-events.test.mjs`（`direction_changed` 带活动版本送达，旧结果不算完成新目标） |
 | 无空闲额度 | ✅ | `test/team-intents.test.mjs`：并发满时意图保持 ready、不建任务、等待原因可见；有空位后下一轮 tick 启动。主体没有「默默接手」的路径（重执行工具仍默认关闭） |
 | 分支显式完成 | ✅ | `test/explicit-completion.test.mjs`、`test/team-events.test.mjs`（分支终态与活动终态分开） |
