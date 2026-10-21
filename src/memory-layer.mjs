@@ -6,17 +6,21 @@ import { boundedText,mayRead,sourceScopes } from './scope.mjs'
 // experience can never be re-derived from the same messages, and a forwarded
 // name can never become an identity. Nothing here decides what the subject
 // feels; it only records what happened and where it came from.
-export const MEMORY_TOOLS=['memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments','memory_intent']
+export const MEMORY_TOOLS=['memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments','memory_intent','memory_generalize']
 export const MEMORY_POLICY=`你可以用 memory_recall 按线索想起当前范围内相关的经历与主张，用 memory_inspect 核对原始依据，用 memory_propose 提交带来源的经历或主张，用 memory_retract 淡出、归档、撤回或按要求忘记。概括不是新的事实来源：同一条原文反复引用仍然只算一个来源，推断不会被重复回忆升级为观察。转发里的姓名和引自他人的说法不能当作本人身份或本人偏好；同昵称的两个人按平台、账号和真实发送者编号区分。执行者说查过但没有工具依据的，只能记成报告。被撤回或要求忘记的来源不能再重新形成记忆。`
 
 const CLAIM_KINDS=['fact','knowledge','preference','impression','communication','procedure','self','simulation']
 const CONFIDENCE=['observed','told','worker_report','inference','self_report']
 const ROLES=['participant','observer','worker_report','told']
 const PERSON_KINDS=['preference','impression','communication']
+// A preference may be about a topic; an impression or a communication habit is
+// always about one stable person.
+const PERSON_REQUIRED=['impression','communication']
 const INTENT_KINDS=['commitment','intention','waiting']
 const INTENT_TRIGGERS=['time','window','explicit']
+const IMPRESSION_DIMENSIONS=['familiarity','trust','liking','admiration','imitation']
 // Receipts from the agent's own records can never prove that something was done.
-const SELF_TOOLS=new Set(['yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence','yoyo_self','yoyo_sleep','yoyo_wait','yoyo_learning','yoyo_concern','yoyo_feedback','yoyo_plan','yoyo_activity','life_context','self_options','self_choose','self_appraise','self_preferences','memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments','memory_intent'])
+const SELF_TOOLS=new Set(['yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence','yoyo_self','yoyo_sleep','yoyo_wait','yoyo_learning','yoyo_concern','yoyo_feedback','yoyo_plan','yoyo_activity','life_context','self_options','self_choose','self_appraise','self_preferences','memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments','memory_intent','memory_generalize'])
 const clamp=(value,min,max)=>Math.max(min,Math.min(max,value))
 const keyOf=text=>text.normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu,'')
 function option(value,list,label,fallback) {
@@ -180,6 +184,64 @@ export class MemoryLayer {
         message:'经历已保存；事实、当时的评价和稍后的评价分开存放。概括不会成为新的证据来源。'}
     })
   }
+  // Slow generalization: a claim built from several independent experiences,
+  // never from one reworded summary. The host derives the confidence class from
+  // the roles and counterexamples, so repetition cannot promote it.
+  generalize(viewId,args) {
+    const view=this.data.view(viewId)
+    const claimType=option(args.claimType,CLAIM_KINDS.filter(kind=>kind!=='simulation'),'记忆类型',null)
+    const statement=boundedText(args.statement,1200,'主张')
+    const context=optionalText(args.context,300,'适用情境')
+    const note=optionalText(args.note,500,'解释')
+    const episodeIds=args.evidence?.episodes??[]
+    const counterIds=args.counter?.episodes??[]
+    if(!Array.isArray(episodeIds)||episodeIds.length<2||episodeIds.length>6)throw Error('概括至少需要两条独立经历')
+    if(new Set(episodeIds).size!==episodeIds.length)throw Error('同一条经历不能重复计数')
+    if(!Array.isArray(counterIds)||counterIds.length>3)throw Error('反例最多三条')
+    if(new Set(counterIds).size!==counterIds.length)throw Error('反例不能重复计数')
+    const loaded=episodeIds.map(id=>this.load(view,'episode',id))
+    const counterLoaded=counterIds.map(id=>this.load(view,'episode',id))
+    const dimension=claimType==='impression'?option(args.dimension,IMPRESSION_DIMENSIONS,'印象维度',null):null
+    if(claimType==='impression'&&!dimension)throw Error('对人的印象要说明是哪一面：熟悉、信任、喜欢、欣赏还是想模仿')
+    const person=PERSON_KINDS.includes(claimType)?(args.person?this.person(view,args.person.messages??[]):null):null
+    if(PERSON_REQUIRED.includes(claimType)&&!person)throw Error('关于某个人的概括需要同一真实身份的直接原文')
+    // The same messages cannot back two "independent" experiences.
+    const used=new Set()
+    for(const row of [...loaded,...counterLoaded]){
+      const keys=(JSON.parse(row.body).sources??[]).map(source=>source.key)
+      if(keys.length&&keys.every(key=>used.has(key)))throw Error('这两段经历引用的是同一批原文，不能算两次独立经历')
+      for(const key of keys)used.add(key)
+    }
+    const support=[],seen=new Set()
+    for(const row of loaded)for(const source of JSON.parse(row.body).sources??[]){
+      if(seen.has(source.key)||support.length>=10)continue
+      seen.add(source.key);support.push({type:source.type,id:source.id,key:source.key,fromEpisode:row.id})
+    }
+    const counter=[],counterSeen=new Set()
+    for(const row of counterLoaded)for(const source of JSON.parse(row.body).sources??[]){
+      if(counterSeen.has(source.key)||counter.length>=10)continue
+      counterSeen.add(source.key);counter.push({type:source.type,id:source.id,key:source.key,fromEpisode:row.id})
+    }
+    const roles=loaded.map(row=>JSON.parse(row.body).role)
+    const base=roles.includes('worker_report')?'worker_report':roles.includes('told')?'told':'observed'
+    const confidence=counter.length?'inference':(loaded.length>=3&&base==='observed'?'observed':base==='observed'?'inference':base)
+    const subject=person?person.identity:optionalText(args.subject,200,'主题')||('topic:'+keyOf(statement).slice(0,80))
+    if(this.findClaim(view,subject,claimType,statement))return {duplicate:true,message:'这条概括已经存在；新的经历请用修订补充，不要另写一条'}
+    const scopes=sourceScopes([...view.scopes,...[...loaded,...counterLoaded].flatMap(row=>JSON.parse(row.scopes))])
+    const now=Date.now()
+    return this.data.store.transaction(()=>{
+      const body={context,support,counter,note,dimension,confidenceRule:confidence,
+        derivation:{episodes:episodeIds,counterEpisodes:counterIds},
+        displayName:person?String(person.sender):null,simulated:false}
+      const id=Number(this.db.prepare('INSERT INTO yoyo_memory_claims(subject,kind,statement,body,scopes,status,confidence,version,episode_id,created_at,updated_at) VALUES(?,?,?,?,?,\'active\',?,1,?,?,?)')
+        .run(subject,claimType,statement,JSON.stringify(body),JSON.stringify(scopes),confidence,episodeIds[0],now,now).lastInsertRowid)
+      for(const episode of episodeIds)this.link('claim',id,'episode',episode,'generalizes',now)
+      this.db.prepare('INSERT INTO yoyo_memory_revisions(claim_id,before,after,basis,confidence,created_at) VALUES(?,NULL,?,?,?,?)')
+        .run(id,JSON.stringify({statement,confidence,support}),'generalize:'+episodeIds.join(','),confidence,now)
+      return {id,kind:'claim',claimType,confidence,dimension,support:support.length,counter:counter.length,
+        message:counter.length?'已记录这条概括，同时保留反例；含反例的概括不会升级为观察。':confidence==='observed'?'三条以上相符经历才形成观察；以后有反例会退回可修正的推断。':'这是一条可修正的概括，还不足以算观察。'}
+    })
+  }
   proposeClaim(view,args) {
     const claimType=option(args.claimType,CLAIM_KINDS,'记忆类型')
     const sources=this.evidence(view,args.evidence??{})
@@ -195,7 +257,9 @@ export class MemoryLayer {
     if(confidence==='observed'&&!sources.length)throw Error('观察到的记忆需要当前可见的原文、回执或网页来源')
     if(claimType==='procedure'&&confidence==='observed'&&!sources.some(ref=>ref.type==='receipt'))throw Error('已验证的方法需要实际工具回执；未实测的方法请标 inference')
     if(claimType==='communication'&&confidence==='observed'&&person&&person.messages<2)throw Error('稳定表达观察需要同一身份至少两条独立原文')
-    if(PERSON_KINDS.includes(claimType)&&!person&&!revising)throw Error('关于某个人的记忆需要同一真实身份的直接原文')
+    if(PERSON_REQUIRED.includes(claimType)&&!person&&!revising)throw Error('关于某个人的记忆需要同一真实身份的直接原文')
+    const dimension=claimType==='impression'?option(args.dimension,IMPRESSION_DIMENSIONS,'印象维度',null):null
+    if(claimType==='impression'&&!dimension)throw Error('对人的印象要说明是哪一面：熟悉、信任、喜欢、欣赏还是想模仿')
     if(args.episode!==undefined&&!this.load(view,'episode',args.episode))throw Error('关联的经历不存在或不在当前资料范围')
     const subject=person?person.identity:optionalText(args.subject,200,'主题')||(previous?previous.subject:null)||('topic:'+keyOf(statement).slice(0,80))
     const scopes=sourceScopes([...view.scopes,...sources.flatMap(ref=>Array.isArray(ref.scope)?ref.scope:[ref.scope]),...counter.flatMap(ref=>Array.isArray(ref.scope)?ref.scope:[ref.scope])])
@@ -206,7 +270,7 @@ export class MemoryLayer {
     const duplicate=this.findClaim(view,subject,claimType,statement)
     if(duplicate)return this.revise(view,{id:duplicate.id,statement,claimType,confidence,confidenceExplicit:args.confidence!==undefined,context,sources,support,refs,now,implicit:true})
     return this.data.store.transaction(()=>{
-      const body={context,support,counter:refs,note:optionalText(args.note,500,'补充'),displayName:person?String(person.sender):null,simulated:claimType==='simulation'}
+      const body={context,support,counter:refs,note:optionalText(args.note,500,'补充'),dimension,displayName:person?String(person.sender):null,simulated:claimType==='simulation'}
       const id=Number(this.db.prepare('INSERT INTO yoyo_memory_claims(subject,kind,statement,body,scopes,status,confidence,version,episode_id,created_at,updated_at) VALUES(?,?,?,?,?,\'active\',?,1,?,?,?)')
         .run(subject,claimType,statement,JSON.stringify(body),JSON.stringify(scopes),confidence,args.episode??null,now,now).lastInsertRowid)
       if(args.episode!==undefined)this.link('claim',id,'episode',args.episode,'derived_from',now)
@@ -280,7 +344,7 @@ export class MemoryLayer {
         const body=JSON.parse(row.body)
         const score=this.score(row.statement+' '+(body.context??''),wanted,row,uses.get('claim:'+row.id)??0)
         return {kind:'claim',id:row.id,statement:row.statement,claimType:row.kind,confidence:row.confidence,status:row.status,
-          subject:row.subject,context:body.context??'',support:body.support?.length??0,score:score.value,matched:score.matched}
+          subject:row.subject,context:body.context??'',dimension:body.dimension??null,support:body.support?.length??0,score:score.value,matched:score.matched}
       })
     const ranked=[...episodes,...claims].filter(item=>!wanted.length||item.matched).sort((a,b)=>b.score-a.score).slice(0,limit)
     const used=(args.used??[]).slice(0,10)
@@ -434,7 +498,7 @@ export class MemoryLayer {
     const seen=new Set(),queue=[{kind,id}],out=[]
     while(queue.length){
       const current=queue.shift()
-      const links=this.db.prepare("SELECT to_kind,to_id FROM yoyo_memory_links WHERE from_kind=? AND from_id=? AND relation IN ('derived_from','supports','part_of')").all(current.kind,current.id)
+      const links=this.db.prepare("SELECT to_kind,to_id FROM yoyo_memory_links WHERE from_kind=? AND from_id=? AND relation IN ('derived_from','supports','part_of','generalizes')").all(current.kind,current.id)
       for(const link of links){
         const key=link.to_kind+':'+link.to_id
         if(link.to_kind!=='claim'||seen.has(key))continue
@@ -583,6 +647,7 @@ export class MemoryLayer {
         laterAppraisal:{type:'string',maxLength:1000},note:{type:'string',maxLength:500},
         occurredFrom:{type:'integer',minimum:0},occurredTo:{type:'integer',minimum:0},
         claimType:{type:'string',enum:CLAIM_KINDS},statement:{type:'string',maxLength:1200},context:{type:'string',maxLength:300},
+        dimension:{type:'string',enum:IMPRESSION_DIMENSIONS},
         subject:{type:'string',maxLength:200},person:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}}}},
         confidence:{type:'string',enum:CONFIDENCE},episode:{type:'integer',minimum:1},claim:{type:'integer',minimum:1},
         evidence:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}},receipts:{type:'array',maxItems:10,items:{type:'string',maxLength:500}},documents:{type:'array',maxItems:10,items:{type:'integer',minimum:1}},range:{type:'object',additionalProperties:false,properties:{from:{type:'integer',minimum:1},to:{type:'integer',minimum:1}}}}},
@@ -602,6 +667,14 @@ export class MemoryLayer {
         evidence:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}}}},
         state:{type:'string',enum:['done','dropped']},receipt:{type:'string',maxLength:500},confirmed:{type:'boolean'},
         reason:{type:'string',maxLength:300}},[],async(args,exec,key,view)=>this.intent(view.id,args))
+    define('memory_generalize','从多段经历慢慢概括一条可修正的主张或对人的某一面印象（熟悉／信任／喜欢／欣赏／想模仿分开保存）。至少要两条独立经历；同一批原文不能算两次；有反例就退回推断。无参数请改用 memory_recall 查看已有记忆。',
+      {claimType:{type:'string',enum:CLAIM_KINDS.filter(kind=>kind!=='simulation')},statement:{type:'string',minLength:1,maxLength:1200},
+        subject:{type:'string',maxLength:200},context:{type:'string',maxLength:300},note:{type:'string',maxLength:500},
+        dimension:{type:'string',enum:IMPRESSION_DIMENSIONS},
+        person:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}}}},
+        evidence:{type:'object',additionalProperties:false,properties:{episodes:{type:'array',minItems:2,maxItems:6,items:{type:'integer',minimum:1}}}},
+        counter:{type:'object',additionalProperties:false,properties:{episodes:{type:'array',maxItems:3,items:{type:'integer',minimum:1}}}}},
+      ['claimType','statement','evidence'],async(args,exec,key,view)=>this.generalize(view.id,args))
   }
 }
 function hashIdentity(target,sender) {

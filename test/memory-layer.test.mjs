@@ -253,3 +253,50 @@ test('time-triggered intents fire after their due time only, and stay inside the
   assert.equal(memory.intents(data.view(other.id)).length,0)
   assert.ok(pending.id)
 })
+
+test('a generalization needs independent experiences and keeps its counterexamples',t=>{
+  const {data,memory,target,say}=fixture(t),a=target('123','技术群','group'),view=data.open(a.handle)
+  const episode=(text,sender,id,role='participant')=>{
+    const message=say(a.handle,sender,id,text)
+    return memory.propose(view.id,{kind:'episode',title:id,role,what:text,evidence:{messages:[message]}}).id
+  }
+  const first=episode('他解释得很细','555','g1'),second=episode('他总先澄清问题','555','g2'),third=episode('他讲步骤很慢','555','g3')
+  assert.throws(()=>memory.generalize(view.id,{claimType:'preference',statement:'他喜欢详细解释',evidence:{episodes:[first]}}),/两条独立经历/)
+  assert.throws(()=>memory.generalize(view.id,{claimType:'preference',statement:'他喜欢详细解释',evidence:{episodes:[first,first]}}),/重复计数/)
+  const two=memory.generalize(view.id,{claimType:'preference',statement:'他喜欢详细解释',subject:'topic:解释方式',evidence:{episodes:[first,second]}})
+  assert.equal(two.confidence,'inference')
+  const three=memory.generalize(view.id,{claimType:'preference',statement:'他解释时先澄清再展开',subject:'topic:解释方式',evidence:{episodes:[first,second,third]}})
+  assert.equal(three.confidence,'observed')
+  assert.equal(three.support,3)
+  const contrary=episode('这次他说不想细讲','555','g4')
+  const mixed=memory.generalize(view.id,{claimType:'preference',statement:'他通常喜欢详细解释',subject:'topic:解释风格',
+    evidence:{episodes:[first,second,third]},counter:{episodes:[contrary]}})
+  assert.equal(mixed.confidence,'inference')
+  assert.equal(mixed.counter,1)
+  assert.match(mixed.message,/反例/)
+  // Retracting one supporting experience retracts the generalization too.
+  memory.retract(view.id,{kind:'episode',id:first,mode:'retract',reason:'记错了'})
+  assert.throws(()=>memory.inspect(view.id,{kind:'claim',id:three.id}),/撤回/)
+  assert.equal(memory.recall(view.id,{query:'解释'}).results.some(item=>item.id===three.id),false)
+  // Rewriting the same conclusion cannot revive the retracted record: the new
+  // claim must stand on its own remaining evidence, and only as an inference.
+  const rebuilt=memory.generalize(view.id,{claimType:'preference',statement:'他解释时先澄清再展开',subject:'topic:解释方式',evidence:{episodes:[second,third]}})
+  assert.notEqual(rebuilt.id,three.id)
+  assert.equal(rebuilt.confidence,'inference')
+})
+
+test('impressions keep familiarity and trust apart for the same person',t=>{
+  const {data,memory,target,say}=fixture(t),a=target('123'),view=data.open(a.handle)
+  const episode=(text,id)=>{const message=say(a.handle,'555',id,text);return memory.propose(view.id,{kind:'episode',title:id,what:text,evidence:{messages:[message]}}).id}
+  const first=episode('他又来了，聊得很熟','i1'),second=episode('这次他帮我看了半天','i2')
+  const firstMessage=data.db.prepare('SELECT id FROM yoyo_events WHERE sender=? ORDER BY id LIMIT 1').get('555').id
+  assert.throws(()=>memory.generalize(view.id,{claimType:'impression',statement:'和他聊天比较放松',
+    person:{messages:[firstMessage]},evidence:{episodes:[first,second]}}),/哪一面/)
+  const familiar=memory.generalize(view.id,{claimType:'impression',dimension:'familiarity',statement:'和他聊天比较放松',
+    person:{messages:[firstMessage]},evidence:{episodes:[first,second]}})
+  const trust=memory.generalize(view.id,{claimType:'impression',dimension:'trust',statement:'技术上还不确定能不能信',
+    person:{messages:[firstMessage]},evidence:{episodes:[first,second]}})
+  assert.notEqual(familiar.id,trust.id)
+  const impressions=memory.recall(view.id,{query:'聊'}).results.filter(item=>item.claimType==='impression')
+  assert.deepEqual(impressions.map(item=>item.dimension).sort(),['familiarity','trust'])
+})
