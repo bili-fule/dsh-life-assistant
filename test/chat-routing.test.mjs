@@ -129,6 +129,19 @@ test('an expired suspension ends the activity instead of waking forever',async t
   assert.equal(host.tasks.inspect(task.id,view.id).state,'cancelled')
 })
 
+test('a branch reply records how long the message waited, apart from event delivery',async t=>{
+  const {host,view,social,metrics,data}=fixture(t)
+  social.qq={async send(){return {messageId:'m-1'}}}
+  const task=host.tasks.create({key:'chat-latency',role:'chat',goal:'接话',viewId:view.id,expiresAt:Date.now()+600000})
+  host.tasks.claim(task.id,agentOf(task.id))
+  data.ingest({target:view.focus,sender:'2',externalId:'lat-1',text:'在吗',receivedAt:Date.now()-8000})
+  const result=await host.send({args:{text:'在的',replyId:'latency-1'},view,agentId:agentOf(task.id),taskId:task.id,signal:new AbortController().signal,authorize:()=>host.tasks.authorizeSend(agentOf(task.id),view.focus,host.db.prepare('SELECT generation FROM yoyo_team_speakers WHERE target=?').get(view.focus).generation)})
+  assert.equal(result.state,'sent')
+  const timing=metrics.summary().timings.reply_latency
+  assert.equal(timing.samples,1)
+  assert.equal(timing.p50>=7000,true,'the wait for a reply is measured from the real inbound message')
+})
+
 test('only chat and peer tasks may suspend themselves',async t=>{
   const {host,view}=fixture(t)
   const task=host.tasks.create({key:'reader-1',role:'reader',goal:'只读',viewId:view.id,expiresAt:Date.now()+60000})

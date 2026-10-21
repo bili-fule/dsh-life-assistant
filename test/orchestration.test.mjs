@@ -100,10 +100,12 @@ test('follow-up messages in an owned window go to the executor instead of waking
   agent.data.ingest({target:handle,sender:'123',externalId:'follow-1',text:'你还没回答我',receivedAt:Date.now()-10000})
   assert.equal(agent.team.ownsWindow(handle),true,'a suspended activity still owns its window')
   assert.equal(agent.choose(Date.now()+agent.config.ordinaryMs+1000),null,'the subject is not asked to approve each follow-up')
+  assert.equal(agent.metrics.summary().counts.subject_planned_message??0,0,'a routed message does not count as subject planning')
   // Once the activity is gone the same window reaches the subject again.
   agent.team.coordinator.cancel(task.id,view.id)
   assert.equal(agent.team.ownsWindow(handle),false)
   assert.notEqual(agent.choose(Date.now()+agent.config.ordinaryMs+2000),null)
+  assert.equal(agent.metrics.summary().counts.subject_planned_message,1,'now the subject really did plan for a message')
 })
 
 test('metrics keep counts, separate latencies and a missing meter apart from zero',()=>{

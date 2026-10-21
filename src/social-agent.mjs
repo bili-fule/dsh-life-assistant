@@ -38,6 +38,10 @@ const EXECUTION_TOOLS=new Set(['yoyo_execute','yoyo_job','yoyo_projects','yoyo_d
 export const SUBJECT_EXECUTION_TOOLS=[...EXECUTION_TOOLS]
 export const TAKEOVER_DEFAULT_MINUTES=10
 export const TAKEOVER_MAX_MINUTES=60
+// The wake reasons that mean "a message reached the subject". Counting these is
+// how "how many messages made the subject plan" becomes measurable instead of a
+// guess: routed follow-ups do not touch this counter.
+const MESSAGE_WAKE_REASONS=new Set(['active_conversation','private_message','owner_message','attention_changed','unseen_activity'])
 function messagePreviews(rows,query='') {
   let remaining=60000
   return rows.map(row=>{
@@ -438,7 +442,7 @@ export class SocialAgent {
   }
   choose(now=Date.now()) {
     this.readyJob=null;this.duePlan=null;this.dueConcern=null;this.dueMemoryIntent=null;this.wakeView=null;this.wakeEvent=null
-    const select=(target,event,view=null)=>{this.wakeEvent=event;this.wakeView=view;return target}
+    const select=(target,event,view=null)=>{this.wakeEvent=event;this.wakeView=view;if(MESSAGE_WAKE_REASONS.has(event.kind))this.metrics.count('subject_planned_message');return target}
     if(this.store.get('yoyo_settings',{}).paused)return null
     const next=this.store.get('yoyo_next_focus');if(next)return select(next,{kind:'focus_selected',target:next})
     const teamEvent=this.team?.nextEvent()

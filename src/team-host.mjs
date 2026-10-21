@@ -249,6 +249,12 @@ export class TeamHost {
       return {state:previous.state,messageId:previous.remote_id,replayed:true}
     }
     authorize()
+    // How long a real inbound message waited before this branch answered it. The
+    // event-delivery latency is separate: this one includes the model's work.
+    try{
+      const newest=this.db.prepare("SELECT max(received_at) at FROM yoyo_events WHERE target=? AND kind<>'outgoing'").get(target.handle)?.at
+      if(Number.isSafeInteger(newest))this.social.metrics?.time('reply_latency',Date.now()-newest)
+    }catch{/* A missing row is not a measurement. */}
     this.db.prepare("INSERT INTO yoyo_team_deliveries VALUES(?,?,?,'sending',NULL)").run(key,taskId,text)
     try{
       const result=await this.social.qq.send(target,text,key,signal,()=>{

@@ -6,10 +6,10 @@
 
 | 项 | 值 |
 | --- | --- |
-| 待上线提交 | 本轮最后一个提交（以推送后的 `main` 顶端为准；编排优先改造的最后一个提交是 `18ec1cd` 之后的文档/修复提交） |
+| 待上线提交 | `13e98e4`（已于 2026-10-21 20:22 部署；0.40.0 的编排改造见 [RELEASE-0.40.md](RELEASE-0.40.md)） |
 | 版本号 | `package.json` 0.39.0 |
-| 测试 | `npm run check` 通过；`npm test` 280/280 |
-| 原生验证（可选，需要本机 SDK） | `node test/team-native-events.mjs`、`node test/team-native-smoke.mjs`、`node test/team-native-real.mjs`、`node test/team-native-intent.mjs` 均 `PASS` |
+| 测试 | `npm run check` 通过；`npm test` 257/257 |
+| 原生验证（可选，需要本机 SDK） | `node test/team-native-events.mjs`、`node test/team-native-smoke.mjs` 均 `PASS`（注意：显式完成契约后这两个脚本需显式 `team_finish`，0.40.0 已修） |
 
 上线前把实际提交 SHA 写进 `deploy/STATUS.md` 顶部的"生产最新"段落，不要用"最新代码"这种说法。
 
@@ -18,9 +18,6 @@
 启动即自动执行，无需手工脚本；旧库打开只加东西：
 
 - 新增表：`yoyo_activities`、`yoyo_activity_links`、`yoyo_team_events`、`yoyo_team_cursors`、`yoyo_team_source_decisions`。
-- 新增表（编排优先改造）：`yoyo_takeovers`、`yoyo_intents`、`yoyo_intent_attempts`、`yoyo_graph_nodes`、`yoyo_graph_edges`、`yoyo_folded_branches`、`yoyo_metric_counters`、`yoyo_metric_timings`、`yoyo_metric_samples`。
-- 新增列：`yoyo_team_tasks.focus_key`、`yoyo_team_tasks.activity_id`（旧任务按 `yoyo_views.focus` 回填 `focus_key`）；`yoyo_team_tasks.chat_through`、`yoyo_team_tasks.wake_count`、`yoyo_team_tasks.paused_reason`（聊天续接游标与挂起原因，旧任务默认 0/NULL）。
-- 新增 `yoyo_activity_links.kind` 取值 `intent`（意图与活动相连）。
 - 新增列：`yoyo_team_tasks.focus_key`、`yoyo_team_tasks.activity_id`（旧任务按 `yoyo_views.focus` 回填 `focus_key`）。
 - 语义变化（不是结构变化）：窗口视图的 `scopes` 现在包含同一平台的全部已授权范围；`yoyo_concerns` / `yoyo_plans` / `yoyo_memories` / `yoyo_learning` / `yoyo_activity` 新写入记录的范围取"主体当前范围"。
 - 旧记录不动：历史行保留原有 `scopes`，因为它们都包含 `public` 或本主体范围，仍然可读。
