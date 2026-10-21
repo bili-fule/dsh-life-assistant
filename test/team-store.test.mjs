@@ -203,6 +203,24 @@ test('a worker memory candidate is only a candidate until the subject decides',t
   assert.throws(()=>team.candidate(b.id,second.id),/范围/)
 })
 
+test('a memory pack belongs to one task and one window',t=>{
+  const {team,a,b,create}=fixture(t),x=create('x'),y=create('y',b)
+  assert.equal(team.memoryPack(x.id,a.id),null)
+  const written=team.writeMemoryPack(x.id,a.id,{clue:'聊过的电影',items:[{id:1,kind:'episode',title:'聊到一部电影'}]})
+  assert.equal(written.items,1)
+  const pack=team.memoryPack(x.id,a.id)
+  assert.equal(pack.clue,'聊过的电影')
+  assert.equal(pack.items[0].kind,'episode')
+  // Only summaries are carried, and another window cannot read this pack.
+  assert.deepEqual(team.memoryPack(y.id,b.id),null)
+  assert.throws(()=>team.memoryPack(x.id,b.id),/范围/)
+  // Re-writing replaces the pack instead of stacking old summaries.
+  team.writeMemoryPack(x.id,a.id,{clue:'聊过的电影',items:[]})
+  assert.deepEqual(team.memoryPack(x.id,a.id).items,[])
+  assert.throws(()=>team.writeMemoryPack(x.id,a.id,{clue:'',items:[]}),/线索/)
+  assert.throws(()=>team.writeMemoryPack(x.id,a.id,{clue:'聊过的电影',items:new Array(9).fill({})}),/条数/)
+})
+
 test('task budgets are counted per attempt in the database, not in memory',t=>{
   const {team,a,create}=fixture(t),x=create('x')
   team.claim(x.id,'worker-x')

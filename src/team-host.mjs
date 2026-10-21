@@ -49,6 +49,12 @@ export class TeamHost {
         return {messages:messages.map(m=>({...m,text:m.text.slice(0,6000),segments:[]}))}
       },
       recall:async({args,view})=>({memories:social.data.recall(view.id,{query:args.query??''})}),
+      // The pack is the only memory the worker starts with: summaries chosen by
+      // the subject, scoped to this task's view, never the originals.
+      pack:async({agentId,view})=>{
+        const {task}=this.tasks.authority(agentId)
+        return {pack:this.tasks.memoryPack(task.id,view.id)}
+      },
       wait:async({args,view,signal,authorize})=>{
         if(!Number.isSafeInteger(args.after)||args.after<0)throw Error('等待需要真实消息游标')
         const end=Date.now()+Math.max(1,Math.min(60,args.seconds??30))*1000
@@ -67,14 +73,15 @@ export class TeamHost {
   register(define) {
     define('team_overview','查看团队安全状态，不含其他窗口正文。',{},[],async()=>({tasks:this.tasks.overview()}))
     define('team_deliberate','结合当前范围内关切、分工和证据，自主决定下一步；无事允许休息。',{},[],async(a,e,k,v)=>this.motivation.deliberate(v.id))
-    define('team_delegate','委派一个有动机的聊天、公开研究、阅读或核对活动。chat 直接在窗口交流；reader 只读不发言；research 仅 public；verify 只核对证据。可分派属于自己某次选择的活动，但活动体验仍按真实事件去重。',{concernId:{type:'integer'},choiceId:{type:'integer'},role:{type:'string',enum:['chat','research','reader','verify']},goal:{type:'string',maxLength:6000},rationale:{type:'string',maxLength:2000},durationSeconds:{type:'integer',minimum:30,maximum:900},dependsOn:{type:'array',maxItems:3,items:{type:'string',maxLength:60}},maxSteps:{type:'integer',minimum:1,maximum:200}},['concernId','role','goal','rationale'],async(a,e,k,v)=>{
+    define('team_delegate','委派一个有动机的聊天、公开研究、阅读或核对活动。chat 直接在窗口交流；reader 只读不发言；research 仅 public；verify 只核对证据。可分派属于自己某次选择的活动，但活动体验仍按真实事件去重。可选 recall 给出线索，宿主会从记忆层挑几条摘要装成这个任务的记忆包（只是摘要，执行者仍需核对原文）。',{concernId:{type:'integer'},choiceId:{type:'integer'},role:{type:'string',enum:['chat','research','reader','verify']},goal:{type:'string',maxLength:6000},rationale:{type:'string',maxLength:2000},durationSeconds:{type:'integer',minimum:30,maximum:900},dependsOn:{type:'array',maxItems:3,items:{type:'string',maxLength:60}},maxSteps:{type:'integer',minimum:1,maximum:200},recall:{type:'string',maxLength:300}},['concernId','role','goal','rationale'],async(a,e,k,v)=>{
       const task=this.motivation.delegate({...a,key:k,viewId:v.id,expiresAt:Date.now()+1000*(a.durationSeconds??300)})
       // Transfer this window's main lease to the delegated conversation.
       if(a.role==='chat')this.db.prepare('UPDATE yoyo_team_speakers SET expires_at=0,generation=generation+1 WHERE target=? AND agent_id=?').run(v.focus,this.social.sessionId)
+      const pack=this.attachMemoryPack(task.id,v.id,a.recall)
       const started=this.coordinator.start(task.id)
-      return {id:task.id,...started}
+      return {id:task.id,...started,...(pack?{memoryPack:pack}:{})}
     })
-    define('team_inspect','查看当前资料范围内任务的真实状态、增量报告、执行者提交的证据板与用量汇总。',{id:{type:'string'}},['id'],async(a,e,k,v)=>({task:this.tasks.inspect(a.id,v.id),reports:this.tasks.reports(a.id,v.id),evidence:this.tasks.board(v.id,{taskId:a.id}),usage:this.tasks.usage(a.id)}))
+    define('team_inspect','查看当前资料范围内任务的真实状态、增量报告、执行者提交的证据板、这个任务的记忆包与用量汇总。',{id:{type:'string'}},['id'],async(a,e,k,v)=>({task:this.tasks.inspect(a.id,v.id),reports:this.tasks.reports(a.id,v.id),evidence:this.tasks.board(v.id,{taskId:a.id}),memoryPack:this.tasks.memoryPack(a.id,v.id),usage:this.tasks.usage(a.id)}))
     define('team_steer','给进行中的任务追加一条有界提示，在执行者下一个原生边界送达一次；不能借此扩大任务权限或改变全局人设。',{id:{type:'string'},message:{type:'string',minLength:1,maxLength:2000}},['id','message'],async(a,e,k,v)=>this.tasks.steer(v.id,{taskId:a.id,message:a.message}))
     define('team_cancel','取消当前范围内任务并撤销其后续发言权。',{id:{type:'string'}},['id'],async(a,e,k,v)=>{this.coordinator.cancel(a.id,v.id);return {cancelled:true}})
     define('team_takeover','接管当前窗口的发言权，使旧执行者后续发送失效。',{},[],async(a,e,k,v)=>({generation:this.tasks.takeover(v.id,this.social.sessionId,Date.now()+900000)}))
@@ -89,6 +96,17 @@ export class TeamHost {
       const created=this.memory.propose(v.id,this.candidateProposal(candidate))
       return {candidate:a.id,memory:created,...this.tasks.decideMemory(v.id,{id:a.id,decision:'accept',claimId:created.id})}
     })
+  }
+  // The subject decides what a task may start with: a few scoped summaries, not
+  // a memory dump and never the originals. A pack that cannot be built is
+  // reported instead of silently pretending the task was briefed.
+  attachMemoryPack(taskId,viewId,clue) {
+    if(typeof clue!=='string'||!clue.trim())return null
+    if(!this.memory)return {error:'记忆层未启用，这个任务没有记忆包'}
+    try{
+      const recalled=this.memory.recall(viewId,{query:clue,limit:5})
+      return this.tasks.writeMemoryPack(taskId,viewId,{clue,items:recalled.results})
+    }catch(error){return {error:String(error.message).slice(0,200)}}
   }
   // A worker's own wording never proves itself: on acceptance the memory is
   // rebuilt in the subject's view from the cited originals, and the confidence

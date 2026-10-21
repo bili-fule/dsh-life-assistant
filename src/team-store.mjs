@@ -4,10 +4,10 @@ import { boundedText, assertPublish, mayRead, sourceScopes } from './scope.mjs'
 // Each role is a fixed set of host methods. A task may narrow its role, never
 // widen it; the model cannot name a tool outside its role.
 export const ROLE_TOOLS={
-  chat:['read','wait','recall','send','report','evidence','board','remember','usage','step'],
-  research:['web','report','evidence','board','remember','usage','step'],
-  reader:['read','recall','report','evidence','board','remember','usage','step'],
-  verify:['board','recall','report','evidence','usage','step'],
+  chat:['read','wait','recall','send','report','evidence','board','remember','pack','usage','step'],
+  research:['web','report','evidence','board','remember','pack','usage','step'],
+  reader:['read','recall','report','evidence','board','remember','pack','usage','step'],
+  verify:['board','recall','report','evidence','pack','usage','step'],
 }
 
 const WORKER_CLAIM_TYPES=['fact','knowledge','preference','procedure','self']
@@ -42,6 +42,9 @@ export class TeamStore {
         id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, attempt INTEGER NOT NULL, scopes TEXT NOT NULL,
         kind TEXT NOT NULL, claim_type TEXT, statement TEXT NOT NULL, body TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'pending', claim_id INTEGER, decided_at INTEGER, created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_team_memory_packs(
+        task_id TEXT PRIMARY KEY, attempt INTEGER NOT NULL, clue TEXT NOT NULL,
+        scopes TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL);
     `)
     const columns=this.db.prepare('PRAGMA table_info(yoyo_team_tasks)').all().map(column=>column.name)
     for(const [name,type] of [['failures','INTEGER NOT NULL DEFAULT 0'],['retry_at','INTEGER'],['renewed_at','INTEGER'],
@@ -278,6 +281,27 @@ export class TeamStore {
     const row=this.db.prepare('SELECT * FROM yoyo_team_memory_candidates WHERE id=?').get(id)
     if(!row||!JSON.parse(row.scopes).every(scope=>mayRead(view,scope)))throw Error('候选记忆不在当前资料范围')
     return this.candidateShape(row)
+  }
+  // A pack is a small, scoped selection of memory summaries handed to one task.
+  // Summaries only: originals still need team_recall or the evidence board, and
+  // the pack can never carry another window's material.
+  writeMemoryPack(taskId,viewId,{clue,items}) {
+    const view=this.social.view(viewId)
+    const task=this.inspect(taskId,viewId)
+    if(typeof clue!=='string'||!clue)throw Error('记忆包需要说明线索')
+    if(!Array.isArray(items)||items.length>8)throw Error('记忆包条数无效')
+    const stored=JSON.stringify({items})
+    this.db.prepare(`INSERT INTO yoyo_team_memory_packs(task_id,attempt,clue,scopes,body,created_at) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(task_id) DO UPDATE SET attempt=excluded.attempt,clue=excluded.clue,scopes=excluded.scopes,body=excluded.body,created_at=excluded.created_at`)
+      .run(task.id,task.attempt,boundedText(clue,300,'线索'),JSON.stringify(sourceScopes(view.scopes)),stored,this.clock())
+    return {taskId:task.id,clue:clue.slice(0,300),items:items.length}
+  }
+  memoryPack(taskId,viewId) {
+    const view=this.social.view(viewId)
+    const row=this.db.prepare('SELECT * FROM yoyo_team_memory_packs WHERE task_id=?').get(taskId)
+    if(!row)return null
+    if(!JSON.parse(row.scopes).every(scope=>mayRead(view,scope)))throw Error('记忆包不在当前资料范围')
+    return {taskId:row.task_id,attempt:row.attempt,clue:row.clue,items:JSON.parse(row.body).items??[],createdAt:row.created_at}
   }
   decideMemory(viewId,{id,decision,reason,claimId=null}) {
     const view=this.social.view(viewId)

@@ -189,3 +189,27 @@ test('an accepted memory candidate becomes a worker report, never an observation
   assert.equal(rejected.state,'rejected')
   assert.equal(data.db.prepare('SELECT count(*) n FROM yoyo_memory_episodes').get().n,0)
 })
+test('a delegated task starts with a scoped pack of memory summaries',async t=>{
+  const {host,view,data}=fixture(t),tools={}
+  host.memory=new MemoryLayer(data)
+  host.register((name,description,properties,required,execute)=>{tools[name]={properties,execute}})
+  host.coordinator.start=id=>({started:true,id})
+  const message=data.ingest({target:view.focus,sender:'2',externalId:'p1',text:'我们上次聊到纪录片里的长镜头'}).id
+  host.memory.propose(view.id,{kind:'episode',title:'聊过纪录片',role:'participant',what:'聊了纪录片里的长镜头',evidence:{messages:[message]}})
+  const concern=data.concern(view.id,{title:'t',why:'w',origin:'o',next:'n',doneWhen:'d',stopWhen:'s'})
+  const delegated=await tools.team_delegate.execute({concernId:concern.id,role:'reader',goal:'读一下相关材料',rationale:'想继续了解',recall:'纪录片 长镜头'},{},'pack-key',view)
+  assert.equal(delegated.memoryPack.items,1)
+  const pack=host.tasks.memoryPack(delegated.id,view.id)
+  assert.equal(pack.clue,'纪录片 长镜头')
+  assert.equal(pack.items[0].kind,'episode')
+  // The worker gets the summaries through the bridge, and only its own task's pack.
+  host.tasks.claim(delegated.id,'worker')
+  assert.equal((await host.coordinator.tools.pack({agentId:'worker',view})).pack.items.length,1)
+  // Without a clue there is no pack, and a pack stays out of other windows.
+  const plain=await tools.team_delegate.execute({concernId:concern.id,role:'reader',goal:'再读一遍',rationale:'复核'},{},'pack-key-2',view)
+  assert.equal(plain.memoryPack,undefined)
+  assert.equal(host.tasks.memoryPack(plain.id,view.id),null)
+  const other=data.discover({platform:'qq',account:'1',kind:'private',peer:'3'})
+  data.approve(other.handle,true)
+  assert.throws(()=>host.tasks.memoryPack(delegated.id,data.open(other.handle).id),/范围/)
+})
