@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync,rmSync } from 'node:fs'
+import { mkdtempSync,readFileSync,rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Store } from '../src/store.mjs'
@@ -98,7 +98,21 @@ test('the operational status exposes executors, leases and usage without task co
   const blocked=host.status().tasks[0]
   assert.equal(blocked.state,'blocked')
   assert.match(blocked.waitReason,/重试|复查/)
+  // The admin panel reads exactly these fields; keep the contract explicit.
+  for(const field of ['id','role','state','attempt','failures','retry_at','steps','tokens','reports','evidence','leaseExpires','dependsOn','waitReason'])
+    assert.equal(field in blocked,true,'status row carries '+field)
   assert.ok(view)
+})
+test('the admin page renders the team panel from the operational status only',t=>{
+  const page=readFileSync(new URL('../public/index.html',import.meta.url),'utf8')
+  const script=readFileSync(new URL('../public/app.js',import.meta.url),'utf8')
+  assert.match(page,/id="yoyo-team"/,'the page has a slot for the team panel')
+  assert.match(script,/function renderTeam\(team\)/)
+  assert.match(script,/renderTeam\(y\.team\)/,'the panel is fed from the operational status')
+  // The panel states the privacy boundary instead of quietly showing everything.
+  assert.match(page,/任务目的与报告正文留在各自的资料范围/)
+  assert.match(script,/任务目的与报告正文不在本页展示/)
+  assert.equal(/goal|PRIVATE|报告正文.*innerHTML/.test(script.split('function renderTeam')[1].split('function renderYoyo')[0].replace(/任务目的与报告正文不在本页展示/,'')),false,'the panel never renders task text')
 })
 test('cancellation stops steering and a foreign window cannot steer or read the board',t=>{
   const {host,view,task,data}=fixture(t),other=data.discover({platform:'qq',account:'1',kind:'private',peer:'9'})

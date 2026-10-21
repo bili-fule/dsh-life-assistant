@@ -40,6 +40,25 @@ async function downloadFile(path,name){const response=await api('/api/asset?path
 function renderTools(){const files=$('#workspace-files'),runs=$('#tool-list');files.replaceChildren();runs.replaceChildren();for(const f of (state.workspaceFiles||[]).slice(0,40)){const row=el('div',null,'row');row.append(el('span',f.name+' · '+Math.ceil(f.bytes/1024)+' KB'),button('下载',()=>downloadFile(f.path,f.name)));files.append(row)}if(!files.children.length)empty(files,'工作目录还没有文件。');for(const r of state.toolRuns||[]){const d=el('details');d.append(el('summary',r.name+' · '+(r.state==='done'?'已结束':'执行中/结果待核对')+' · '+format(r.created_at)),el('pre','参数：'+r.args+'\n结果：'+(r.result||'尚无结果')));runs.append(d)}if(!runs.children.length)empty(runs,'还没有需要调用工具的任务。')}
 $('#uploads').onchange=async()=>{const files=[...$('#uploads').files];if(files.length>8){toast('一次最多上传 8 个文件');return}for(const f of files){if(f.size>32*1024*1024){toast(f.name+' 超过 32MiB，未上传');continue}try{toast('正在上传 '+f.name);const data=await new Promise((yes,no)=>{const reader=new FileReader();reader.onload=()=>yes(String(reader.result).split(',')[1]);reader.onerror=no;reader.readAsDataURL(f)});await api('/api/upload',{name:f.name,data});toast(f.name+' 已保存，正在读取。')}catch(e){toast(e.message)}}$('#uploads').value='';refresh()}
 
+const teamLabels={ready:'等待调度',running:'执行中',waiting:'等待对方回复',blocked:'已阻塞',completed:'已完成',cancelled:'已取消',failed:'失败'}
+// The operations panel only shows what the host already exposes outside any
+// scope: who is running, why it waits, and what it spent. Task goals and report
+// text stay inside that task's own material scope, never on this page.
+function renderTeam(team){
+ const root=$('#yoyo-team');root.replaceChildren()
+ if(!team)return empty(root,'团队编排未启用；启用后这里只显示执行者、发言租约、等待原因与用量。')
+ root.append(el('div','在跑 '+team.concurrency.running+' / '+team.concurrency.max+' 个执行者 · 任务目的与报告正文不在本页展示，需要时回到该任务的资料范围查看','card text-block'))
+ if(!team.tasks.length)return empty(root,'还没有分派过任务。')
+ for(const t of team.tasks){
+  const state=teamLabels[t.state]||t.state
+  const facts=['#'+String(t.id).slice(0,8)+' · '+t.role+' · '+state+(t.waitReason&&t.waitReason!==state?' · '+t.waitReason:''),
+   '尝试 '+(t.attempt??0)+' 次 · 失败 '+(t.failures??0)+' 次'+(t.retry_at?' · 计划重试 '+format(t.retry_at):''),
+   (t.steps??0)+' 步 · '+(t.tokens??0)+' Token · 报告 '+(t.reports??0)+' 条 · 证据 '+(t.evidence??0)+' 条',
+   t.leaseExpires?'发言租约到 '+format(t.leaseExpires):'当前没有发言租约',
+   t.dependsOn?'依赖 '+t.dependsOn+' 个任务':'无依赖']
+  root.append(el('div',facts.join('\n'),'card text-block'))
+ }
+}
 function renderYoyo(){
  const y=state.autonomy;if(!y)return
  if(document.activeElement!==$('#yoyo-persona'))$('#yoyo-persona').value=y.persona||''
@@ -50,6 +69,7 @@ function renderYoyo(){
  $('#yoyo-observe').checked=y.settings.observeOnly!==false
  $('#yoyo-pause').textContent=y.settings.paused?'继续活动':'暂停活动'
  const memoryJobs=$('#yoyo-memory-jobs');memoryJobs.replaceChildren();for(const r of y.memoryMaintenance?.jobs??[]){const card=el('div','#'+r.id+' · '+({idle:'空闲整理',night:'夜间整理'}[r.kind]||r.kind)+' · 原文至 #'+r.through_id+' · '+({running:'整理中',done:'已完成',failed:'未完成',interrupted:'已中断'}[r.state]||r.state)+(r.error?' · '+r.error:''),'card');if(['failed','interrupted'].includes(r.state))card.append(button('重试本次整理',()=>action('/api/yoyo/memory-retry',{id:r.id},'已安排重试'),'secondary'));memoryJobs.append(card)}if(!memoryJobs.children.length)empty(memoryJobs,'没有待展示的后台整理。')
+ renderTeam(y.team)
  const activityLog=$('#yoyo-activity-log');activityLog.replaceChildren();for(const r of y.recentActivity??[])activityLog.append(el('div',format(r.created_at)+' · '+(r.body.description||r.state)+(r.body.next?'\n下一步：'+r.body.next:''),'card text-block'));if(!activityLog.children.length)empty(activityLog,'尚无活动记录。')
  $('#yoyo-qq').textContent=y.qqConfigured?'已配置 QQ 接入，可检查登录账号。':'尚未配置 QQ 接入。'
  const targets=$('#yoyo-targets');targets.replaceChildren()

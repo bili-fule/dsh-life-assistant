@@ -1,6 +1,6 @@
 {
   "name": "dsh-life-assistant",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "description": "A persistent WeChat inbox, personal task assistant and bounded memory system for DeepSeek Harness",
   "type": "module",
   "main": "src/index.mjs",
@@ -35,7 +35,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "check": "node --check src/index.mjs && node --check src/runtime.mjs && node --check src/store.mjs && node --check src/social-agent.mjs && node --check src/social-store.mjs && node --check src/motivation.mjs && node --check src/memory-layer.mjs && node --check src/snowluma.mjs && node --check src/executor.mjs && node --check src/public-web.mjs && node --check deploy/executor.mjs && node --check deploy/browser-broker.mjs && node --check deploy/browser-stdio.mjs && node --check deploy/browser-provider.mjs && node --check src/ledger.mjs && node --check public/ledger.js && node --check deploy/ledger-gateway.mjs && node --check src/debug-helper.mjs && node --check deploy/debug-helper-broker.mjs && node --check deploy/debug-helper-entry.mjs"
+    "check": "node --check src/index.mjs && node --check src/runtime.mjs && node --check src/store.mjs && node --check src/social-agent.mjs && node --check src/social-store.mjs && node --check src/motivation.mjs && node --check src/memory-layer.mjs && node --check src/snowluma.mjs && node --check src/executor.mjs && node --check src/public-web.mjs && node --check deploy/executor.mjs && node --check deploy/browser-broker.mjs && node --check deploy/browser-stdio.mjs && node --check deploy/browser-provider.mjs && node --check src/ledger.mjs && node --check public/ledger.js && node --check public/app.js && node --check deploy/ledger-gateway.mjs && node --check src/debug-helper.mjs && node --check deploy/debug-helper-broker.mjs && node --check deploy/debug-helper-entry.mjs"
   },
   "license": "MIT",
   "repository": {
