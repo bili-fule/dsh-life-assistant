@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import { TeamStore } from './team-store.mjs'
 import { TeamIntents } from './team-intents.mjs'
+import { ActivityGraph } from './activity-graph.mjs'
+import { BranchFolding } from './branch-folding.mjs'
 import { TeamMotivation } from './team-motivation.mjs'
 import { TeamCoordinator } from './team-coordinator.mjs'
 import { TeamNativeAdapter } from './team-native-adapter.mjs'
@@ -9,7 +11,7 @@ import { readPublicPage } from './public-web.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { localParts } from './time.mjs'
 
-export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_intent','team_inspect','team_cancel','team_takeover','team_review','team_steer','team_search','team_ask','team_answer','team_events','team_memory','team_sources','team_source_decide']
+export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_intent','team_inspect','team_cancel','team_takeover','team_review','team_steer','team_search','team_ask','team_answer','team_events','team_graph','team_expand','team_memory','team_sources','team_source_decide']
 export const TEAM_POLICY=`默认分工：你决定意图、方向、优先级和例外，执行者实际推进。读群、浏览网页、跑代码和排障容器默认不在你的工具面里；需要亲自处理时先用 yoyo_takeover 写明理由，完成后 yoyo_handback。接管是例外，不是日常路径。已有聊天活动的后续消息由宿主直接交给那个执行者，不经你逐句转述或逐句批准。需要你决定的只有：超出当前任务的新目标、重要承诺、需要追加执行者、分支之间冲突、持续受阻、目标完成或放弃、调整关注策略。可委派的工作先放进意图队列（team_intent，写明目标、为什么、能力、优先级、依赖与完成条件），宿主会在有空闲额度、依赖完成时启动；没有额度时它排队并保持可见，不要因为排队就自己接手。同一活动同一目的只会有一个排队意图。
 你可以用 team_deliberate 查看关切和团队进展，用 team_delegate 分派聊天或公开研究，自己继续其他活动或一起研究。分派前创建真实的 yoyo_concern，说明为何关心、下一步、完成和停止条件。聊天执行者会在当前窗口直接交流；主 Agent 需要发言前用 team_takeover 接管。研究只能从 public 视图分派，不能把私聊问题洗成公开输入。执行中可用 team_steer 追加一条有界提示，它在执行者下一个原生边界送达一次。执行者可以把自己真正读到的证据放到任务证据板，证据沿用任务来源范围，team_inspect 可查看，team_search 可按线索跨任务检索本窗口可见的证据；重复的同一条来源只算一条，同一来源的不同说法会被标出冲突，team_sources 列出这些来源被读过几次、有几个说法。执行者也能提交记忆候选（team_remember），候选不是记忆：team_memory 列出待决定的候选，采纳时在你自己的视图里重新核对原文，并且只记成执行者报告，不会变成观察。执行结果是证据材料，不等于动机已满足。用 team_review 判断继续、调整、等待或放弃。无事可做允许休息，不高频轮询、不制造任务。`
 
@@ -19,6 +21,8 @@ export class TeamHost {
     this.config=config
     this.social=social;this.tasks=new TeamStore(social.data,undefined,social.metrics??null);this.motivation=new TeamMotivation(this.tasks,social.motivation??null)
     this.intents=new TeamIntents(social.data,undefined,social.metrics??null)
+    this.graph=new ActivityGraph(social.data,this.tasks,this.intents)
+    this.folding=new BranchFolding(social.data,this.tasks,this.intents)
     this.memory=social.memoryLayer??null
     this.db=social.data.db
     this.db.exec(`CREATE TABLE IF NOT EXISTS yoyo_team_deliveries(
@@ -139,6 +143,11 @@ export class TeamHost {
     define('team_answer','回答执行者或另一个分支提出的问题；引用原问题编号，答复作为事件回到提问方。',{question:{type:'string',minLength:1,maxLength:80},answer:{type:'string',minLength:1,maxLength:2000}},['question','answer'],async(a,e,k,v)=>this.tasks.answer(null,{questionEventId:a.question,answer:a.answer,viewId:v.id}))
     define('team_events','查看当前资料范围内同一活动/任务的事件流（发现、提问、答复、进展、方向变化、受阻、完成、取消）与仍未回答的问题，用于判断分支之间是否真的在交换进展。',{taskId:{type:'string'},activityId:{type:'string'},after:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:50}},[],async(a,e,k,v)=>({events:this.tasks.activityEvents(v.id,{taskId:a.taskId??null,activityId:a.activityId??null,after:a.after??0,limit:a.limit??20}),openQuestions:this.tasks.openQuestions(v.id,{activityId:a.activityId??null})}))
     define('team_sources','查看当前范围内被引用过的来源：被读过几次、有几个不同说法、分别是哪个任务读的。同一来源出现不同说法说明材料互相矛盾，需要自己判断，不能当成已核实。',{limit:{type:'integer',minimum:1,maximum:50}},[],async(a,e,k,v)=>({sources:this.tasks.sourceRegistry(v.id,{limit:a.limit??20})}))
+    // Five questions the subject actually asks, answered from an index instead of
+    // rereading every branch: why, what changed direction, who verified, what is
+    // still unknown, what the conclusion rests on.
+    define('team_graph','查看活动图：为什么做这件事、哪次改变改变了方向、谁验证过、还缺什么、当前结论依赖什么。可按 activityId 限定。这里是索引与引用，正文仍在证据板、事件和裁定里；图里没有模型的隐藏推理。',{activityId:{type:'string',maxLength:80},limit:{type:'integer',minimum:1,maximum:20}},[],async(a,e,k,v)=>({...this.graph.why(v.id,{activityId:a.activityId??null,limit:a.limit??8})}))
+    define('team_expand','展开一个已折叠的冷分支：摘要加上它引用的真实报告、证据与事件编号。摘要本身不是新事实，要当依据必须回到原始记录。',{id:{type:'string',minLength:1,maxLength:80}},[],async(a,e,k,v)=>({...this.folding.expand(v.id,a.id)}))
     // Resolving a contradiction stays a subject decision: both readings are kept
     // as history and the ruling is appended with its reason and shared as event.
     define('team_source_decide','对互相矛盾的来源做一次明确裁定：verified 需要写明采纳哪一种说法，refuted 表示认定不可信，unresolved 表示暂时不裁定。原始说法都保留，裁定只追加并说明理由，同时写入事件让正在工作的分支知道。',{source:{type:'string',minLength:1,maxLength:500},decision:{type:'string',enum:['verified','refuted','unresolved']},chosenBody:{type:'string',maxLength:2000},reason:{type:'string',minLength:1,maxLength:1000}},['source','decision','reason'],async(a,e,k,v)=>this.tasks.decideSource(v.id,a))
@@ -390,6 +399,11 @@ export class TeamHost {
       if(this.coordinator.running.size>=this.coordinator.maxConcurrent)break
       try{this.startIntent(intent,now)}
       catch(error){this.intents.note(intent.id,'blocked','无法启动：'+String(error?.message??'').slice(0,200))}
+    }
+    // Cold branches that no longer support anything active become a summary with
+    // references. Their rows stay; only the subject's attention shrinks.
+    for(const {view_id} of this.db.prepare('SELECT DISTINCT view_id FROM yoyo_team_tasks').all()){
+      try{this.folding.fold(view_id,{now})}catch{/* revoked work stays unfolded */}
     }
     // Retries are opt-in. A task whose last send is uncertain is never retried.
     if(this.config.retryBlocked)for(const row of this.tasks.resumable({now:Date.now()})){
