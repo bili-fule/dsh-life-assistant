@@ -221,6 +221,18 @@ test('a contradiction gets a recorded ruling instead of a silent overwrite',t=>{
   assert.throws(()=>tasks.decideSource(view.id,{source:'https://example.com/a',decision:'refuted',chosenBody:'x',reason:'y'}),/采纳内容/)
 })
 
+test('a branch cannot keep asking forever; the ceiling turns into a report',t=>{
+  const {tasks,view,create}=fixture(t)
+  const asker=create('读群'),sibling=create('查证')
+  tasks.claim(asker.id,'worker-asker');tasks.claim(sibling.id,'worker-sibling')
+  for(let round=1;round<=4;round++)assert.ok(tasks.ask(asker.id,{toTask:sibling.id,question:'第 '+round+' 个问题',viewId:view.id}).eventId)
+  assert.throws(()=>tasks.ask(asker.id,{toTask:sibling.id,question:'第五个问题',viewId:view.id}),/轮次已达上限/)
+  // The sibling may still answer, and the subject may still ask.
+  const open=tasks.openQuestions(view.id)[0]
+  assert.ok(tasks.answer(sibling.id,{questionEventId:open.eventId,answer:'答复',viewId:view.id}).eventId)
+  assert.ok(tasks.ask(null,{toTask:sibling.id,question:'主体的提问不受同一个上限限制',viewId:view.id}).eventId)
+})
+
 test('the admin timeline shows what moved between branches without their text',t=>{
   const {tasks,view,create,social}=fixture(t)
   const host=new TeamHost(social,{})

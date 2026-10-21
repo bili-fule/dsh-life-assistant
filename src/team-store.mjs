@@ -26,6 +26,10 @@ export const ROLE_TOOLS={
 export const EVENT_KINDS=['finding','question','answer','progress','direction_changed','blocked','completed','cancel']
 
 const WORKER_CLAIM_TYPES=['fact','knowledge','preference','procedure','self']
+// How many questions one branch may ask its siblings before it must report back
+// instead. Bounded on purpose: the subject decides whether a stuck branch should
+// continue, and a silent loop of questions is exactly what must not happen.
+export const QA_ROUND_LIMIT=4
 
 // Host-only API. Agent identity, view and lease tokens must never come from
 // model-supplied tool arguments. No production worker is enabled by this store.
@@ -295,7 +299,13 @@ export class TeamStore {
   }
   // Branch-to-branch question and answer, with the correlation kept in `ref` so an
   // answer can be matched to its question without a relay through the subject.
+  // A conversation has a ceiling: endless ping-pong between two branches is a
+  // failure of judgement, not progress, so it becomes an explicit report instead.
   ask(fromTask,{toTask,question,baseRevision=null,expiresAt=null,viewId}) {
+    if(fromTask){
+      const rounds=this.db.prepare("SELECT count(*) n FROM yoyo_team_events WHERE kind='question' AND from_task=?").get(fromTask).n
+      if(rounds>=QA_ROUND_LIMIT)throw Error('提问轮次已达上限（'+QA_ROUND_LIMIT+' 次），请改为 team_report 说明受阻原因，由主体决定')
+    }
     const asked=this.publishEvent({fromTask,toTask,kind:'question',body:question,baseRevision,expiresAt,viewId})
     if(asked.duplicate)return {...asked,question:this.db.prepare('SELECT body FROM yoyo_team_events WHERE event_id=?').get(asked.eventId).body}
     return {...asked,question}
