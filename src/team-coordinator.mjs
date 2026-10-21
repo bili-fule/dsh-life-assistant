@@ -32,6 +32,7 @@ export class TeamCoordinator {
       }
       if(name==='report'){this.tasks.report(agentId,args.body);return {recorded:true}}
       if(name==='evidence')return this.tasks.evidence(agentId,args)
+      if(name==='remember')return this.tasks.memoryCandidate(agentId,args)
       if(name==='board')return {evidence:this.tasks.board(current.view.id,{limit:args?.limit})}
       const authorize=()=>{
         if(controller.signal.aborted)throw Error('执行已取消')

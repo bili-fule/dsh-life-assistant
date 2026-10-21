@@ -8,14 +8,15 @@ import { readPublicPage } from './public-web.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { localParts } from './time.mjs'
 
-export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_inspect','team_cancel','team_takeover','team_review','team_steer','team_search']
-export const TEAM_POLICY=`你可以用 team_deliberate 查看关切和团队进展，用 team_delegate 分派聊天或公开研究，自己继续其他活动或一起研究。分派前创建真实的 yoyo_concern，说明为何关心、下一步、完成和停止条件。聊天执行者会在当前窗口直接交流；主 Agent 需要发言前用 team_takeover 接管。研究只能从 public 视图分派，不能把私聊问题洗成公开输入。执行中可用 team_steer 追加一条有界提示，它在执行者下一个原生边界送达一次。执行者可以把自己真正读到的证据放到任务证据板，证据沿用任务来源范围，team_inspect 可查看，team_search 可按线索跨任务检索本窗口可见的证据；重复的同一条来源只算一条，同一来源的不同说法会被标出冲突。执行结果是证据材料，不等于动机已满足。用 team_review 判断继续、调整、等待或放弃。无事可做允许休息，不高频轮询、不制造任务。`
+export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_inspect','team_cancel','team_takeover','team_review','team_steer','team_search','team_memory']
+export const TEAM_POLICY=`你可以用 team_deliberate 查看关切和团队进展，用 team_delegate 分派聊天或公开研究，自己继续其他活动或一起研究。分派前创建真实的 yoyo_concern，说明为何关心、下一步、完成和停止条件。聊天执行者会在当前窗口直接交流；主 Agent 需要发言前用 team_takeover 接管。研究只能从 public 视图分派，不能把私聊问题洗成公开输入。执行中可用 team_steer 追加一条有界提示，它在执行者下一个原生边界送达一次。执行者可以把自己真正读到的证据放到任务证据板，证据沿用任务来源范围，team_inspect 可查看，team_search 可按线索跨任务检索本窗口可见的证据；重复的同一条来源只算一条，同一来源的不同说法会被标出冲突。执行者也能提交记忆候选（team_remember），候选不是记忆：team_memory 列出待决定的候选，采纳时在你自己的视图里重新核对原文，并且只记成执行者报告，不会变成观察。执行结果是证据材料，不等于动机已满足。用 team_review 判断继续、调整、等待或放弃。无事可做允许休息，不高频轮询、不制造任务。`
 
 export class TeamHost {
   constructor(social,config) {
     if(!social.separate)throw Error('团队仅用于独立 QQ 主体')
     this.config=config
     this.social=social;this.tasks=new TeamStore(social.data);this.motivation=new TeamMotivation(this.tasks,social.motivation??null)
+    this.memory=social.memoryLayer??null
     this.db=social.data.db
     this.db.exec(`CREATE TABLE IF NOT EXISTS yoyo_team_deliveries(
       key TEXT PRIMARY KEY, task_id TEXT NOT NULL, body TEXT NOT NULL,state TEXT NOT NULL,remote_id TEXT);
@@ -79,6 +80,27 @@ export class TeamHost {
     define('team_takeover','接管当前窗口的发言权，使旧执行者后续发送失效。',{},[],async(a,e,k,v)=>({generation:this.tasks.takeover(v.id,this.social.sessionId,Date.now()+900000)}))
     define('team_review','依据报告复查动机；不会自动重启任务或认定关切已完成。',{taskId:{type:'string'},decision:{type:'string',enum:['continue','revise','wait','done','abandon']},reason:{type:'string',maxLength:2000},reportId:{type:'integer'}},['taskId','decision','reason'],async(a,e,k,v)=>this.motivation.review(v.id,a))
     define('team_search','按线索在当前资料范围内检索所有任务证据板里真正读到过的材料，返回任务编号、类型、来源与摘录。只能看到本窗口可见范围，摘录不代表结论已被验证。',{query:{type:'string',minLength:1,maxLength:300},kind:{type:'string',enum:['finding','source','excerpt']},limit:{type:'integer',minimum:1,maximum:20}},['query'],async(a,e,k,v)=>({results:this.tasks.searchEvidence(v.id,{query:a.query,kind:a.kind,limit:a.limit??10})}))
+    define('team_memory','查看执行者提交的记忆候选，并决定采纳或不采纳。候选不是记忆：无参数时列出待决定的候选；采纳时由记忆层在你自己的视图里重新核对原文，并且只记成执行者报告，不会变成观察。',{id:{type:'integer',minimum:1},decision:{type:'string',enum:['accept','reject']},reason:{type:'string',maxLength:500},state:{type:'string',enum:['pending','accepted','rejected']},limit:{type:'integer',minimum:1,maximum:50}},[],async(a,e,k,v)=>{
+      if(a.id===undefined)return {candidates:this.tasks.memoryCandidates(v.id,{state:a.state??'pending',limit:a.limit??20})}
+      const candidate=this.tasks.candidate(v.id,a.id)
+      if(a.decision===undefined)return {candidate}
+      if(a.decision==='reject')return {candidate:a.id,...this.tasks.decideMemory(v.id,{id:a.id,decision:'reject',reason:a.reason})}
+      if(!this.memory)throw Error('记忆层未启用，无法采纳记忆候选')
+      const created=this.memory.propose(v.id,this.candidateProposal(candidate))
+      return {candidate:a.id,memory:created,...this.tasks.decideMemory(v.id,{id:a.id,decision:'accept',claimId:created.id})}
+    })
+  }
+  // A worker's own wording never proves itself: on acceptance the memory is
+  // rebuilt in the subject's view from the cited originals, and the confidence
+  // class is fixed at worker_report so a hand-over can never become an
+  // observation just because it was accepted.
+  candidateProposal(candidate) {
+    const evidence={...candidate.evidence}
+    const note='执行者候选（任务 '+candidate.taskId+'）'
+    if(candidate.kind==='episode')
+      return {kind:'episode',title:candidate.statement,role:'worker_report',what:candidate.context||candidate.statement,note,evidence}
+    return {kind:'claim',claimType:candidate.claimType??'fact',statement:candidate.statement,
+      context:candidate.context,confidence:'worker_report',note,evidence}
   }
   async send({args,view,agentId,taskId,authorize,signal}) {
     const settings=this.social.store.get('yoyo_settings',{})

@@ -4,11 +4,13 @@ import { boundedText, assertPublish, mayRead, sourceScopes } from './scope.mjs'
 // Each role is a fixed set of host methods. A task may narrow its role, never
 // widen it; the model cannot name a tool outside its role.
 export const ROLE_TOOLS={
-  chat:['read','wait','recall','send','report','evidence','board','usage','step'],
-  research:['web','report','evidence','board','usage','step'],
-  reader:['read','recall','report','evidence','board','usage','step'],
+  chat:['read','wait','recall','send','report','evidence','board','remember','usage','step'],
+  research:['web','report','evidence','board','remember','usage','step'],
+  reader:['read','recall','report','evidence','board','remember','usage','step'],
   verify:['board','recall','report','evidence','usage','step'],
 }
+
+const WORKER_CLAIM_TYPES=['fact','knowledge','preference','procedure','self']
 
 // Host-only API. Agent identity, view and lease tokens must never come from
 // model-supplied tool arguments. No production worker is enabled by this store.
@@ -36,6 +38,10 @@ export class TeamStore {
       CREATE TABLE IF NOT EXISTS yoyo_team_usage(
         task_id TEXT NOT NULL, attempt INTEGER NOT NULL, steps INTEGER NOT NULL DEFAULT 0,
         tokens INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(task_id,attempt));
+      CREATE TABLE IF NOT EXISTS yoyo_team_memory_candidates(
+        id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, attempt INTEGER NOT NULL, scopes TEXT NOT NULL,
+        kind TEXT NOT NULL, claim_type TEXT, statement TEXT NOT NULL, body TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending', claim_id INTEGER, decided_at INTEGER, created_at INTEGER NOT NULL);
     `)
     const columns=this.db.prepare('PRAGMA table_info(yoyo_team_tasks)').all().map(column=>column.name)
     for(const [name,type] of [['failures','INTEGER NOT NULL DEFAULT 0'],['retry_at','INTEGER'],['renewed_at','INTEGER'],
@@ -213,6 +219,81 @@ export class TeamStore {
       const score=wanted.filter(term=>text.includes(term)).length
       return {id:row.id,taskId:row.task_id,kind:row.kind,source:row.source,body:row.body.slice(0,400),createdAt:row.created_at,score}
     }).filter(row=>row.score>0).sort((left,right)=>right.score-left.score||right.id-left.id).slice(0,limit)
+  }
+  // ---- memory candidates -------------------------------------------------
+  // A worker may hand over what it thinks is worth remembering. This is a
+  // candidate, never a memory: it stays pending until the subject, back in its
+  // own view, re-checks the originals and decides. A worker's window can
+  // establish what was said, not who someone really is, so identity claims and
+  // expression habits are refused outright.
+  memoryCandidate(agentId,{kind='claim',statement,claimType,context='',evidence={}}) {
+    const {task,view}=this.authority(agentId)
+    if(!['episode','claim'].includes(kind))throw Error('候选类型无效')
+    const text=boundedText(statement,1200,'候选记忆')
+    if(kind==='claim'&&!WORKER_CLAIM_TYPES.includes(claimType))
+      throw Error('执行者不能提交关于某人身份或表达习惯的候选；这类记忆需要同一真实身份的原文')
+    const note=context===undefined||context===null||context===''?'':boundedText(String(context),300,'补充')
+    const sources={messages:[],receipts:[],documents:[]}
+    for(const key of ['messages','receipts','documents']){
+      const list=evidence?.[key]
+      if(list===undefined||list===null)continue
+      if(!Array.isArray(list)||list.length>10)throw Error('候选来源无效')
+      sources[key]=list.map(item=>{
+        if(key==='receipts'){
+          if(typeof item!=='string'||!item)throw Error('回执编号无效')
+          return boundedText(item,500,'回执编号')
+        }
+        const id=Number(item)
+        if(!Number.isSafeInteger(id)||id<1)throw Error('来源编号无效')
+        return id
+      })
+    }
+    if(!sources.messages.length&&!sources.receipts.length&&!sources.documents.length)
+      throw Error('候选记忆需要说明依据：真实消息编号、工具回执或网页编号')
+    const body={context:note,claimType:claimType??null,evidence:sources}
+    const stored=JSON.stringify(body)
+    const duplicate=this.db.prepare("SELECT id FROM yoyo_team_memory_candidates WHERE task_id=? AND kind=? AND statement=? AND body=? AND state='pending'")
+      .get(task.id,kind,text,stored)
+    if(duplicate)return {id:duplicate.id,state:'pending',duplicate:true,message:'同样的候选已经排队，等主体回到这个范围再决定，不用重复提交。'}
+    const id=Number(this.db.prepare('INSERT INTO yoyo_team_memory_candidates(task_id,attempt,scopes,kind,claim_type,statement,body,state,created_at) VALUES(?,?,?,?,?,?,?,?,?)')
+      .run(task.id,task.attempt,JSON.stringify(sourceScopes(view.scopes)),kind,claimType??null,text,stored,'pending',this.clock()).lastInsertRowid)
+    return {id,kind,state:'pending',message:'候选已排队。它不是记忆：主体回到这个范围核对原文之后才会决定是否采纳。'}
+  }
+  memoryCandidates(viewId,{state='pending',limit=20}={}) {
+    const view=this.social.view(viewId)
+    if(!['pending','accepted','rejected'].includes(state))throw Error('候选状态无效')
+    if(!Number.isInteger(limit)||limit<1||limit>50)throw Error('候选条数无效')
+    const filter="NOT EXISTS(SELECT 1 FROM json_each(c.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?)))"
+    return this.db.prepare(`SELECT c.* FROM yoyo_team_memory_candidates c WHERE ${filter} AND c.state=? ORDER BY c.id DESC LIMIT ?`)
+      .all(JSON.stringify(view.scopes),state,limit).map(row=>this.candidateShape(row))
+  }
+  candidateShape(row) {
+    const body=JSON.parse(row.body)
+    return {id:row.id,taskId:row.task_id,kind:row.kind,claimType:row.claim_type,statement:row.statement,
+      context:body.context??'',evidence:body.evidence??{messages:[],receipts:[],documents:[]},
+      decision:body.decision??null,state:row.state,claimId:row.claim_id??null,createdAt:row.created_at}
+  }
+  candidate(viewId,id) {
+    const view=this.social.view(viewId)
+    const row=this.db.prepare('SELECT * FROM yoyo_team_memory_candidates WHERE id=?').get(id)
+    if(!row||!JSON.parse(row.scopes).every(scope=>mayRead(view,scope)))throw Error('候选记忆不在当前资料范围')
+    return this.candidateShape(row)
+  }
+  decideMemory(viewId,{id,decision,reason,claimId=null}) {
+    const view=this.social.view(viewId)
+    if(!['accept','reject'].includes(decision))throw Error('处理结果无效')
+    const row=this.db.prepare('SELECT * FROM yoyo_team_memory_candidates WHERE id=?').get(id)
+    if(!row||!JSON.parse(row.scopes).every(scope=>mayRead(view,scope)))throw Error('候选记忆不在当前资料范围')
+    if(row.state!=='pending')throw Error('这条候选已经处理过')
+    const body={...JSON.parse(row.body)}
+    if(decision==='reject'){
+      if(reason===undefined||reason===null||reason==='')throw Error('不采纳需要说明理由')
+      body.decision=boundedText(reason,500,'理由')
+    }else body.decision=null
+    const state=decision==='accept'?'accepted':'rejected'
+    this.db.prepare('UPDATE yoyo_team_memory_candidates SET state=?,claim_id=?,body=?,decided_at=? WHERE id=?')
+      .run(state,decision==='accept'?claimId??null:null,JSON.stringify(body),this.clock(),id)
+    return {id,state,claimId:decision==='accept'?claimId??null:null,reason:body.decision??null}
   }
   // A steering note belongs to one task and is consumed once at a native step
   // boundary; a cancelled or finished task cannot receive another.

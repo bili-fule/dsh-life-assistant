@@ -262,6 +262,13 @@ export class MemoryLayer {
     const context=optionalText(args.context,300,'适用情境')
     const revising=args.claim!==undefined
     const previous=revising?this.load(view,'claim',args.claim):null
+    // Two writers can revise the same claim. An explicit version makes the stale
+    // one fail loudly instead of quietly overwriting a newer reading.
+    if(args.expectedVersion!==undefined){
+      if(!revising)throw Error('expectedVersion 只用于修订已有记忆')
+      if(!Number.isSafeInteger(args.expectedVersion)||args.expectedVersion<1)throw Error('版本编号无效')
+      if(previous.version!==args.expectedVersion)throw Error('这条记忆已被改动过（当前版本 '+previous.version+'），请重新核对后再修订')
+    }
     const person=PERSON_KINDS.includes(claimType)&&args.person?this.person(view,args.person.messages??[]):null
     if(person&&person.messages>1&&confidence==='told'&&claimType==='communication')confidence='observed'
     if(claimType==='simulation'&&confidence==='observed')throw Error('模拟的对话或未来不能记成已经发生的事实')
@@ -713,7 +720,7 @@ export class MemoryLayer {
         source:{type:'object',additionalProperties:false,properties:{type:{type:'string',enum:['message','receipt','document']},
           id:{type:['integer','string']},offset:{type:'integer',minimum:0},characters:{type:'integer',minimum:1,maximum:24000}}}},
       ['kind','id'],async(args,exec,key,view)=>this.inspect(view.id,args))
-    define('memory_propose','提交带来源的经历或主张，或修订已有主张。经历记录场景、真实参与者、角色、结果与未解决事项；主张记录类型、适用情境、置信类型、支持与反例。转发和引文不能当本人身份；同一来源不重复计数。',
+    define('memory_propose','提交带来源的经历或主张，或修订已有主张。经历记录场景、真实参与者、角色、结果与未解决事项；主张记录类型、适用情境、置信类型、支持与反例。转发和引文不能当本人身份；同一来源不重复计数。修订已有主张时若带上 expectedVersion，版本不符会直接拒绝，避免覆盖刚刚被改过的内容。',
       {kind:{type:'string',enum:['episode','claim']},
         title:{type:'string',maxLength:200},role:{type:'string',enum:ROLES},scene:{type:'string',maxLength:500},
         what:{type:'string',maxLength:2000},turningPoint:{type:'string',maxLength:1000},outcome:{type:'string',maxLength:1000},
@@ -723,7 +730,7 @@ export class MemoryLayer {
         claimType:{type:'string',enum:CLAIM_KINDS},statement:{type:'string',maxLength:1200},context:{type:'string',maxLength:300},
         dimension:{type:'string',enum:IMPRESSION_DIMENSIONS},
         subject:{type:'string',maxLength:200},person:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}}}},
-        confidence:{type:'string',enum:CONFIDENCE},episode:{type:'integer',minimum:1},claim:{type:'integer',minimum:1},
+        confidence:{type:'string',enum:CONFIDENCE},episode:{type:'integer',minimum:1},claim:{type:'integer',minimum:1},expectedVersion:{type:'integer',minimum:1},
         evidence:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}},receipts:{type:'array',maxItems:10,items:{type:'string',maxLength:500}},documents:{type:'array',maxItems:10,items:{type:'integer',minimum:1}},range:{type:'object',additionalProperties:false,properties:{from:{type:'integer',minimum:1},to:{type:'integer',minimum:1}}}}},
         counter:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}},receipts:{type:'array',maxItems:10,items:{type:'string',maxLength:500}},documents:{type:'array',maxItems:10,items:{type:'integer',minimum:1}}}}},
       ['kind'],async(args,exec,key,view)=>this.propose(view.id,args))

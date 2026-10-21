@@ -59,6 +59,16 @@ test('repetition never becomes a new source and cannot promote an inference',t=>
   // Reading the same record many times changes nothing.
   for(const _ of [1,2,3,4,5])memory.recall(view.id,{query:'语音'})
   assert.equal(memory.inspect(view.id,{kind:'claim',id:created.id}).body.support.length,2)
+  // Two writers editing the same claim: a stale version is refused, not merged.
+  const third=say(a.handle,'123','r3','我一般晚上才听语音')
+  assert.equal(memory.inspect(view.id,{kind:'claim',id:created.id}).version,2)
+  assert.throws(()=>memory.propose(view.id,{kind:'claim',claim:created.id,expectedVersion:1,claimType:'preference',
+    statement:'他只在工作场合不方便听语音',person:{messages:[first,second]},evidence:{messages:[third]},confidence:'observed'}),/已被改动过/)
+  const current=memory.inspect(view.id,{kind:'claim',id:created.id}).version
+  const applied=memory.propose(view.id,{kind:'claim',claim:created.id,expectedVersion:current,claimType:'preference',
+    statement:'他在工作场合和白天都不方便听语音',person:{messages:[first,second]},evidence:{messages:[third]},confidence:'observed'})
+  assert.equal(applied.version,current+1)
+  assert.throws(()=>memory.propose(view.id,{kind:'claim',expectedVersion:1,claimType:'preference',statement:'无对象',evidence:{messages:[first]}}),/只用于修订/)
 })
 
 test('private memory stays out of other windows and the public view',t=>{

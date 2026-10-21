@@ -7,6 +7,7 @@ import { Store } from '../src/store.mjs'
 import { SocialStore } from '../src/social-store.mjs'
 import { TeamHost } from '../src/team-host.mjs'
 import { TeamStore } from '../src/team-store.mjs'
+import { MemoryLayer } from '../src/memory-layer.mjs'
 
 function fixture(t,config={}){
   const root=mkdtempSync(join(tmpdir(),'team-host-')),store=new Store(join(root,'test.sqlite')),data=new SocialStore(store)
@@ -164,4 +165,27 @@ test('the cross-task evidence search tool answers inside the window only',async 
   assert.match(found.results[0].body,/长镜头/)
   // Nothing is returned for a clue that no evidence mentions.
   assert.deepEqual((await tools.team_search.execute({query:'不存在的词'},{},null,view)).results,[])
+})
+test('an accepted memory candidate becomes a worker report, never an observation',async t=>{
+  const {host,view,task,data}=fixture(t),tools={}
+  host.memory=new MemoryLayer(data)
+  host.register((name,description,properties,required,execute)=>{tools[name]={description,execute}})
+  const message=data.ingest({target:view.focus,sender:'2',externalId:'m1',text:'我平时更喜欢发语音'}).id
+  host.tasks.claim(task.id,'worker')
+  host.tasks.memoryCandidate('worker',{kind:'claim',claimType:'preference',statement:'对方更习惯发语音',
+    context:'聊到沟通方式',evidence:{messages:[message]}})
+  const listed=await tools.team_memory.execute({},{},null,view)
+  assert.equal(listed.candidates.length,1)
+  assert.equal(listed.candidates[0].taskId,task.id)
+  const accepted=await tools.team_memory.execute({id:listed.candidates[0].id,decision:'accept'},{},null,view)
+  assert.equal(accepted.state,'accepted')
+  const stored=data.db.prepare('SELECT confidence,kind FROM yoyo_memory_claims WHERE id=?').get(accepted.memory.id)
+  assert.equal(stored.confidence,'worker_report','a hand-over never becomes an observation')
+  assert.equal(stored.kind,'preference')
+  // A rejected candidate leaves no episode behind and keeps the stated reason.
+  host.tasks.memoryCandidate('worker',{kind:'episode',statement:'聊过一次语音习惯',context:'他在地铁上不方便听语音',evidence:{messages:[message]}})
+  const pending=(await tools.team_memory.execute({},{},null,view)).candidates[0]
+  const rejected=await tools.team_memory.execute({id:pending.id,decision:'reject',reason:'同一条原文已经用过'},{},null,view)
+  assert.equal(rejected.state,'rejected')
+  assert.equal(data.db.prepare('SELECT count(*) n FROM yoyo_memory_episodes').get().n,0)
 })

@@ -172,6 +172,37 @@ test('evidence is one row per real source and cross-task search stays inside the
   assert.throws(()=>team.searchEvidence(a.id,{query:'长镜头',kind:'rumour'}),/类型/)
 })
 
+test('a worker memory candidate is only a candidate until the subject decides',t=>{
+  const {team,a,b,create}=fixture(t),x=create('x')
+  team.claim(x.id,'worker-x')
+  const submitted=team.memoryCandidate('worker-x',{kind:'claim',claimType:'preference',statement:'对方更喜欢语音而不是打字',
+    context:'聊到沟通方式',evidence:{messages:[1,2]}})
+  assert.equal(submitted.state,'pending')
+  // The same candidate is not queued twice.
+  assert.equal(team.memoryCandidate('worker-x',{kind:'claim',claimType:'preference',statement:'对方更喜欢语音而不是打字',
+    context:'聊到沟通方式',evidence:{messages:[1,2]}}).duplicate,true)
+  assert.equal(team.memoryCandidates(a.id).length,1)
+  assert.deepEqual(team.memoryCandidates(b.id),[],'another window sees no candidates')
+  // A worker cannot hand over identity or habit claims, and needs real sources.
+  assert.throws(()=>team.memoryCandidate('worker-x',{kind:'claim',claimType:'impression',statement:'他很内向',evidence:{messages:[1]}}),/身份/)
+  assert.throws(()=>team.memoryCandidate('worker-x',{kind:'claim',claimType:'fact',statement:'没有依据'}),/依据/)
+  assert.throws(()=>team.memoryCandidate('nobody',{kind:'claim',claimType:'fact',statement:'x',evidence:{messages:[1]}}),/授权/)
+  const candidate=team.memoryCandidates(a.id)[0]
+  // Accepting is the subject's decision, and it happens at most once.
+  assert.equal(team.decideMemory(a.id,{id:candidate.id,decision:'accept',claimId:77}).state,'accepted')
+  assert.throws(()=>team.decideMemory(a.id,{id:candidate.id,decision:'reject',reason:'晚了'}),/处理过/)
+  assert.deepEqual(team.memoryCandidates(a.id),[])
+  assert.equal(team.memoryCandidates(a.id,{state:'accepted'})[0].claimId,77)
+  const second=team.memoryCandidate('worker-x',{kind:'episode',statement:'聊过一次沟通方式',context:'他在地铁上不方便听语音',
+    evidence:{messages:[3]}})
+  assert.throws(()=>team.decideMemory(a.id,{id:second.id,decision:'reject'}),/理由/)
+  const rejected=team.decideMemory(a.id,{id:second.id,decision:'reject',reason:'这段没有真实新增内容'})
+  assert.equal(rejected.state,'rejected')
+  assert.match(rejected.reason,/没有真实新增内容/)
+  assert.equal(team.memoryCandidates(a.id,{state:'rejected'})[0].statement,'聊过一次沟通方式')
+  assert.throws(()=>team.candidate(b.id,second.id),/范围/)
+})
+
 test('task budgets are counted per attempt in the database, not in memory',t=>{
   const {team,a,create}=fixture(t),x=create('x')
   team.claim(x.id,'worker-x')
