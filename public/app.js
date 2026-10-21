@@ -41,13 +41,32 @@ function renderTools(){const files=$('#workspace-files'),runs=$('#tool-list');fi
 $('#uploads').onchange=async()=>{const files=[...$('#uploads').files];if(files.length>8){toast('一次最多上传 8 个文件');return}for(const f of files){if(f.size>32*1024*1024){toast(f.name+' 超过 32MiB，未上传');continue}try{toast('正在上传 '+f.name);const data=await new Promise((yes,no)=>{const reader=new FileReader();reader.onload=()=>yes(String(reader.result).split(',')[1]);reader.onerror=no;reader.readAsDataURL(f)});await api('/api/upload',{name:f.name,data});toast(f.name+' 已保存，正在读取。')}catch(e){toast(e.message)}}$('#uploads').value='';refresh()}
 
 const teamLabels={ready:'等待调度',running:'执行中',waiting:'等待对方回复',blocked:'已阻塞',completed:'已完成',cancelled:'已取消',failed:'失败'}
+// Reading one task's own material is a separate, deliberate act: it is asked for
+// per task, confirmed in the browser, and a revoked window stays unreadable.
+async function showTaskDetail(task,card){
+ const confirmed=window.confirm('这会显示该任务的目的、报告与证据（属于那个窗口的资料范围）。继续？')
+ if(!confirmed)return
+ try{
+  const detail=await api('/api/yoyo/team-detail',{id:task.id,confirm:true})
+  const panel=el('div',null,'text-block'),lines=['目的：'+(detail.goal||''),
+   detail.window?'窗口：'+(detail.window.label||'未命名')+' · '+detail.window.platform+' / '+detail.window.kind:'窗口：无（公开资料）']
+  for(const entry of detail.reports||[])lines.push('报告 #'+entry.id+'：'+entry.body)
+  for(const entry of detail.evidence||[])lines.push('证据 '+(entry.source||('#'+entry.id))+'：'+entry.body)
+  if(detail.memoryPack)lines.push('记忆包：'+(detail.memoryPack.clue||'')+'（'+((detail.memoryPack.items||[]).length)+' 条摘要）')
+  panel.textContent=lines.join('\n')
+  const wrapper=el('details'),summary=el('summary','任务资料（只显示这一次）')
+  wrapper.append(summary,panel)
+  wrapper.open=true
+  card.append(wrapper)
+ }catch(e){toast(e.message)}
+}
 // The operations panel only shows what the host already exposes outside any
 // scope: who is running, why it waits, and what it spent. Task goals and report
-// text stay inside that task's own material scope, never on this page.
+// text only appear after the owner asks for that one task, confirmed in browser.
 function renderTeam(team){
  const root=$('#yoyo-team');root.replaceChildren()
  if(!team)return empty(root,'团队编排未启用；启用后这里只显示执行者、发言租约、等待原因与用量。')
- root.append(el('div','在跑 '+team.concurrency.running+' / '+team.concurrency.max+' 个执行者 · 任务目的与报告正文不在本页展示，需要时回到该任务的资料范围查看','card text-block'))
+ root.append(el('div','在跑 '+team.concurrency.running+' / '+team.concurrency.max+' 个执行者 · 任务目的与报告正文默认不展示，需要时逐个任务确认后查看','card text-block'))
  if(!team.tasks.length)return empty(root,'还没有分派过任务。')
  for(const t of team.tasks){
   const state=teamLabels[t.state]||t.state
@@ -60,6 +79,7 @@ function renderTeam(team){
   if(['ready','running','waiting'].includes(t.state))buttons.append(button('追加提示',()=>{const message=window.prompt('给这个任务追加一条提示');if(!message)return Promise.resolve();return action('/api/yoyo/team',{id:t.id,action:'steer',message},'提示已排队，在执行者下一个边界送达')}))
   if(t.role==='chat'&&!['completed','cancelled'].includes(t.state))buttons.append(button('接管发言',()=>action('/api/yoyo/team',{id:t.id,action:'takeover'},'已接管这个窗口的发言权')))
   if(!['completed','cancelled'].includes(t.state))buttons.append(button('取消任务',()=>action('/api/yoyo/team',{id:t.id,action:'cancel'},'任务已取消'),'danger'))
+  buttons.append(button('查看资料',()=>showTaskDetail(t,card)))
   card.append(el('div',facts.join('\n'),'text-block'))
   if(buttons.children.length)card.append(buttons)
   root.append(card)

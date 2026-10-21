@@ -135,6 +135,26 @@ test('the owner console can cancel, take over or steer without borrowing another
   assert.equal(host.act({id:second.id,action:'cancel'}).cancelled,true)
   assert.equal(host.tasks.inspect(second.id,foreign.id).state,'cancelled')
 })
+test('task material is readable one task at a time, only with confirmation and a live window',t=>{
+  const {host,view,task,data}=fixture(t)
+  host.tasks.claim(task.id,'worker')
+  host.tasks.report('worker','检查了评论区的两条说法')
+  host.tasks.evidence('worker',{kind:'source',source:'https://example.com/a',body:'文章说长镜头在结尾'})
+  assert.throws(()=>host.detail({id:task.id}),/确认/)
+  assert.throws(()=>host.detail({id:task.id,confirm:false}),/确认/)
+  const detail=host.detail({id:task.id,confirm:true})
+  assert.equal(detail.goal,'chat')
+  assert.equal(detail.reports.length,1)
+  assert.match(detail.reports[0].body,/评论区/)
+  assert.equal(detail.evidence.length,1)
+  assert.equal(detail.window.kind,'private')
+  assert.equal(detail.window.peer,'2')
+  assert.equal(detail.usage.steps>=0,true)
+  // Revocation closes the window immediately: the same request now fails.
+  data.approve(view.focus,false)
+  assert.throws(()=>host.detail({id:task.id,confirm:true}),/授权|范围/)
+  assert.throws(()=>host.detail({id:'no-such-task',confirm:true}),/不存在/)
+})
 test('the admin page renders the team panel from the operational status only',t=>{
   const page=readFileSync(new URL('../public/index.html',import.meta.url),'utf8')
   const script=readFileSync(new URL('../public/app.js',import.meta.url),'utf8')
@@ -143,12 +163,16 @@ test('the admin page renders the team panel from the operational status only',t=
   assert.match(script,/renderTeam\(y\.team\)/,'the panel is fed from the operational status')
   // The panel states the privacy boundary instead of quietly showing everything.
   assert.match(page,/任务目的与报告正文留在各自的资料范围/)
-  assert.match(script,/任务目的与报告正文不在本页展示/)
+  assert.match(script,/任务目的与报告正文默认不展示/)
   assert.match(script,/Token 未上报/,'an unreported token count is not rendered as zero')
   // The panel offers the three owner actions through one admin endpoint.
   for(const action of ['steer','takeover','cancel'])assert.match(script,new RegExp("action:'"+action+"'"))
   assert.match(script,/\/api\/yoyo\/team/)
-  assert.equal(/goal|PRIVATE|报告正文.*innerHTML/.test(script.split('function renderTeam')[1].split('function renderYoyo')[0].replace(/任务目的与报告正文不在本页展示/,'')),false,'the panel never renders task text')
+  // Task material is read one task at a time, after an explicit confirmation.
+  assert.match(script,/function showTaskDetail\(task,card\)/)
+  assert.match(script,/\/api\/yoyo\/team-detail/)
+  assert.match(script,/window\.confirm\('这会显示该任务的目的、报告与证据/)
+  assert.equal(/goal|PRIVATE|报告正文.*innerHTML/.test(script.split('function renderTeam')[1].split('function renderYoyo')[0].replace(/任务目的与报告正文默认不展示/,'')),false,'the panel never renders task text on its own')
 })
 test('cancellation stops steering and a foreign window cannot steer or read the board',t=>{
   const {host,view,task,data}=fixture(t),other=data.discover({platform:'qq',account:'1',kind:'private',peer:'9'})

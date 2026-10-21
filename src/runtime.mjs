@@ -157,6 +157,13 @@ export class Runtime {
     if(url.pathname==='/api/yoyo/qq-check') {if(!this.autonomy.qq)throw Error('QQ 未配置');return json(res,await this.autonomy.qq.health(this.abort.signal))}
     if(url.pathname==='/api/yoyo/memory-retry')return json(res,this.autonomy.memoryMaintenance.retry(data.id))
     if(url.pathname==='/api/yoyo/forget')return json(res,{forgotten:this.autonomy.data.forget(data.id)})
+    if(url.pathname==='/api/yoyo/team-detail') {
+      const team=this.autonomy.team
+      if(!team)throw Error('团队编排未启用')
+      if(typeof data.id!=='string'||!data.id.trim()||data.id.length>80)throw Error('任务编号无效')
+      // The page has to ask for one task's material on purpose; there is no list view.
+      return json(res,team.detail({id:data.id.trim(),confirm:data.confirm===true}))
+    }
     if(url.pathname==='/api/yoyo/team') {
       const team=this.autonomy.team
       if(!team)throw Error('团队编排未启用')

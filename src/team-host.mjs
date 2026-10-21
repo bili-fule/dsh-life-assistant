@@ -118,6 +118,24 @@ export class TeamHost {
     const steered=this.tasks.steer(row.view_id,{taskId:row.id,message})
     return {id:row.id,action,...steered}
   }
+  // Reading a task's own material is a separate, deliberate act: it needs the
+  // caller to confirm, it never aggregates several windows into one answer, and a
+  // revoked or expired window stays unreadable even for the owner console.
+  detail({id,confirm}) {
+    if(confirm!==true)throw Error('需要确认查看该任务的资料范围')
+    const row=this.db.prepare('SELECT * FROM yoyo_team_tasks WHERE id=?').get(id)
+    if(!row)throw Error('任务不存在')
+    // Live check: revocation invalidates the window immediately, not eventually.
+    const view=this.social.data.view(row.view_id)
+    const target=view.focus?this.social.data.target(view.focus,{approved:true}):null
+    return {id:row.id,role:row.role,state:row.state,goal:row.goal,
+      window:target?{label:target.label,platform:target.platform,kind:target.kind,peer:target.peer}:null,
+      reports:this.db.prepare('SELECT id,body,created_at FROM yoyo_team_reports WHERE task_id=? ORDER BY id DESC LIMIT 20').all(row.id)
+        .map(entry=>({id:entry.id,body:entry.body,createdAt:entry.created_at})),
+      evidence:this.tasks.board(view.id,{taskId:row.id,limit:20}),
+      memoryPack:this.tasks.memoryPack(row.id,view.id),
+      usage:this.tasks.usage(row.id)}
+  }
   // The subject decides what a task may start with: a few scoped summaries, not
   // a memory dump and never the originals. A pack that cannot be built is
   // reported instead of silently pretending the task was briefed.
