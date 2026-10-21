@@ -75,7 +75,13 @@ export class TeamHost {
         }while(Date.now()<end)
         return {available:false,after:args.after}
       },
-      web:async({args,signal})=>readPublicPage(args.url,{signal}),
+      web:async({args,signal,agentId})=>{
+        const page=await readPublicPage(args.url,{signal})
+        // A browsing receipt: this branch really fetched this page, so a later
+        // finding that cites the URL can be checked instead of believed.
+        try{const {task}=this.tasks.authority(agentId);this.tasks.recordFetch(task.id,page.url)}catch{/* lease gone */}
+        return page
+      },
       // Engineering work runs in the same isolated, networkless runner as the main
       // agent's yoyo_execute. The worker can start a bounded job and read its
       // status; it never gets a shell, host files or the debug container.
@@ -107,14 +113,22 @@ export class TeamHost {
       // a branch its own window.
       const hostTool=this.coordinator.tools[name]
       this.coordinator.tools[name]=async context=>{
-        if(!social.peerTools?.has(tool)){
-          if(hostTool&&['read','recall'].includes(name))return hostTool(context)
-          throw Error('该工具对执行者未启用')
-        }
         const {args,view,agentId,signal,key}=context
-        const {task}=this.tasks.authority(agentId)
-        const receipt=key??'team-'+createHash('sha256').update(task.id+':'+tool+':'+JSON.stringify(args??null)).digest('hex').slice(0,24)
-        return social.peerTools.get(tool)(args,{agent:{id:social.sessionId},signal,callId:receipt},receipt,view)
+        let value
+        if(!social.peerTools?.has(tool)){
+          if(!hostTool||!['read','recall'].includes(name))throw Error('该工具对执行者未启用')
+          value=await hostTool(context)
+        }else{
+          const {task}=this.tasks.authority(agentId)
+          const receipt=key??'team-'+createHash('sha256').update(task.id+':'+tool+':'+JSON.stringify(args??null)).digest('hex').slice(0,24)
+          value=await social.peerTools.get(tool)(args,{agent:{id:social.sessionId},signal,callId:receipt},receipt,view)
+        }
+        // Reading is recorded so a later finding can be checked against what the
+        // branch really saw, instead of trusting the source label it wrote.
+        if(name==='read'&&Array.isArray(value?.messages)){
+          try{const {task}=this.tasks.authority(agentId);this.tasks.recordRead(task.id,value.messages.map(message=>message.id))}catch{/* lease gone: nothing to attribute */}
+        }
+        return value
       }
     }
   }

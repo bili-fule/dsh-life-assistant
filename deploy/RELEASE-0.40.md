@@ -18,8 +18,8 @@
 
 启动即自动执行，无需手工脚本；旧库打开只加东西：
 
-- 新增表：`yoyo_takeovers`、`yoyo_intents`、`yoyo_intent_attempts`、`yoyo_graph_nodes`、`yoyo_graph_edges`、`yoyo_folded_branches`、`yoyo_metric_counters`、`yoyo_metric_timings`、`yoyo_metric_samples`。
-- 新增列：`yoyo_team_tasks.chat_through`（聊天续接游标，旧任务默认 0）、`yoyo_team_tasks.wake_count`、`yoyo_team_tasks.paused_reason`。
+- 新增表：`yoyo_takeovers`、`yoyo_intents`、`yoyo_intent_attempts`、`yoyo_graph_nodes`、`yoyo_graph_edges`、`yoyo_folded_branches`、`yoyo_metric_counters`、`yoyo_metric_timings`、`yoyo_metric_samples`、`yoyo_team_reads`、`yoyo_team_fetches`。
+- 新增列：`yoyo_team_tasks.chat_through`（聊天续接游标，旧任务默认 0）、`yoyo_team_tasks.wake_count`、`yoyo_team_tasks.paused_reason`、`yoyo_team_evidence.read_verified`（旧证据默认 0 = 自述）。
 - 新增 `yoyo_activity_links.kind` 取值 `intent`。
 - 旧记录不动；0.39.0 已有的表与列保持原样。
 

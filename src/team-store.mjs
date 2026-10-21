@@ -78,7 +78,18 @@ export class TeamStore {
         id INTEGER PRIMARY KEY, source TEXT NOT NULL, decision TEXT NOT NULL,
         chosen_body TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL, view_id TEXT NOT NULL,
         scopes TEXT NOT NULL, created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_team_reads(
+        task_id TEXT NOT NULL, event_id INTEGER NOT NULL, read_at INTEGER NOT NULL,
+        PRIMARY KEY(task_id,event_id));
+      CREATE TABLE IF NOT EXISTS yoyo_team_fetches(
+        task_id TEXT NOT NULL, url TEXT NOT NULL, fetched_at INTEGER NOT NULL,
+        PRIMARY KEY(task_id,url));
     `)
+    // Which originals a branch actually read. A finding that cites something the
+    // branch never read stays on the board marked as self-report instead of quietly
+    // counting as a receipt.
+    const evidenceColumns=this.db.prepare('PRAGMA table_info(yoyo_team_evidence)').all().map(column=>column.name)
+    if(!evidenceColumns.includes('read_verified'))this.db.exec('ALTER TABLE yoyo_team_evidence ADD COLUMN read_verified INTEGER NOT NULL DEFAULT 0')
     const columns=this.db.prepare('PRAGMA table_info(yoyo_team_tasks)').all().map(column=>column.name)
     for(const [name,type] of [['failures','INTEGER NOT NULL DEFAULT 0'],['retry_at','INTEGER'],['renewed_at','INTEGER'],
       ['parent_id','TEXT'],['depends_on','TEXT'],['toolset','TEXT'],['authorization_version','INTEGER'],
@@ -388,6 +399,20 @@ export class TeamStore {
   // A worker may publish what it actually found to a task-scoped board. The
   // board inherits the task's source scopes, so a private window's evidence can
   // never surface in another window or in the public view.
+  // Reading is a fact the host can record: the ids a branch really read through
+  // its own window. Later evidence can then be checked against it.
+  recordRead(taskId, ids, now=this.clock()) {
+    if(!Array.isArray(ids))throw Error('阅读记录无效')
+    for(const id of ids){if(!Number.isSafeInteger(id)||id<1)continue;this.db.prepare('INSERT OR IGNORE INTO yoyo_team_reads(task_id,event_id,read_at) VALUES(?,?,?)').run(taskId,id,now)}
+    return ids.length
+  }
+  readIds(taskId){return new Set(this.db.prepare('SELECT event_id FROM yoyo_team_reads WHERE task_id=?').all(taskId).map(row=>row.event_id))}
+  recordFetch(taskId,url,now=this.clock()){
+    if(typeof url!=='string'||!/^https?:\/\//i.test(url))throw Error('浏览记录需要真实网址')
+    this.db.prepare('INSERT OR IGNORE INTO yoyo_team_fetches(task_id,url,fetched_at) VALUES(?,?,?)').run(taskId,url,now)
+    return {taskId,url}
+  }
+  fetchUrls(taskId){return new Set(this.db.prepare('SELECT url FROM yoyo_team_fetches WHERE task_id=?').all(taskId).map(row=>row.url))}
   evidence(agentId,{kind='finding',body,source=''}) {
     const {task,view}=this.authority(agentId)
     if(!['finding','source','excerpt'].includes(kind))throw Error('证据类型无效')
@@ -399,22 +424,29 @@ export class TeamStore {
     // A different finding from an already cited source is kept, but flagged, so
     // a disagreement between pages cannot quietly turn into agreement.
     const conflict=source!==''&&!!this.db.prepare('SELECT 1 FROM yoyo_team_evidence WHERE task_id=? AND source=? AND body<>?').get(task.id,source,body)
-    const id=Number(this.db.prepare('INSERT INTO yoyo_team_evidence(task_id,attempt,scopes,kind,source,body,created_at) VALUES(?,?,?,?,?,?,?)')
-      .run(task.id,task.attempt,JSON.stringify(sourceScopes(view.scopes)),kind,source,body,this.clock()).lastInsertRowid)
+    // A source that names a message the task really read is a receipt; anything
+    // else is the branch's own report and is stored as such.
+    const cited=Number((String(source).match(/(\d+)/)??[])[1]??0)
+    // A receipt is either a message this branch really read, or a page it really
+    // fetched. Anything else is the branch's own report and is stored as such.
+    const readVerified=(cited>0&&this.readIds(task.id).has(cited))||
+      (/^https?:\/\//i.test(source)&&this.fetchUrls(task.id).has(source))
+    const id=Number(this.db.prepare('INSERT INTO yoyo_team_evidence(task_id,attempt,scopes,kind,source,body,created_at,read_verified) VALUES(?,?,?,?,?,?,?,?)')
+      .run(task.id,task.attempt,JSON.stringify(sourceScopes(view.scopes)),kind,source,body,this.clock(),readVerified?1:0).lastInsertRowid)
     // A finding becomes an event its siblings can act on before the task ends;
     // an excerpt stays on the board until someone asks for it.
     if(kind==='finding')this.publishEvent({fromTask:task.id,activityId:task.activity_id??null,kind:'finding',body,ref:source,viewId:view.id})
-    return {id,taskId:task.id,kind,shared:true,conflict}
+    return {id,taskId:task.id,kind,shared:true,conflict,readVerified}
   }
   board(viewId,{taskId,limit=20}={}) {
     const view=this.social.view(viewId)
     if(!Number.isInteger(limit)||limit<1||limit>50)throw Error('证据条数无效')
     if(taskId!==undefined)this.inspect(taskId,viewId)
     const filter="NOT EXISTS(SELECT 1 FROM json_each(e.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?)))"
-    const rows=this.db.prepare(`SELECT e.id,e.task_id,e.kind,e.source,e.body,e.created_at FROM yoyo_team_evidence e
+    const rows=this.db.prepare(`SELECT e.id,e.task_id,e.kind,e.source,e.body,e.created_at,e.read_verified FROM yoyo_team_evidence e
       WHERE ${filter}${taskId!==undefined?' AND e.task_id=?':''} ORDER BY e.id DESC LIMIT ?`)
       .all(...(taskId!==undefined?[JSON.stringify(view.scopes),taskId,limit]:[JSON.stringify(view.scopes),limit]))
-    return rows
+    return rows.map(row=>({...row,readVerified:!!row.read_verified}))
   }
   // A later task often needs what an earlier task really read. Retrieval answers
   // from the same visible-scope rule as the board, so it can never reach another

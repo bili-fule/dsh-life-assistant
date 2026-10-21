@@ -214,9 +214,10 @@ test('a branch can still read its own window when the subject has no peer bridge
   const {host,view,data,message}=fixture(t)
   message('这条是分支应该读到的话')
   const task=host.tasks.create({key:'reader-2',role:'reader',goal:'只读',viewId:view.id,expiresAt:Date.now()+60000})
-  let seen=null
+  let seen=null,evidence=null
   host.coordinator.adapter={run:async({agentId,task:runTask,invoke})=>{
     seen=await invoke('read',{limit:10})
+    evidence=await invoke('evidence',{kind:'source',body:'这条是分支读到的话',source:'群消息 #'+seen.messages[0].id})
     await invoke('finish',{decision:'completed',reason:'读到了'})
     return {}
   }}
@@ -224,5 +225,6 @@ test('a branch can still read its own window when the subject has no peer bridge
   assert.equal(await until(()=>seen!==null),true,'the host implementation is the fallback, not a hard failure')
   assert.equal(seen.messages.some(entry=>/分支应该读到/.test(entry.text)),true)
   assert.equal(await until(()=>host.tasks.inspect(task.id,view.id).state==='completed'),true)
+  assert.equal(evidence.readVerified,true,'the finding cites a message the branch really read')
   assert.ok(data)
 })

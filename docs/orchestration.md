@@ -143,6 +143,7 @@
 | 冷分支展开 | ✅ | `test/branch-folding.test.mjs`：摘要 → 真实报告、证据与事件编号，并明确「不是新事实」；未解决冲突与未完成意图不会被折叠 |
 | 闲置 | ✅ | 无固定「继续当前活动」提示：`test/subject-continuity.test.mjs`、`test/runtime-scheduling.test.mjs`（无事可用时 `choose()` 返回 null，不空转）；空轮询由宿主等待替代（`test/team-events.test.mjs` 的 `wait_event`） |
 | QQ 与微信 | ✅ | `test/subject-continuity.test.mjs`、`test/social-store.test.mjs`（微信是独立主体：不同库、不同凭据、不同权限、不可跨主体读取） |
+| 读取/浏览有真实回执 | ✅ | `test/team-events.test.mjs`：宿主记录分支真正读过的消息编号（`yoyo_team_reads`）与真正抓取的网址（`yoyo_team_fetches`），证据的 `readVerified` 只在这两项命中时为真；没读过/没抓过的来源仍留在证据板上，但标成自述 |
 
 ## 4. 未完成部分（按计划顺序）
 

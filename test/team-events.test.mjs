@@ -302,6 +302,35 @@ test('a restart resumes from the acknowledged position instead of replaying',t=>
   assert.ok(event.eventId)
 })
 
+test('evidence counts as a read receipt only when the branch really read that message',t=>{
+  const {tasks,view,create}=fixture(t)
+  const reader=create('读群')
+  tasks.claim(reader.id,'worker-reader')
+  // The host records what the branch really opened; the source label it writes
+  // afterwards is checked against that, not trusted on its own.
+  tasks.recordRead(reader.id,[12])
+  const verified=tasks.evidence('worker-reader',{kind:'source',body:'星洛说新游戏今晚开',source:'群消息 #12'})
+  assert.equal(verified.readVerified,true)
+  const unverified=tasks.evidence('worker-reader',{kind:'source',body:'群里还提到别的事',source:'群消息 #99'})
+  assert.equal(unverified.readVerified,false)
+  const board=tasks.board(view.id,{taskId:reader.id})
+  const flags=Object.fromEntries(board.map(row=>[row.source,row.readVerified]))
+  assert.deepEqual(flags,{'群消息 #12':true,'群消息 #99':false})
+})
+
+test('a fetched page is a receipt only when that branch really fetched it',t=>{
+  const {tasks,view,create}=fixture(t)
+  // Public research gets its own public view, so it cannot cite this group activity.
+  const researcher=tasks.create({key:'researcher-page',role:'research',goal:'查网页',viewId:view.id,expiresAt:Date.now()+600000})
+  tasks.claim(researcher.id,'worker-research')
+  tasks.recordFetch(researcher.id,'https://example.com/page')
+  const verified=tasks.evidence('worker-research',{kind:'source',body:'页面里写了开服时间',source:'https://example.com/page'})
+  assert.equal(verified.readVerified,true,'a page this branch fetched is a receipt')
+  const invented=tasks.evidence('worker-research',{kind:'source',body:'另一页的说法',source:'https://example.com/never-opened'})
+  assert.equal(invented.readVerified,false,'a page never fetched is only a claim')
+  assert.ok(create)
+})
+
 test('two generic peer branches on two windows overlap and share a finding mid-run',async t=>{
   const {tasks,data,view}=fixture(t)
   const second=data.discover({platform:'qq',account:'1',kind:'group',peer:'g2'})
