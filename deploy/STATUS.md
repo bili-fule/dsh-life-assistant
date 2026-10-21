@@ -248,3 +248,11 @@ QQ 新增 `yoyo_debug` / `yoyo_debug_status` / `yoyo_debug_patch`，通过宿主
 新增 [0.36.0 上线前清单](RELEASE-0.36.md)：相对生产 0.25.0（`9a50ab6`）的变更表、数据迁移结论（纯增量、无手工脚本）、配置项、上线步骤、验收点与回滚步骤，并明确列出不在本次范围内的三件事（语义检索、容器级隔离与排障容器、阶段 5 真实运行校准）。`deploy/README.md` 补上 `memoryMaintenance.pageEvents` 与 `nightHour`。
 
 插件测试 233 项（新增 2 项升级路径验收）与语法检查通过。未部署。
+
+## 0.37 文档与代码的默认值不再漂移
+
+新增 `test/documented-defaults.test.mjs`（3 项）：从 `deploy/README.md` 的配置块读出文档声明的默认值，与代码里实际生效的默认值逐项对比（`recallLimit` 8、`maxDeltaPerHour` 0.45、`pageEvents` 120、`nightHour` 2、`quietMs` 5000、`maxSteps` 20、`turnMs` 300000、团队并发 2）；再检查同一概念在各文档里只有一个数（整理分页 120、偏好小时上限 0.45，与「手动修订单次上限 0.12」区分开）；最后核对部署说明与角色表列出的角色集合与 `ROLE_TOOLS` 完全一致。
+
+这项检查当场抓到一个真实漂移：`deploy/README.md` 的角色列表还停在四种，缺了 0.34.0 新增的 `engineer`；已补上并写明它的边界（仅 public、隔离执行、不能发言也读不到窗口）。
+
+插件测试 236 项（新增 3 项）与语法检查通过。未部署。
