@@ -71,6 +71,25 @@ test('the queue orders by priority plus waiting, and honours dependencies and st
   assert.equal(intents.ready({now}).some(intent=>intent.id===high.id),true)
 })
 
+test('token usage is recorded as a measurement, and an unreported run is not zero',async t=>{
+  const {host,view,metrics}=fixture(t)
+  const settle=async(predicate,ms=3000)=>{const end=Date.now()+ms;while(Date.now()<end){host.tick();if(predicate())return true;await new Promise(resolve=>setTimeout(resolve,5))}return false}
+  host.coordinator.adapter={run:async({invoke})=>{await invoke('usage',{tokens:1234,reported:true});await invoke('finish',{decision:'completed',reason:'done'});return {}}}
+  const metered=host.tasks.create({key:'usage-metered',role:'reader',goal:'读数',viewId:view.id,expiresAt:Date.now()+600000})
+  host.coordinator.start(metered.id)
+  assert.equal(await settle(()=>host.tasks.inspect(metered.id,view.id).state==='completed'),true)
+  const usage=host.tasks.usage(metered.id)
+  assert.equal(usage.tokens,1234)
+  assert.equal(!!usage.tokensReported,true)
+  assert.equal(metrics.summary().samples[0].value,1234)
+  host.coordinator.adapter={run:async({invoke})=>{await invoke('usage',{tokens:0,reported:false});await invoke('finish',{decision:'completed',reason:'done'});return {}}}
+  const unknown=host.tasks.create({key:'usage-unknown',role:'reader',goal:'读数',viewId:view.id,expiresAt:Date.now()+600000})
+  host.coordinator.start(unknown.id)
+  assert.equal(await settle(()=>host.tasks.inspect(unknown.id,view.id).state==='completed'),true)
+  assert.equal(!!host.tasks.usage(unknown.id).tokensReported,false)
+  assert.equal(metrics.summary().samples[0].value,null,'an unreported run stays unmeasured, not free')
+})
+
 test('the host starts queued work with the narrowest role and follows the attempt to its end',async t=>{
   const {host,intents,view,calls,metrics,data}=fixture(t)
   // The scheduler is the only thing that advances work: every poll here is a real

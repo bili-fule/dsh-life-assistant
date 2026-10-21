@@ -607,12 +607,20 @@ export class TeamStore {
   recordTokens(agentId,tokens,reported=true) {
     if(!Number.isSafeInteger(tokens)||tokens<0||tokens>10000000)throw Error('用量记录无效')
     const {task}=this.authority(agentId)
+    return this.recordUsage(task.id,task.attempt,tokens,reported)
+  }
+  // Cost belongs to the attempt, not to the lease: a chat branch that ends its run
+  // by suspending has still spent tokens, and the ledger must record that spend even
+  // though its authority has already been handed back.
+  recordUsage(taskId,attempt,tokens,reported=true) {
+    if(!Number.isSafeInteger(tokens)||tokens<0||tokens>10000000)throw Error('用量记录无效')
+    if(!Number.isInteger(attempt)||attempt<1)throw Error('用量记录缺少尝试编号')
     const flag=reported===true&&tokens>0?1:0
-    const row=this.db.prepare('SELECT steps FROM yoyo_team_usage WHERE task_id=? AND attempt=?').get(task.id,task.attempt)
+    const row=this.db.prepare('SELECT steps FROM yoyo_team_usage WHERE task_id=? AND attempt=?').get(taskId,attempt)
     if(row)this.db.prepare('UPDATE yoyo_team_usage SET tokens=tokens+?,tokens_reported=max(tokens_reported,?),updated_at=? WHERE task_id=? AND attempt=?')
-      .run(tokens,flag,this.clock(),task.id,task.attempt)
+      .run(tokens,flag,this.clock(),taskId,attempt)
     else this.db.prepare('INSERT INTO yoyo_team_usage(task_id,attempt,steps,tokens,tokens_reported,updated_at) VALUES(?,?,0,?,?,?)')
-      .run(task.id,task.attempt,tokens,flag,this.clock())
+      .run(taskId,attempt,tokens,flag,this.clock())
     return {tokens,reported:flag===1}
   }
   usage(taskId) {

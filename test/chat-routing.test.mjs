@@ -186,6 +186,23 @@ test('an idle resident session is reaped instead of living forever',async t=>{
   assert.equal(host.coordinator.resident.size,0)
 })
 
+test('a chat branch that suspends still books the tokens it spent',async t=>{
+  const {host,view}=fixture(t)
+  host.coordinator.adapter={run:async({invoke})=>{
+    await invoke('pause',{reason:'等对方接着说'})
+    // The real adapter books usage after the run returns, i.e. after the lease was
+    // handed back; that cost must not disappear just because the task is suspended.
+    await invoke('usage',{tokens:777,reported:true})
+    return {}
+  }}
+  const task=host.tasks.create({key:'chat-usage',role:'chat',goal:'接话',viewId:view.id,expiresAt:Date.now()+600000})
+  host.coordinator.start(task.id)
+  assert.equal(await until(()=>host.tasks.usage(task.id).tokens===777),true)
+  const usage=host.tasks.usage(task.id)
+  assert.equal(usage.tokensReported,true)
+  assert.equal(host.tasks.inspect(task.id,view.id).state,'suspended')
+})
+
 test('only chat and peer tasks may suspend themselves',async t=>{
   const {host,view}=fixture(t)
   const task=host.tasks.create({key:'reader-1',role:'reader',goal:'只读',viewId:view.id,expiresAt:Date.now()+60000})

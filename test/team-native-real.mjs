@@ -1,4 +1,4 @@
-﻿// Opt-in and bounded: node test/team-native-real.mjs
+// Opt-in and bounded: node test/team-native-real.mjs
 // Two REAL-model DSH workers on one activity, against a local fixture database.
 // No QQ connection, no external sends, no production data. The provider key is
 // read from the DSH credential store (or the environment) and never printed.
@@ -69,8 +69,13 @@ async function phase(name,{parallel}){
   const events=data.db.prepare('SELECT id,event_id,kind,from_task,to_task,ref,body FROM yoyo_team_events ORDER BY id').all()
   const reports=data.db.prepare('SELECT task_id,body FROM yoyo_team_reports ORDER BY id').all()
   const states=data.db.prepare('SELECT id,role,state,agent_id FROM yoyo_team_tasks').all()
+  // Cost comes from the real usage ledger. The runtime reports usage per assistant
+  // message, so this is either a measurement or an explicit absence - never a 0.
+  const usageRows=store.db.prepare('SELECT task_id,sum(tokens) tokens,max(tokens_reported) reported,sum(steps) steps FROM yoyo_team_usage GROUP BY task_id').all()
+  const tokens=usageRows.reduce((total,row)=>total+Number(row.tokens??0),0)
+  const reported=usageRows.length>0&&usageRows.every(row=>row.reported===1)
   store.close()
-  return {name,wallMs,parallel,steps:Object.fromEntries(steps),events,reports,states,
+  return {name,wallMs,parallel,steps:Object.fromEntries(steps),events,reports,states,tokens,reported,
     question:events.find(e=>e.kind==='question')??null,answer:events.find(e=>e.kind==='answer')??null,
     evidence:reports.length}
 }
@@ -78,12 +83,12 @@ async function phase(name,{parallel}){
 const sequential=await phase('串行',{parallel:false})
 const concurrent=await phase('并行',{parallel:true})
 const summary={model,
-  serial:{wallMs:sequential.wallMs,steps:sequential.steps,events:sequential.events.length},
-  parallel:{wallMs:concurrent.wallMs,steps:concurrent.steps,events:concurrent.events.length},
+  serial:{wallMs:sequential.wallMs,steps:sequential.steps,events:sequential.events.length,tokens:sequential.tokens,tokensReported:sequential.reported},
+  parallel:{wallMs:concurrent.wallMs,steps:concurrent.steps,events:concurrent.events.length,tokens:concurrent.tokens,tokensReported:concurrent.reported},
   question:concurrent.question?.body??null,answer:concurrent.answer?.body??null,
   answered:!!concurrent.answer,asked:!!concurrent.question,
   reports:concurrent.reports.map(row=>row.body.slice(0,200)),states:concurrent.states.map(row=>({role:row.role,state:row.state})),
-  tokensNote:'Token 未测量：这里没有接原生计量，不记为 0'}
+  tokensNote:sequential.tokens+concurrent.tokens>0?'Token 来自运行时上报，未上报的尝试仍标为未测量':'Token 未测量'}
 console.log(JSON.stringify(summary,null,2))
 assert.ok(concurrent.question,'a real model asked its sibling a question')
 assert.ok(concurrent.answer,'a real model answered it after waiting in the host')

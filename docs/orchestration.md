@@ -49,7 +49,8 @@
 - `worker_run`：一次执行者原生运行的耗时（**模型响应延迟**）。
 - `subject_turn`：主体一轮原生运行的耗时。
 - `reply_latency`：分支真正回话时，距该窗口最近一条入站消息的时间（含读取与生成）。
-- 未上报的量（例如运行时不提供 token 计量）写 `reported=0, value=null`，读取为「未测量」，不记成 0。
+- `reply_latency`：分支真正回话时，距该窗口最近一条入站消息的时间（含读取与生成）。
+- `tokens_used`（样本）：每次执行者运行上报的 Token；未上报写 `reported=0, value=null`，读取为「未测量」，不记成 0。用量按**尝试**记账，所以聊天分支挂起后仍会记下这次花费。
 
 ## 2b. 已实现：后续聊天消息直达执行者（计划 §5）
 
@@ -111,7 +112,16 @@
 | 分支运行重叠 | 两个任务在同一时间窗内都有原生运行 | `test/team-events.test.mjs`；真实模型复跑并行 39.0 s vs 串行 146.5 s |
 | 队列等待 | 意图 `waitedMs` 与等待原因（依赖/开始时间/无空位） | `test/team-intents.test.mjs` |
 | 首回复/回话延迟 | `reply_latency`（距最近入站消息） | `test/chat-routing.test.mjs` |
-| 调用/Token/成本 | `yoyo_team_usage`（steps、tokens、tokens_reported） | 真实运行显示 `tokensReported=false`：未测量，不记 0；成本对比尚缺计量接口 |
+| 调用/Token/成本 | `yoyo_team_usage`（steps、tokens、tokens_reported）按**尝试**记账，暂停后仍记录本次花费 | 真实运行已测得 token（见下表）；未上报的尝试仍标为 `tokensReported=false`，不记 0 |
+
+真实模型实测（`deepseek-flash`，本地夹具，不连 QQ）：
+
+| 场景 | 墙钟 | 步数 | Token |
+| --- | --- | --- | --- |
+| 两分支串行 | 79.3 s | 9 / 7 | 31,293 |
+| 两分支并行 | 10.5 s | 5 / 5 | 26,611 |
+| 意图队列 → 单个执行者 | 21.5 s | 5 | 12,469 |
+| 聊天挂起 → 唤醒（两次提示） | 约 40 s | 7 | 18,838 |
 
 
 - ✅ 有确定性测试：行内写测试文件与关键断言。

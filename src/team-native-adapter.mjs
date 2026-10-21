@@ -80,11 +80,20 @@ export class TeamNativeAdapter {
         signal.throwIfAborted()
         if(result.events.findLast(e=>e.type==='turn/end')?.data.reason?.kind!=='completed')throw Error('Native worker did not complete')
         // Record real token usage when the runtime reports it; never estimate. The
-        // host keeps "not reported" apart from a measured zero, so a missing usage
-        // interface cannot look like a free run.
-        const usage=result.usage??result.tokenUsage??result.stats?.usage??null
-        const tokens=Number(usage?.totalTokens??usage?.total??usage?.outputTokens??0)
-        const reported=Number.isSafeInteger(tokens)&&tokens>0
+        // installed runtime reports it per assistant message, so the run's cost is
+        // the sum of those usage blocks. A run with no usage block at all stays
+        // "not measured" instead of pretending to be free.
+        const direct=result.usage??result.tokenUsage??result.stats?.usage??null
+        let tokens=Number(direct?.totalTokens??direct?.total??direct?.outputTokens??0),reported=Number.isSafeInteger(tokens)&&tokens>0
+        if(!reported){
+          const summed=result.events.filter(event=>event.type==='assistant/message'&&event.data?.usage).reduce((total,event)=>{
+            const usage=event.data.usage
+            total.input+=Number(usage.inputTokens??0);total.output+=Number(usage.outputTokens??0)
+            total.cacheRead+=Number(usage.cacheReadTokens??0);total.total+=Number(usage.totalTokens??0)
+            return total
+          },{input:0,output:0,cacheRead:0,total:0})
+          if(summed.total>0){tokens=summed.total;reported=true}
+        }
         // After a pause the task is already suspended, so the host rightly refuses
         // to record anything for it. That is not an error of the run.
         try{await call('usage',{tokens:reported?tokens:0,reported})}catch{/* lease already released */ }

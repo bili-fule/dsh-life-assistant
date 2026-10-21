@@ -25,6 +25,14 @@ export class TeamCoordinator {
     let conclusion=null,suspended=false
     const invoke=async(name,args)=>{
       if(controller.signal.aborted)throw Error('执行已取消')
+      // Usage is booked against the attempt before any lease check: a run that ends
+      // by suspending has already cost tokens, and losing that would make cost
+      // invisible exactly where a chat activity spends it.
+      if(name==='usage'){
+        const tokens=Number(args?.tokens??0),reported=args?.reported!==false
+        this.tasks.metrics?.sample('tokens_used',{value:reported?tokens:null,unit:'tokens',reported,note:reported?'':'运行时未上报 Token'})
+        return this.tasks.recordUsage(id,task.attempt,tokens,reported)
+      }
       const current=this.tasks.authority(agentId)
       if(name==='finish'){
         if(conclusion)throw Error('任务已经明确结束')
@@ -47,7 +55,6 @@ export class TeamCoordinator {
       // A task may narrow the role's toolset, never widen it.
       const allowed=task.toolset?roleTools.filter(name=>JSON.parse(task.toolset).includes(name)):roleTools
       if(!allowed.includes(name))throw Error('角色没有该工具权限')
-      if(name==='usage')return this.tasks.recordTokens(agentId,Number(args?.tokens??0),args?.reported!==false)
       if(name==='step'){
         const result=await this.tools.step({agentId})
         // Steering and sibling events arrive at a native boundary, after the
