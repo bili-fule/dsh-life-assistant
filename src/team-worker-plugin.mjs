@@ -44,10 +44,10 @@ export function apply(ctx) {
   // The role fixes the tool surface. A reader and a verifier can look and report
   // but never speak; only chat may send.
   const methods=({chat:['read','wait','recall','send','report','evidence','board','remember','ask','answer','events'],
-    research:['web','report','evidence','board','remember','events'],
-    reader:['read','recall','report','evidence','board','remember','events'],
-    verify:['board','recall','report','evidence','events'],
-    engineer:['execute','job','report','evidence','board','remember','events'],
+    research:['web','report','evidence','board','remember','ask','answer','events'],
+    reader:['read','recall','report','evidence','board','remember','ask','answer','events'],
+    verify:['board','recall','report','evidence','answer','events'],
+    engineer:['execute','job','report','evidence','board','remember','answer','events'],
     // A peer has the subject's own reach for reading, searching, files, browsing,
     // code and memory, but none of the subject's control plane.
     peer:['read','wait','search','message','file','attachment','forward','recall','web','execute','job','send',

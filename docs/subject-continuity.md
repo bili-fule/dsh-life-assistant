@@ -70,7 +70,6 @@
 ## 5. 测试证据（已验证：确定性）
 
 `npm test` 全绿（248 项），其中与本改造直接相关：
-
 | 证据 | 测试文件 |
 | --- | --- |
 | 切窗后仍知道目标、起因、当前步骤；同一目标不重复建活动 | `test/subject-continuity.test.mjs` |
@@ -88,9 +87,26 @@
 | 分支继承主体视图、public 角色仍只有 public | `test/team-store.test.mjs` |
 | 网页与隔离浏览器不再要求先切 public；后台整理仍无浏览器 | `test/social-agent.test.mjs`、`test/text-chunking.test.mjs` |
 
-## 6. 还没做的（不要当成已完成）
+## 6. 已验证：两个真实 DSH 子进程直接问答
 
-1. **真实模型上的分支行为**：本文件第 5 节全部是确定性测试（脚本化 adapter 触发真实 `TeamCoordinator`、真实 SQLite、真实游标）。两个真实 DSH 子进程互相问答、真实模型是否用 `team_ask` 而不是干等，尚未回放。
+`node test/team-native-events.mjs`（可选运行，需要本机已安装的 DSH SDK：
+
+```
+node test/team-native-events.mjs
+PASS: two real DSH worker processes exchanged a question and an answer through the event bus.
+```
+
+`TeamNativeAdapter` 启动两个真实 DSH 进程（独立 HOME/DSH_HOME/工作目录、独立插件实例、独立工具桥），脚本模型分别扮演提问分支与答复分支：
+
+- 提问分支（`chat`）通过 `team_ask` 写入 `question` 事件，收件人是另一个任务的编号——它在自己的任务目标里读到的那个编号；
+- 另一个进程（`reader`）只能从自己的任务目标里知道问题编号，用 `team_answer` 回答；
+- 断言：问题与答复各一行、`answer.ref === question.event_id`、`answer.from_task` 是宿主认定的答复者、答复内容可见、`openQuestions` 清空、两个任务都自己结束（`completed`）。
+
+它证明的是：真实原生进程 + 真实工具桥 + 真实 SQLite 游标下的**同级问答不需要主 Agent 转述**。它仍然不是「真实模型」验证：模型部分是脚本，没有真实 QQ 连接，也没有测模型延迟与 Token。运行时若需要看宿主拒绝原因，可设置 `YOYO_TEAM_DEBUG=1`。
+
+## 7. 还没做的（不要当成已完成）
+
+1. **真实模型上的分支行为**：本文件第 5 节的确定性测试与第 6 节的双进程验证都用了脚本模型。真实模型是否愿意用 `team_ask`（而不是干等或自己猜）、是否会误把兄弟分支的话当成指令，尚未回放。
 2. **真实运行的重叠计量**：需要记录提交事件到投递的 p95、模型响应耗时、串行与并行的总耗时／调用数／Token，并与「无改善」的情形对比。现在只有逻辑顺序证明（事件序号、完成事件晚于投递）。
 3. **主体改向推送到运行中的分支**：`direction_changed` 类型与活动 revision 已在，但还没有「主体改目标 → 自动写入事件给相关分支」的接线，旧分支仍只能靠 revision 冲突被发现。
 4. **冲突合并**：相反发现仍只标 `conflict` 并保留来源，没有让主体或核对分支发布合并版本。

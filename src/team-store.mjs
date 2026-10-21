@@ -5,12 +5,12 @@ import { boundedText, mayRead, sourceScopes } from './scope.mjs'
 // widen it; the model cannot name a tool outside its role.
 export const ROLE_TOOLS={
   chat:['read','wait','recall','send','report','evidence','board','remember','pack','usage','step','ask','answer','events'],
-  research:['web','report','evidence','board','remember','pack','usage','step','events'],
-  reader:['read','recall','report','evidence','board','remember','pack','usage','step','events'],
-  verify:['board','recall','report','evidence','pack','usage','step','events'],
+  research:['web','report','evidence','board','remember','pack','usage','step','ask','answer','events'],
+  reader:['read','recall','report','evidence','board','remember','pack','usage','step','ask','answer','events'],
+  verify:['board','recall','report','evidence','pack','usage','step','answer','events'],
   // Engineering runs code in the isolated runner and reports back; it cannot talk
   // to anyone, cannot read a private window and cannot reach the debug container.
-  engineer:['execute','job','report','evidence','board','remember','pack','usage','step','events'],
+  engineer:['execute','job','report','evidence','board','remember','pack','usage','step','answer','events'],
   // A peer works with nearly the subject's own reach (same reads, searches, files,
   // public browsing, memory tools and code runner). It still has no control plane:
   // no orchestration of other executors, no attention/focus, no own-state or

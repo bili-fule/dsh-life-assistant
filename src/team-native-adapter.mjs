@@ -21,13 +21,15 @@ export class TeamNativeAdapter {
       const supplied=Buffer.from(req.headers.authorization??''),expected=Buffer.from('Bearer '+token)
       const respond=(status,value)=>{res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify(value))}
       if(req.method!=='POST'||req.url!=='/'||supplied.length!==expected.length||!timingSafeEqual(supplied,expected)){respond(403,{error:'Task access denied'});return}
+      let method=null
       try{
         let bytes=0;const chunks=[]
         for await(const chunk of req){bytes+=chunk.length;if(bytes>32768)throw Error('Body too large');chunks.push(chunk)}
         const input=JSON.parse(Buffer.concat(chunks))
+        method=input.method
         const result=await invoke(input.method,input.args??{})
         respond(200,result)
-      }catch{respond(400,{error:'Task tool rejected; check scope, role, lease or arguments'})}
+      }catch(error){if(process.env.YOYO_TEAM_DEBUG)console.error('[bridge]',method,String(error?.message));respond(400,{error:'Task tool rejected; check scope, role, lease or arguments'})}
     })
     server.requestTimeout=30000
     let harness
