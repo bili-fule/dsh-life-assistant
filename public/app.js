@@ -98,6 +98,28 @@ function renderTeam(team){
   card.append(el('div',lines.join('\n'),'text-block'))
   root.append(card)
  }
+ // The queue and the meters are operational facts: states, capabilities, waits and
+ // counts only - never task purposes, report bodies or window content.
+ if(Array.isArray(team.intents)&&team.intents.length){
+  const queue={ready:0,running:0,blocked:0}
+  for(const i of team.intents)if(queue[i.state]!==undefined)queue[i.state]++
+  const card=el('div',null,'card')
+  const lines=team.intents.slice(0,12).map(i=>['#'+String(i.id).slice(0,8),i.state,(i.capabilities||[]).join('/'),
+   '优先级 '+i.priority+(i.aging>i.priority?'（等待提升到 '+i.aging+'）':''),i.waitReason,
+   '已等 '+Math.round((i.waitedMs||0)/60000)+' 分钟'].join(' · '))
+  card.append(el('div','意图队列（等待调度 '+queue.ready+' · 运行 '+queue.running+' · 受阻 '+queue.blocked+'）· 队列只显示状态、能力与等待原因','text-block'),
+   el('div',lines.join('\n'),'text-block'))
+  root.append(card)
+ }
+ if(team.metrics){
+  const counts=Object.entries(team.metrics.counts||{}).map(([kind,value])=>kind+' '+value).join(' · ')||'今日还没有计量'
+  const timings=Object.entries(team.metrics.timings||{}).map(([kind,value])=>kind+' p50 '+(value.p50??'-')+' ms · p95 '+(value.p95??'-')+' ms · '+value.samples+' 次').join('\n')||'还没有延迟样本'
+  const samples=(team.metrics.samples||[]).slice(0,3).map(s=>s.kind+' '+(s.reported?(s.value+' '+s.unit):'未测量')).join(' · ')
+  const card=el('div',null,'card')
+  card.append(el('div','计量（宿主自己观测）：'+counts,'text-block'),el('div','延迟（事件投递与模型响应分开）\n'+timings+(samples?'\n最近成本样本 '+samples:''),'text-block'))
+  root.append(card)
+ }
+ if(team.folded&&team.folded.count)root.append(el('div','已折叠 '+team.folded.count+' 段冷分支：摘要与引用保留，可展开回到原始报告与证据。','card text-block'))
 }
 function renderYoyo(){
  const y=state.autonomy;if(!y)return

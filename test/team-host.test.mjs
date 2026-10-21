@@ -8,10 +8,11 @@ import { SocialStore } from '../src/social-store.mjs'
 import { TeamHost } from '../src/team-host.mjs'
 import { TeamStore } from '../src/team-store.mjs'
 import { MemoryLayer } from '../src/memory-layer.mjs'
+import { OrchestrationMetrics } from '../src/orchestration-metrics.mjs'
 
 function fixture(t,config={}){
   const root=mkdtempSync(join(tmpdir(),'team-host-')),store=new Store(join(root,'test.sqlite')),data=new SocialStore(store)
-  const social={store,data,separate:true,sessionId:'main',qq:null},host=new TeamHost(social,config)
+  const social={store,data,separate:true,sessionId:'main',qq:null,metrics:new OrchestrationMetrics(store.db)},host=new TeamHost(social,config)
   const target=data.discover({platform:'qq',account:'1',kind:'private',peer:'2'})
   data.approve(target.handle,true)
   const view=data.open(target.handle),task=host.tasks.create({key:'test',role:'chat',goal:'chat',viewId:view.id,expiresAt:Date.now()+60000})
@@ -219,6 +220,18 @@ test('a peer executor calls the subject’s own tools with the task view, and no
   assert.equal(task.id.length>0,true)
   assert.ok(data)
 })
+test('operational status reports the queue, the meters and the folded count without any goal text',async t=>{
+  const {host,view}=fixture(t)
+  host.intents.create({goal:'SECRET-GOAL-TEXT',why:'内部理由',capabilities:['read'],priority:10,viewId:view.id})
+  const status=host.status()
+  assert.equal(Array.isArray(status.intents),true)
+  assert.equal(status.intents.length,1)
+  assert.equal(JSON.stringify(status.intents).includes('SECRET-GOAL-TEXT'),false,'the operational view names states, not goals')
+  assert.equal(JSON.stringify(status.intents).includes('内部理由'),false)
+  assert.ok(status.metrics,'the panel can show real counters and latencies')
+  assert.equal(typeof status.folded.count,'number')
+})
+
 test('the admin page renders the team panel from the operational status only',t=>{
   const page=readFileSync(new URL('../public/index.html',import.meta.url),'utf8')
   const script=readFileSync(new URL('../public/app.js',import.meta.url),'utf8')
@@ -235,6 +248,11 @@ test('the admin page renders the team panel from the operational status only',t=
   // Task material is read one task at a time, after an explicit confirmation.
   assert.match(script,/function showTaskDetail\(task,card\)/)
   assert.match(script,/\/api\/yoyo\/team-detail/)
+  // The queue, the meters and the folded branches come from the same status, and
+  // they are rendered as states and counts rather than as goals.
+  assert.match(script,/意图队列（等待调度/)
+  assert.match(script,/计量（宿主自己观测）/)
+  assert.match(script,/已折叠 /)
   assert.match(script,/window\.confirm\('这会显示该任务的目的、报告与证据/)
   assert.equal(/goal|PRIVATE|报告正文.*innerHTML/.test(script.split('function renderTeam')[1].split('function renderYoyo')[0].replace(/任务目的与报告正文默认不展示/,'')),false,'the panel never renders task text on its own')
 })

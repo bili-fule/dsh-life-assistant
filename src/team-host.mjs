@@ -360,7 +360,10 @@ export class TeamHost {
       (SELECT count(*) FROM yoyo_team_reports r WHERE r.task_id=t.id) reports,
       (SELECT count(*) FROM yoyo_team_evidence e WHERE e.task_id=t.id) evidence
       FROM yoyo_team_tasks t ORDER BY t.created_at DESC LIMIT 50`).all(Date.now(),Date.now())
-    return {concurrency:{running:this.coordinator.running.size,max:this.coordinator.maxConcurrent},intents:this.intents.summary(),tasks:tasks.map(row=>{
+    return {concurrency:{running:this.coordinator.running.size,max:this.coordinator.maxConcurrent},intents:this.intents.summary(),
+      // Meters and folding are operational facts too: counts and latencies, never
+      // goals, report bodies or window content.
+      metrics:this.social.metrics?.summary()??null,folded:{count:this.db.prepare('SELECT count(*) n FROM yoyo_folded_branches').get().n},tasks:tasks.map(row=>{
       const depends=this.db.prepare('SELECT depends_on FROM yoyo_team_tasks WHERE id=?').get(row.id).depends_on
       const task={...row,tokensReported:row.tokensReported===1,dependsOn:depends?JSON.parse(depends).length:0}
       return {...task,waitReason:this.waitReason(task),waitingFor:this.db.prepare("SELECT count(*) n FROM yoyo_team_events q WHERE q.kind='question' AND q.to_task=? AND NOT EXISTS(SELECT 1 FROM yoyo_team_events a WHERE a.kind='answer' AND a.ref=q.event_id)").get(row.id).n}
