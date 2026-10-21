@@ -6,11 +6,11 @@ import { join } from 'node:path'
 import { Store } from '../src/store.mjs'
 import { SocialAgent } from '../src/social-agent.mjs'
 
-function fixture(t){
+function fixture(t,extra={}){
   const root=mkdtempSync(join(tmpdir(),'yoyo-agent-')),store=new Store(join(root,'data.sqlite')),hooks=new Map(),tools=new Map(),prompts=[]
   const ctx={on(name,fn){hooks.set(name,fn);return ()=>hooks.delete(name)},systemPrompt:{section(){return ()=>{}},context(){return ()=>{}}},tools:{register(tool){tools.set(tool.name,tool);return ()=>tools.delete(tool.name)}},sessions:{requestViewVersion:1},tokenMeter:{requestViewVersion:1}}
   const runtime={store,abort:new AbortController(),workspace:root,model:{sessionId:'one-agent',async receipt(name,args,exec,body){return body('call:'+exec.callId)}}}
-  const agent=new SocialAgent(runtime,ctx,{enabled:true})
+  const agent=new SocialAgent(runtime,ctx,{enabled:true,...extra})
   t.after(()=>{agent.stop();assert.equal(hooks.size,0);assert.equal(tools.size,0);store.close();rmSync(root,{recursive:true,force:true})})
   const target=(peer)=>{const t=agent.data.discover({platform:'qq',account:'1000',kind:'private',peer});return agent.data.approve(t.handle,true)}
   const exec={agent:{id:'one-agent'},signal:runtime.abort.signal,callId:'1',concludeTurn(){prompts.push('concluded')}}
@@ -251,4 +251,24 @@ test('independent debug completion uses its backend and wakes only the original 
  assert.equal(agent.choose(Date.now()),a.handle)
  agent.data.db.prepare('UPDATE yoyo_jobs SET notified=1 WHERE id=?').run(id)
  assert.equal(agent.choose(Date.now()),'overview')
+})
+
+test('the motivation tools exist only when enabled and never certify themselves as evidence',async t=>{
+  const {agent,hooks,tools,target,exec}=fixture(t,{motivation:{enabled:true}}),a=target('123')
+  agent.activeView=agent.data.open(a.handle)
+  assert.ok(agent.motivation)
+  for(const name of ['self_options','self_choose','self_appraise','self_preferences'])assert.equal(agent.toolsAllowed().has(name),true)
+  assert.equal(agent.toolsAllowed().has('shell'),false)
+  const chosen=await tools.get('self_choose').execute({activity:'接着聊这个话题',chosen:'接着聊',reason:'还想听他说'},exec)
+  assert.ok(Number.isInteger(chosen.id))
+  const options=await tools.get('self_options').execute({},exec)
+  assert.equal(options.current.id,chosen.id)
+  assert.equal(options.mode,'record')
+  const appraised=await tools.get('self_appraise').execute({choice:chosen.id,outcome:'聊了几轮',liked:'neutral'},exec)
+  assert.equal(appraised.credit,'unverified')
+  // Self-authored records never become execution evidence.
+  assert.equal(agent.data.evidence(agent.activeView.id).some(source=>source.name.startsWith('self_')),false)
+  assert.equal(agent.state().motivation.mode,'record')
+  agent.maintenanceJob={after:0,through:10}
+  for(const name of ['self_options','self_choose','self_appraise','self_preferences'])await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name},async()=>{throw Error('must not execute')}),/未获/)
 })

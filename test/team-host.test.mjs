@@ -1,0 +1,72 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync,rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Store } from '../src/store.mjs'
+import { SocialStore } from '../src/social-store.mjs'
+import { TeamHost } from '../src/team-host.mjs'
+
+function fixture(t){
+  const root=mkdtempSync(join(tmpdir(),'team-host-')),store=new Store(join(root,'test.sqlite')),data=new SocialStore(store)
+  const social={store,data,separate:true,sessionId:'main',qq:null},host=new TeamHost(social,{})
+  const target=data.discover({platform:'qq',account:'1',kind:'private',peer:'2'})
+  data.approve(target.handle,true)
+  const view=data.open(target.handle),task=host.tasks.create({key:'test',role:'chat',goal:'chat',viewId:view.id,expiresAt:Date.now()+60000})
+  const context={args:{text:'hello',replyId:'input-1'},view,agentId:'worker',taskId:task.id,signal:new AbortController().signal,authorize:()=>host.tasks.authorizeSend('worker',view.focus,1)}
+  store.set('yoyo_settings',{observeOnly:false,dailySteps:100})
+  t.after(async()=>{await host.stop();store.close();rmSync(root,{recursive:true,force:true})})
+  return {store,data,social,host,view,task,context}
+}
+test('worker delivery persists a real receipt and duplicate logical replies do not resend',async t=>{
+  const {host,social,task,context,data}=fixture(t);let sent=0
+  social.qq={async send(target,text,key,signal,authorize){authorize();sent++;return {messageId:'actual-1'}}}
+  host.tasks.claim(task.id,'worker')
+  assert.equal((await host.send(context)).state,'sent')
+  assert.equal((await host.send(context)).replayed,true)
+  assert.equal(sent,1)
+  assert.equal(data.db.prepare("SELECT count(*) n FROM yoyo_events WHERE kind='outgoing'").get().n,1)
+  await assert.rejects(host.send({...context,args:{text:'different',replyId:'input-1'}}),/其他内容/)
+})
+test('uncertain network outcome is never blindly retried and paused tasks cannot send',async t=>{
+  const {host,social,store,task,context}=fixture(t);let sent=0
+  social.qq={async send(){sent++;throw Error('network interrupted')}}
+  host.tasks.claim(task.id,'worker')
+  await assert.rejects(host.send(context))
+  assert.equal((await host.send(context)).state,'uncertain')
+  assert.equal(sent,1)
+  store.set('yoyo_settings',{paused:true,observeOnly:false})
+  await assert.rejects(host.send({...context,args:{text:'new',replyId:'input-2'}}),/暂停/)
+  assert.equal(sent,1)
+})
+test('missing platform receipt is uncertain, not fabricated success',async t=>{
+  const {host,social,task,context}=fixture(t)
+  social.qq={async send(){return {messageId:null}}}
+  host.tasks.claim(task.id,'worker')
+  await assert.rejects(host.send(context),/回执/)
+  assert.equal((await host.send(context)).state,'uncertain')
+})
+test('main queued message is fenced by delegation and completion emits one scoped event',t=>{
+  const {host,view,task}=fixture(t)
+  host.mainEnqueue(view,'original-call')
+  const row=host.db.prepare('SELECT key FROM yoyo_team_main_outbox').get()
+  host.mainDispatch(row.key)
+  host.db.prepare('UPDATE yoyo_team_speakers SET expires_at=0').run()
+  host.tasks.claim(task.id,'worker')
+  assert.throws(()=>host.mainDispatch(row.key),/失效/)
+  assert.throws(()=>host.mainEnqueue(view,'new-call'),/发言权/)
+  host.tasks.finish('worker')
+  const event=host.nextEvent()
+  assert.equal(event.id,task.id);assert.equal(event.view.id,view.id)
+  host.acknowledge(task.id)
+  assert.equal(host.nextEvent(),null)
+})
+test('restart blocks active execution and preserves uncertainty without resubmitting',t=>{
+  const {host,social,task}=fixture(t)
+  host.tasks.claim(task.id,'worker')
+  host.db.prepare("INSERT INTO yoyo_team_deliveries VALUES(?,?,?,'sending',NULL)").run('key',task.id,'test')
+  const recovered=new TeamHost(social,{})
+  assert.equal(recovered.tasks.overview()[0].state,'blocked')
+  assert.equal(host.db.prepare('SELECT state FROM yoyo_team_deliveries').get().state,'uncertain')
+  assert.throws(()=>host.tasks.authority('worker'))
+})

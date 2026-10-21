@@ -375,7 +375,7 @@ export class Runtime {
     this.running=false;this.abort.abort();clearInterval(this.timer);clearInterval(this.deliveryTimer);this.pollGeneration++
     if(this.server)await new Promise(r=>this.server.close(r))
     await this.working?.catch(()=>{});await this.polling?.catch(()=>{});await this.delivering?.catch(()=>{})
-    this.autonomy.stop()
+    await this.autonomy.stop()
     this.model.stop?.()
     await this.tools.stop()
     // Login polling is bounded and never mutates the store after running=false.

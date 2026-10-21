@@ -14,6 +14,8 @@ import { safeFilename,Media } from './media.mjs'
 import { qqMediaHost,imageExtension } from './qq-media.mjs'
 import { workspacePath } from './tools.mjs'
 import { DebugHelper } from './debug-helper.mjs'
+import { TeamHost,TEAM_TOOLS,TEAM_POLICY } from './team-host.mjs'
+import { Motivation,MOTIVATION_TOOLS,MOTIVATION_POLICY } from './motivation.mjs'
 
 const COMMON_TOOLS=new Set(['yoyo_evidence','yoyo_learning','yoyo_feedback','yoyo_concern','yoyo_inbox','yoyo_mute','yoyo_attention','yoyo_dismiss','yoyo_open','yoyo_read','yoyo_message','yoyo_search','yoyo_send','yoyo_send_file','yoyo_delivery','yoyo_activity','yoyo_plan','yoyo_self','yoyo_sleep','yoyo_wait','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_web','yoyo_forward','yoyo_attachment','yoyo_file','life_context'])
 const PUBLIC_BROWSER_TOOLS=new Set(['close','resize','console_messages','handle_dialog','evaluate','file_upload','drop','find','fill_form','press_key','type','navigate','navigate_back','network_requests','network_request','run_code_unsafe','take_screenshot','snapshot','click','drag','hover','select_option','tabs','wait_for'].map(n=>'mcp__playwright-mcp__browser_'+n))
@@ -40,6 +42,8 @@ export class SocialAgent {
     this.qq=config.qq?new SnowLuma({...config.qq,token:process.env[config.qq.tokenEnv??'SNOWLUMA_TOKEN'],eventToken:process.env[config.qq.eventTokenEnv??'SNOWLUMA_EVENT_TOKEN'],eventSecret:process.env[config.qq.eventSecretEnv??'SNOWLUMA_EVENT_SECRET']}):null
     this.executor=config.executor?new Executor(config.executor):null
     this.debugHelper=config.debugHelper?new DebugHelper(this,config.debugHelper):null
+    this.motivation=config.motivation?.enabled?new Motivation(this.data,config.motivation):null
+    this.team=config.team?.enabled?new TeamHost(this,config.team):null
     if(ctx&&typeof ctx.on==='function')this.register()
     else if(this.enabled)throw Error('自主模式需要 DSH 原生事件服务')
   }
@@ -80,11 +84,11 @@ export class SocialAgent {
     this.appliedView={session,id:view.id}
     if(view.focus)this.data.recordFocus(view.focus)
   }
-  toolsAllowed(){if(this.maintenanceJob)return new Set(['yoyo_read','yoyo_message','yoyo_search','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence']);const names=new Set(COMMON_TOOLS);if(this.separate)names.delete('life_context');if(this.config.publicBrowser&&this.activeView&&this.currentView().scopes.every(s=>s==='public'))for(const n of PUBLIC_BROWSER_TOOLS)names.add(n);if(this.executor){names.add('yoyo_execute');names.add('yoyo_job');names.add('yoyo_projects')}if(this.debugHelper)for(const n of ['yoyo_debug','yoyo_debug_status','yoyo_debug_patch'])names.add(n);if(this.isOwner())for(const n of OWNER_TOOLS)names.add(n);return names}
+  toolsAllowed(){if(this.maintenanceJob)return new Set(['yoyo_read','yoyo_message','yoyo_search','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence']);const names=new Set(COMMON_TOOLS);if(this.team)for(const n of TEAM_TOOLS)names.add(n);if(this.motivation)for(const n of MOTIVATION_TOOLS)names.add(n);if(this.separate)names.delete('life_context');if(this.config.publicBrowser&&this.activeView&&this.currentView().scopes.every(s=>s==='public'))for(const n of PUBLIC_BROWSER_TOOLS)names.add(n);if(this.executor){names.add('yoyo_execute');names.add('yoyo_job');names.add('yoyo_projects')}if(this.debugHelper)for(const n of ['yoyo_debug','yoyo_debug_status','yoyo_debug_patch'])names.add(n);if(this.isOwner())for(const n of OWNER_TOOLS)names.add(n);return names}
   register() {
     const ctx=this.ctx
     this.disposers.push(ctx.systemPrompt.context({name:'yoyo:state',order:900,text:({agent})=>agent?.id===this.sessionId?JSON.stringify(this.state()):''}))
-    this.disposers.push(ctx.systemPrompt.section({name:'yoyo:agency',order:10220,interpolate:false,text:({agent})=>this.enabled&&agent?.id===this.sessionId?(this.separate?POLICY.replace('微信、QQ 群、QQ 私聊和 DSH','QQ 群、QQ 私聊和社交 DSH 会话').replace('微信图片文件用 yoyo_attachment','QQ 图片文件用 yoyo_attachment'):POLICY):''}))
+    this.disposers.push(ctx.systemPrompt.section({name:'yoyo:agency',order:10220,interpolate:false,text:({agent})=>this.enabled&&agent?.id===this.sessionId?((this.separate?POLICY.replace('微信、QQ 群、QQ 私聊和 DSH','QQ 群、QQ 私聊和社交 DSH 会话').replace('微信图片文件用 yoyo_attachment','QQ 图片文件用 yoyo_attachment'):POLICY)+(this.team?'\n'+TEAM_POLICY:'')+(this.motivation?'\n'+MOTIVATION_POLICY:'')):''}))
     this.disposers.push(ctx.on('system-prompt/assemble',async(assembly,context,next)=>{
       const result=await next();if(!this.enabled||context.agent?.id!==this.sessionId)return result
       const allowed=this.toolsAllowed(),tools=result.tools.filter(t=>allowed.has(t.name))
@@ -139,6 +143,8 @@ export class SocialAgent {
         return (this.separate?NativeAgent.prototype.receipt.call({ctx:this.ctx,store:this.store},name,args,exec,invoke):this.runtime.model.receipt(name,args,exec,invoke))
       }}))
     }
+    this.team?.register(define)
+    this.motivation?.register(define)
     if(this.debugHelper){
       define('yoyo_debug','将故障交给独立容器中的另一套 DSH 原生 Agent。仅提交必要问题描述，自动附脱敏诊断；源码副本内可用 Git、Shell 和测试，不能改生产。后台返回任务编号，切勿粘贴整个聊天或凭据。',{problem:{type:'string',minLength:1,maxLength:12000}},['problem'],(args,exec,key,view)=>this.debugHelper.start(args,view,key,exec.signal))
       define('yoyo_debug_status','查询当前资料范围内排障任务的报告、Git 提交、补丁摘要和状态。done 代表排障完成，不代表已部署；等待期间可继续活动，避免反复轮询。',{id:{type:'string'}},['id'],(args,exec,key,view)=>this.debugHelper.status(args,view,exec.signal))
@@ -234,6 +240,7 @@ export class SocialAgent {
     define('yoyo_send','把文字或 Markdown 发给当前已授权的窗口。只能称已入队，状态 sent 才表示有平台回执。',{text:{type:'string',minLength:1,maxLength:20000}},['text'],async(args,exec,key,view)=>{
       if(this.store.get('yoyo_settings',{}).paused)throw Error('主体已暂停')
       if(!this.isOwner(view)&&this.store.get('yoyo_settings',{}).observeOnly!==false)return {queued:false,observation:true,message:'观察模式，未发送。'}
+      this.team?.mainEnqueue(view,key)
       return this.data.enqueue(view.id,view.focus,args.text,key)
     })
     define('yoyo_send_file','把当前范围的文件编号作为 QQ 图片或文件发送到当前窗口，最多 8 MiB。先用 yoyo_delivery 核对回执。',{id:{type:'string'},kind:{type:'string',enum:['image','file']}},['id','kind'],async(args,exec,key,view)=>{
@@ -244,6 +251,7 @@ export class SocialAgent {
       const path=workspacePath(this.runtime.workspace,asset.path),size=statSync(path).size
       if(size<1||size>8*1024*1024)throw Error('QQ 当前支持 1 字节至 8 MiB 的文件')
       const bytes=readFileSync(path);if(args.kind==='image')imageExtension(bytes)
+      this.team?.mainEnqueue(view,key)
       return this.data.enqueueAsset(view.id,view.focus,{assetId:args.id,kind:args.kind,bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')},key)
     })
     define('yoyo_delivery','查看当前窗口最近的发信回执。uncertain 表示结果不确定，不能自动重发；sent 才是已确认发送。',{},[],async(args,exec,key,view)=>({messages:this.data.db.prepare('SELECT id,body,state,remote_id,error,created_at,sent_at FROM yoyo_outbox WHERE target=? ORDER BY id DESC LIMIT 20').all(view.focus)}))
@@ -290,7 +298,7 @@ export class SocialAgent {
   }
   state() {
     const view=this.activeView
-    return {navigation:this.data.navigation(),navigationAuthority:'Host metadata only: a past read proves that window was readable then, not current permission or knowledge of its content here. Check currentWindow and fresh tool results; historical activity descriptions are not live diagnostics.',engine:'DSH native Agent',persona:this.isOwner()?this.store.get('persona'):this.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同边界。'),self:this.store.get('yoyo_self',{mood:'calm',energy:'steady',satisfied:{}}),activity:view?this.data.activity(view.id):null,plans:view?this.data.plans(view.id):[],concerns:view?this.data.concerns(view.id).filter(c=>['active','waiting'].includes(c.state)).slice(0,8).map(({id,title,why,next,state,reviewAt})=>({id,title,why,next,state,reviewAt})):[],feedback:view?this.data.concernFeedbacks(view.id):[],learning:view?this.data.learning(view.id).slice(0,12).map(({id,trait,state,identity})=>({id,trait,state,identity})):[],focus:view?.focus??null,currentWindow:view?.focus?this.data.inbox().find(t=>t.handle===view.focus)??null:null,memories:view?this.data.recall(view.id):[],environment:{pending:this.maintenanceJob?[]:this.data.pendingNotices(),wake:this.wakeEvent??null,noticed:this.maintenanceJob?[]:(this.environmentNotice??[]),delivery:'state_at_action_boundary',interrupt:false},attention:this.data.attention().filter(t=>t.ready).map(({handle,kind,label,ready,count,mentioned})=>({handle,kind,label,ready,count,mentioned})),memoryReview:this.maintenanceJob?{after:this.maintenanceJob.after,through:this.maintenanceJob.through,kind:this.maintenanceJob.kind}:null,timezone:'Asia/Shanghai'}
+    return {navigation:this.data.navigation(),navigationAuthority:'Host metadata only: a past read proves that window was readable then, not current permission or knowledge of its content here. Check currentWindow and fresh tool results; historical activity descriptions are not live diagnostics.',engine:'DSH native Agent',persona:this.isOwner()?this.store.get('persona'):this.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算，熟悉的人和陌生人有不同边界。'),self:this.store.get('yoyo_self',{mood:'calm',energy:'steady',satisfied:{}}),motivation:view&&this.motivation?this.motivation.summary(view):null,activity:view?this.data.activity(view.id):null,plans:view?this.data.plans(view.id):[],concerns:view?this.data.concerns(view.id).filter(c=>['active','waiting'].includes(c.state)).slice(0,8).map(({id,title,why,next,state,reviewAt})=>({id,title,why,next,state,reviewAt})):[],feedback:view?this.data.concernFeedbacks(view.id):[],learning:view?this.data.learning(view.id).slice(0,12).map(({id,trait,state,identity})=>({id,trait,state,identity})):[],focus:view?.focus??null,currentWindow:view?.focus?this.data.inbox().find(t=>t.handle===view.focus)??null:null,memories:view?this.data.recall(view.id):[],environment:{pending:this.maintenanceJob?[]:this.data.pendingNotices(),wake:this.wakeEvent??null,noticed:this.maintenanceJob?[]:(this.environmentNotice??[]),delivery:'state_at_action_boundary',interrupt:false},attention:this.data.attention().filter(t=>t.ready).map(({handle,kind,label,ready,count,mentioned})=>({handle,kind,label,ready,count,mentioned})),memoryReview:this.maintenanceJob?{after:this.maintenanceJob.after,through:this.maintenanceJob.through,kind:this.maintenanceJob.kind}:null,timezone:'Asia/Shanghai'}
   }
   async migrateInbox() {
     const owner=this.ownerTarget();if(!owner)return
@@ -305,11 +313,13 @@ export class SocialAgent {
     const select=(target,event,view=null)=>{this.wakeEvent=event;this.wakeView=view;return target}
     if(this.store.get('yoyo_settings',{}).paused)return null
     const next=this.store.get('yoyo_next_focus');if(next)return select(next,{kind:'focus_selected',target:next})
+    const teamEvent=this.team?.nextEvent()
+    if(teamEvent)return select(teamEvent.view.focus??'public',{kind:'team_finished',task:teamEvent.id,state:teamEvent.state},teamEvent.view)
     const due=this.data.db.prepare("SELECT id,view_id FROM yoyo_plans WHERE state='open' AND not_before IS NOT NULL AND not_before<=? ORDER BY not_before LIMIT 10").all(now)
     for(const plan of due){try{const v=this.data.view(plan.view_id);this.duePlan=plan.id;return select(v.focus??(v.scopes.length===1?'public':'overview'),{kind:'plan_review_due',plan:plan.id},v)}catch{/* Revoked work does not wake the agent. */}}
     this.readyJob=null
     for(const job of this.data.db.prepare("SELECT id,view_id,state,backend FROM yoyo_jobs WHERE notified=0 AND state IN ('done','failed','timed_out','interrupted') AND view_id IS NOT NULL ORDER BY created_at LIMIT 20").all()){try{const v=this.data.view(job.view_id);this.readyJob=job;return select(v.focus??(v.scopes.length===1?'public':'overview'),{kind:'job_finished',job:job.id,state:job.state,backend:job.backend},v)}catch{this.data.db.prepare('UPDATE yoyo_jobs SET notified=1 WHERE id=?').run(job.id)}}
-    const a=this.data.activity(),inbox=this.data.attention(now,this.config.quietMs).filter(t=>t.ready)
+    const a=this.data.activity(),inbox=this.data.attention(now,this.config.quietMs).filter(t=>t.ready&&!this.team?.activeWindow(t.handle))
     const concern=this.data.dueConcern(now)
     if(concern){this.dueConcern=concern;return select(concern.view.focus??(concern.view.scopes.length===1?'public':'overview'),{kind:'concern_review_due',concern:concern.id,scheduledAt:concern.reviewAt},concern.view)}
     if(a.state==='sleeping'&&(a.wake_at===null||a.wake_at>now)&&!inbox.some(t=>t.mentioned||t.kind==='private'||t.platform==='wechat'||t.policy?.mode==='realtime'))return null
@@ -338,6 +348,7 @@ export class SocialAgent {
   async tick() {
     if(!this.enabled)return
     await this.migrateInbox()
+    this.team?.tick()
     const agent=await this.ensureAgent()
     this.boundAgent=agent
     if(this.separate&&!this.qq&&!this.store.get('yoyo_settings',{}).dailySteps&&!this.store.get('yoyo_next_focus'))return
@@ -379,6 +390,7 @@ export class SocialAgent {
       // The durable turn owns this one-shot review, including on submission failure.
       // Failures stay visible; they must not become a rapid automatic retry loop.
       if(!review&&this.dueConcern)this.data.consumeConcernReview(this.dueConcern.id,this.dueConcern.reviewAt)
+      if(!review&&this.wakeEvent?.kind==='team_finished')this.team.acknowledge(this.wakeEvent.task)
       if(!review&&this.wakeEvent?.kind==='self_scheduled_review')this.data.db.prepare('UPDATE yoyo_activity SET wake_at=NULL WHERE id=1 AND revision=? AND wake_at=?').run(pending.revision,pending.wake_at)
       await this.ctx.sessionController.prompt({sessionId:agent.id,requestId,mode:'queue',clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:prompt}]},this.runtime.abort.signal)
       if(this.readyJob){this.data.db.prepare('UPDATE yoyo_jobs SET notified=1 WHERE id=?').run(this.readyJob.id);this.readyJob=null}
@@ -409,6 +421,7 @@ export class SocialAgent {
   async deliver() {
     const settings=this.store.get('yoyo_settings',{});if(settings.paused)return false
     return this.data.deliver(async(target,text,key,authorize,content)=>{
+      if(this.team){const original=authorize;authorize=()=>{original();try{this.team.mainDispatch(key)}catch(error){error.authorityInvalid=true;throw error}};authorize()}
       if(target.platform==='qq'){if(!this.qq)throw Error('QQ 未配置');if(content){const asset=this.data.db.prepare('SELECT * FROM yoyo_assets WHERE id=?').get(content.assetId);if(!asset)throw Error('附件不存在');assertPublish(JSON.parse(asset.scopes),target.scope);const path=workspacePath(this.runtime.workspace,asset.path);if(statSync(path).size!==content.bytes)throw Error('排队后的附件已变化');return this.qq.sendAsset(target,content,readFileSync(path),this.runtime.abort.signal,authorize)}return this.qq.send(target,text,key,this.runtime.abort.signal,authorize)}
       if(target.platform==='wechat'&&target.kind==='owner'){
         if(String(this.store.get('owner'))!==target.peer)throw Error('微信绑定已变化')
@@ -417,5 +430,5 @@ export class SocialAgent {
       throw Error('发件平台未配置')
     },Date.now(),{ownerOnly:settings.observeOnly!==false})
   }
-  stop(){for(const d of this.disposers.splice(0).reverse())d();if(this.separate)this.store.close()}
+  stop(){const finish=()=>{for(const d of this.disposers.splice(0).reverse())d();if(this.separate)this.store.close()};return this.team?this.team.stop().then(finish):finish()}
 }

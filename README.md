@@ -18,6 +18,10 @@ QQ 可选独立排障助手：另一容器中的原生 DSH，以源码副本、G
 
 0.8.0 增加持续关切、下一步意图、一次性复查和实际行动反馈；理解人物与模仿表达分开，向欣赏对象学习需直接经历、明确尝试与复查，保留修改版本。具体实现和限制见[动机与学习文档](docs/motivation.md)，[Generative Agents 参考说明](docs/generative-agents-reference.md)。真实连续行为仍需运行验收，不能以工具存在代表已具备自然人格。
 
+## 以开心为方向的自主选择
+
+0.12.0 可选的动机层：`self_options / self_choose / self_appraise / self_preferences` 分别保存候选与期待、事件后的实际感受、以及有界的偏好与修订链。偏好按真实事件更新，同一事件只计一次；自述和执行者转述不提高满足，一次不愉快不会把活动或某人永久判为讨厌，私人经历不改变公开情绪。默认关闭。[字段、规则、防刷分与验证](docs/humanlike-motivation.md)。
+
 ## 原生 DSH 架构
 
 微信 → 持久化收件箱与连续消息合批 → 官方 `SessionController.create / prompt / resolveAgent` → DSH 原生 Agent / 工具调度 / Session JSONL / 自动压缩 → 微信回复队列。
