@@ -83,7 +83,7 @@ test('the same concept keeps one name and one default across layers',()=>{
 test('the documented role list is exactly the roles the host accepts',()=>{
   const deployReadme=readFileSync(new URL('../deploy/README.md',import.meta.url),'utf8')
   const teamDoc=readFileSync(new URL('../docs/team-runtime.md',import.meta.url),'utf8')
-  const accept=['chat','research','reader','verify','engineer']
+  const accept=['chat','research','reader','verify','engineer','peer']
   assert.deepEqual(Object.keys(ROLE_TOOLS).sort(),[...accept].sort(),'代码里的角色集合')
   for(const role of accept){
     assert.match(deployReadme,new RegExp('`'+role+'`'),'部署说明写明角色 '+role)

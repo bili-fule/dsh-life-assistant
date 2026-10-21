@@ -187,6 +187,35 @@ test('an engineering worker runs code in the isolated runner and reads only its 
   social.executor=null
   await assert.rejects(()=>tools.execute({args:{code:'x',language:'node'},view:publicView,taskId:engineered.id}),/隔离执行服务/)
 })
+test('a peer executor calls the subject’s own tools with the task view, and nothing more',async t=>{
+  const {host,social,view,task,data}=fixture(t),calls=[]
+  social.peerTools=new Map([
+    ['yoyo_read',async(args,exec,key,runView)=>{calls.push({name:'yoyo_read',args,key,scopes:runView.scopes});return {messages:[{id:1,text:'预览'}],receipt:key}}],
+    ['memory_recall',async(args,exec,key,runView)=>{calls.push({name:'memory_recall',args,key,scopes:runView.scopes});return {results:[],receipt:key}}]
+  ])
+  const peer=host.tasks.create({key:'peer',role:'peer',goal:'一起聊',viewId:view.id,expiresAt:Date.now()+60000})
+  host.tasks.claim(peer.id,'worker-peer')
+  const tools=host.coordinator.tools
+  const read=await tools.read({args:{limit:5},view,agentId:'worker-peer',signal:undefined})
+  assert.equal(read.messages[0].text,'预览')
+  assert.equal(calls[0].scopes.includes('public'),true,'执行者用的是任务自己的视图')
+  assert.match(calls[0].key,/^team-[a-f0-9]{24}$/,'调用带任务级回执编号')
+  // The same call twice is the same receipt, so evidence stays traceable.
+  await tools.read({args:{limit:5},view,agentId:'worker-peer',signal:undefined})
+  assert.equal(calls[1].key,calls[0].key)
+  await tools.memory_recall({args:{query:'语音'},view,agentId:'worker-peer',signal:undefined})
+  assert.equal(calls[2].name,'memory_recall')
+  // Tools the subject keeps private are not wired to the bridge at all.
+  for(const reserved of ['memory_retract','yoyo_open','yoyo_mute','yoyo_attention','team_delegate','yoyo_debug'])
+    assert.equal(reserved in tools,false,'不向执行者暴露 '+reserved)
+  // A peer tool the subject did not expose stays unavailable rather than half-working.
+  await assert.rejects(()=>tools.search({args:{query:'x'},view,agentId:'worker-peer'}),/对执行者未启用/)
+  // Cancelling the task removes the authority behind the bridge.
+  host.act({id:peer.id,action:'cancel'})
+  await assert.rejects(()=>tools.read({args:{},view,agentId:'worker-peer'}),/失效/)
+  assert.equal(task.id.length>0,true)
+  assert.ok(data)
+})
 test('the admin page renders the team panel from the operational status only',t=>{
   const page=readFileSync(new URL('../public/index.html',import.meta.url),'utf8')
   const script=readFileSync(new URL('../public/app.js',import.meta.url),'utf8')

@@ -16,7 +16,7 @@ export class TeamCoordinator {
     // starting a stranger. It still matches the adapter's id pattern.
     const agentId='worker-'+createHash('sha256').update(id).digest('hex').slice(0,20)
     const {task,view}=this.tasks.claim(id,agentId),controller=new AbortController()
-    const generation=task.role==='chat'?this.tasks.db.prepare('SELECT generation FROM yoyo_team_speakers WHERE target=?').get(view.focus).generation:null
+    const generation=['chat','peer'].includes(task.role)?this.tasks.db.prepare('SELECT generation FROM yoyo_team_speakers WHERE target=?').get(view.focus).generation:null
     const invoke=async(name,args)=>{
       if(controller.signal.aborted)throw Error('执行已取消')
       const current=this.tasks.authority(agentId)

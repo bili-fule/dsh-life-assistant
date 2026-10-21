@@ -8,9 +8,9 @@
 - **📄 只有规则**：行为写在文档/提示词里，但没有确定性测试直接断言它。
 - **⏳ 需要真实环境**：需要真实模型、真实平台或容器运行时才能证明，本仓库无法自证。
 
-当前状态：`npm test` 共 236 项，`npm run check` 通过；生产运行的是 0.25.0（见 [部署验收记录](deployment-025-2026-10-21.md)），本文描述的是仓库里的开发版。
+当前状态：`npm test` 共 238 项，`npm run check` 通过；生产运行的是 0.25.0（见 [部署验收记录](deployment-025-2026-10-21.md)），本文描述的是仓库里的开发版。
 
-<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=236 -->
+<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=238 -->
 
 ## 1. 动机计划 §12
 

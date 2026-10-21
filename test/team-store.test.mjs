@@ -241,6 +241,30 @@ test('the engineering role starts public, cannot speak and can only narrow its t
   assert.throws(()=>team.create({key:'eng-wide',role:'engineer',goal:'g',viewId:publicView.id,expiresAt:1000,toolset:['send']}),/属于该角色/)
 })
 
+test('a peer executor reaches nearly everything but never the control plane',t=>{
+  const {team,social,a,create}=fixture(t),publicView=social.publicView(),peer=create('peer',a,'peer')
+  // Reach: the subject's own reading, searching, files, browsing, code and memory.
+  for(const name of ['read','search','message','file','attachment','forward','recall','web','execute','job','send',
+    'memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize'])
+    assert.equal(ROLE_TOOLS.peer.includes(name),true,'peer 具备 '+name)
+  // Control plane stays with the subject.
+  for(const name of ['open','attention','mute','dismiss','cancel','delegate','deliver','memory_retract'])
+    assert.equal(ROLE_TOOLS.peer.includes(name),false,'peer 没有 '+name)
+  // A peer may work in a window and takes the speaker lease like chat.
+  assert.equal(peer.role,'peer')
+  team.claim(peer.id,'worker-peer')
+  const second=create('peer-2',a,'peer')
+  assert.throws(()=>team.claim(second.id,'worker-peer-2'),/发言者/,'同一窗口只能有一个发言租约')
+  team.takeover(a.id,'main',Date.now()+900000)
+  assert.throws(()=>team.authorizeSend('worker-peer',a.focus,1),/失效/,'主体接管后同伴不能再发')
+  // Public work is allowed too, and narrowing still cannot widen.
+  const public_=create('peer-public',publicView,'peer')
+  assert.equal(public_.role,'peer')
+  const narrowed=team.create({key:'peer-narrow',role:'peer',goal:'g',viewId:publicView.id,expiresAt:1000,toolset:['read','report']})
+  assert.deepEqual(JSON.parse(narrowed.toolset),['read','report'])
+  assert.throws(()=>team.create({key:'peer-wide',role:'peer',goal:'g',viewId:publicView.id,expiresAt:1000,toolset:['open']}),/属于该角色/)
+})
+
 test('the source registry shows repeated readings and cross-task disagreements',t=>{
   const {team,a,b,create}=fixture(t),x=create('x'),reader=create('reader',a,'reader'),other=create('other',b)
   team.claim(x.id,'worker-x');team.claim(reader.id,'worker-r');team.claim(other.id,'worker-o')

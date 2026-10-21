@@ -22,6 +22,11 @@ import { readChunk,CHUNK_DEFAULT,CHUNK_MAX } from './chunk.mjs'
 const COMMON_TOOLS=new Set(['yoyo_evidence','yoyo_learning','yoyo_feedback','yoyo_concern','yoyo_inbox','yoyo_mute','yoyo_attention','yoyo_dismiss','yoyo_open','yoyo_read','yoyo_message','yoyo_search','yoyo_send','yoyo_send_file','yoyo_delivery','yoyo_activity','yoyo_plan','yoyo_self','yoyo_sleep','yoyo_wait','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_web','yoyo_forward','yoyo_attachment','yoyo_file','life_context'])
 const PUBLIC_BROWSER_TOOLS=new Set(['close','resize','console_messages','handle_dialog','evaluate','file_upload','drop','find','fill_form','press_key','type','navigate','navigate_back','network_requests','network_request','run_code_unsafe','take_screenshot','snapshot','click','drag','hover','select_option','tabs','wait_for'].map(n=>'mcp__playwright-mcp__browser_'+n))
 const OWNER_TOOLS=new Set(['life_state','life_record','life_history','life_preferences','life_memory','life_recall','life_read_file','life_send_file','life_send_message'])
+// A peer executor works with nearly the subject's own reach: the same reads,
+// searches, file and attachment access, public browsing and memory tools. What it
+// can never get is the control plane — the subject's own state, its attention and
+// focus, its settings, orchestration of other executors, or the debug container.
+const PEER_TOOL_NAMES=new Set(['yoyo_read','yoyo_search','yoyo_message','yoyo_file','yoyo_attachment','yoyo_forward','yoyo_recall','yoyo_web','memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize'])
 function messagePreviews(rows,query='') {
   let remaining=60000
   return rows.map(row=>{
@@ -67,7 +72,7 @@ export class SocialAgent {
     if(this.separate){const workspace=join(runtime.workspace,'qq-social');mkdirSync(workspace,{recursive:true,mode:0o700});this.store=new Store(join(workspace,'social.sqlite'));this.runtime={...runtime,workspace,media:new Media({store:this.store,workspace,attachments:runtime.config?.attachments??runtime.media?.attachments,signal:runtime.abort?.signal,config:runtime.config??{}})}}else{this.store=runtime.store;this.runtime=runtime}
     this.ctx=ctx;this.data=new SocialStore(this.store);this.memoryMaintenance=new SocialMaintenance(this.data,config.memoryMaintenance)
     this.config={enabled:false,quietMs:5000,attentionMs:30000,ordinaryMs:120000,maxSteps:20,turnMs:300000,...config}
-    this.enabled=!!this.config.enabled;this.activeView=this.separate?this.data.publicView():null;this.disposers=[];this.currentRequest=null;this.ownerSources=[]
+    this.enabled=!!this.config.enabled;this.activeView=this.separate?this.data.publicView():null;this.disposers=[];this.currentRequest=null;this.ownerSources=[];this.peerTools=new Map()
     this.qq=config.qq?new SnowLuma({...config.qq,token:process.env[config.qq.tokenEnv??'SNOWLUMA_TOKEN'],eventToken:process.env[config.qq.eventTokenEnv??'SNOWLUMA_EVENT_TOKEN'],eventSecret:process.env[config.qq.eventSecretEnv??'SNOWLUMA_EVENT_SECRET']}):null
     this.executor=config.executor?new Executor(config.executor):null
     this.debugHelper=config.debugHelper?new DebugHelper(this,config.debugHelper):null
@@ -166,6 +171,13 @@ export class SocialAgent {
       return next()
     }))
     const define=(name,description,properties,required,execute,render)=>{
+      // A peer executor reuses the very same implementation as the subject, only
+      // with the task's own view and a task-scoped receipt key. Reserved tools are
+      // never mapped here, so parity cannot quietly widen into the control plane.
+      if(PEER_TOOL_NAMES.has(name))this.peerTools.set(name,async(args,exec,key,view)=>{
+        const invoke=async receiptKey=>{const value=await execute(args,exec,receiptKey,view);this.data.db.prepare('INSERT OR IGNORE INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run(receiptKey,name,JSON.stringify(view.scopes),JSON.stringify(value),Date.now());return {...value,receipt:receiptKey}}
+        return (this.separate?NativeAgent.prototype.receipt.call({ctx:this.ctx,store:this.store},name,args,exec,invoke):this.runtime.model.receipt(name,args,exec,invoke))
+      })
       this.disposers.push(ctx.tools.register({name,description,parameters:{type:'object',properties,required,additionalProperties:false},output:{schema:{type:'object',additionalProperties:true},render:render??((_,value)=>[{type:'text',text:JSON.stringify(value)}])},execute:async(args,exec)=>{
         if(!this.enabled||exec.agent?.id!==this.sessionId)throw Error('只能由 yoyo 主体调用')
         const view=this.currentView()

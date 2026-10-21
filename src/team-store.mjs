@@ -11,6 +11,13 @@ export const ROLE_TOOLS={
   // Engineering runs code in the isolated runner and reports back; it cannot talk
   // to anyone, cannot read a private window and cannot reach the debug container.
   engineer:['execute','job','report','evidence','board','remember','pack','usage','step'],
+  // A peer works with nearly the subject's own reach (same reads, searches, files,
+  // public browsing, memory tools and code runner). It still has no control plane:
+  // no orchestration of other executors, no attention/focus, no own-state or
+  // settings tools, and no debug container. The subject keeps cancelling, steering,
+  // taking over and bounding it.
+  peer:['read','wait','search','message','file','attachment','forward','recall','web','execute','job','send',
+    'report','evidence','board','remember','pack','memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize','usage','step'],
 }
 
 const WORKER_CLAIM_TYPES=['fact','knowledge','preference','procedure','self']
@@ -84,7 +91,7 @@ export class TeamStore {
     if(!Number.isSafeInteger(expiresAt)||expiresAt<=this.clock())throw Error('任务期限无效')
     let tools=null
     if(toolset!==null){
-      if(!Array.isArray(toolset)||!toolset.length||toolset.length>9||toolset.some(name=>!ROLE_TOOLS[role].includes(name)))throw Error('工具集必须属于该角色')
+      if(!Array.isArray(toolset)||!toolset.length||toolset.length>ROLE_TOOLS[role].length||toolset.some(name=>!ROLE_TOOLS[role].includes(name)))throw Error('工具集必须属于该角色')
       tools=JSON.stringify([...new Set(toolset)])
     }
     if(maxSteps!==null&&(!Number.isInteger(maxSteps)||maxSteps<1||maxSteps>200))throw Error('任务步数上限无效')
@@ -101,7 +108,7 @@ export class TeamStore {
       return old
     }
     // Snapshots make a stale authorisation or persona visible instead of implicit.
-    const authorization=view.focus&&['chat','reader'].includes(role)?this.social.target(view.focus,{approved:true}).version:null
+    const authorization=view.focus&&['chat','reader','peer'].includes(role)?this.social.target(view.focus,{approved:true}).version:null
     const persona=this.db.prepare('SELECT coalesce(max(id),0) id FROM yoyo_persona_versions').get().id
     const id=randomUUID()
     this.db.prepare('INSERT INTO yoyo_team_tasks(id,run_key,role,goal,view_id,state,expires_at,created_at,parent_id,depends_on,toolset,authorization_version,persona_version,max_steps) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
@@ -133,12 +140,12 @@ export class TeamStore {
         const state=this.db.prepare('SELECT state FROM yoyo_team_tasks WHERE id=?').get(dependency)?.state
         if(state!=='completed')throw Error('依赖任务尚未完成')
       }
-      if(['chat','reader'].includes(task.role)){
+      if(['chat','reader','peer'].includes(task.role)){
         const target=this.social.target(view.focus,{approved:true})
         // The task carries the authorisation it was created under; a newer
         // version means the window changed and the old task must not continue.
         if(task.authorization_version!==null&&target.version!==task.authorization_version)throw Error('目标授权已变化，不能沿用旧任务')
-        if(task.role==='chat'){
+        if(['chat','peer'].includes(task.role)){
           assertPublish(view.scopes,target.scope)
           const speaker=this.db.prepare('SELECT * FROM yoyo_team_speakers WHERE target=?').get(view.focus)
           if(speaker&&speaker.expires_at>this.clock())throw Error('窗口已有发言者')

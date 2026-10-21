@@ -85,11 +85,25 @@ export class TeamHost {
       },
       send:context=>this.send(context),
     }})
+    // A peer reuses the subject's own implementations for reads, searches, files,
+    // attachments, forwards, public browsing and the memory tools. The bridge only
+    // forwards the task's view and a task-scoped receipt key; anything missing from
+    // peerTools simply is not available to an executor.
+    for(const [name,tool] of [['read','yoyo_read'],['search','yoyo_search'],['message','yoyo_message'],['file','yoyo_file'],
+      ['attachment','yoyo_attachment'],['forward','yoyo_forward'],['recall','yoyo_recall'],['web','yoyo_web'],
+      ['memory_recall','memory_recall'],['memory_inspect','memory_inspect'],['memory_propose','memory_propose'],
+      ['memory_segments','memory_segments'],['memory_generalize','memory_generalize']])
+      this.coordinator.tools[name]=async({args,view,agentId,signal,key})=>{
+        if(!social.peerTools?.has(tool))throw Error('该工具对执行者未启用')
+        const {task}=this.tasks.authority(agentId)
+        const receipt=key??'team-'+createHash('sha256').update(task.id+':'+tool+':'+JSON.stringify(args??null)).digest('hex').slice(0,24)
+        return social.peerTools.get(tool)(args,{agent:{id:social.sessionId},signal,callId:receipt},receipt,view)
+      }
   }
   register(define) {
     define('team_overview','查看团队安全状态，不含其他窗口正文。',{},[],async()=>({tasks:this.tasks.overview()}))
     define('team_deliberate','结合当前范围内关切、分工和证据，自主决定下一步；无事允许休息。',{},[],async(a,e,k,v)=>this.motivation.deliberate(v.id))
-    define('team_delegate','委派一个有动机的聊天、公开研究、阅读、核对或工程活动。chat 直接在窗口交流；reader 只读不发言；research 仅 public；verify 只核对证据；engineer 只从 public 视图分派，在隔离、无网络的执行环境里跑代码并把结果写成证据，不能发言也读不到私人窗口。可分派属于自己某次选择的活动，但活动体验仍按真实事件去重。可选 recall 给出线索，宿主会从记忆层挑几条摘要装成这个任务的记忆包（只是摘要，执行者仍需核对原文）。',{concernId:{type:'integer'},choiceId:{type:'integer'},role:{type:'string',enum:['chat','research','reader','verify','engineer']},goal:{type:'string',maxLength:6000},rationale:{type:'string',maxLength:2000},durationSeconds:{type:'integer',minimum:30,maximum:900},dependsOn:{type:'array',maxItems:3,items:{type:'string',maxLength:60}},maxSteps:{type:'integer',minimum:1,maximum:200},recall:{type:'string',maxLength:300}},['concernId','role','goal','rationale'],async(a,e,k,v)=>{
+    define('team_delegate','委派一个有动机的聊天、公开研究、阅读、核对、工程或同伴活动。chat 直接在窗口交流；reader 只读不发言；research 仅 public；verify 只核对证据；engineer 只从 public 视图分派，在隔离、无网络的执行环境里跑代码；peer 与你自己几乎同等（同样的阅读、搜索、文件与附件、公开网页、代码执行与记忆工具），但没有控制面：不能分派或取消其他执行者、不能改你的注意力与人设，记忆撤回与排障容器仍只属于你。可分派属于自己某次选择的活动，但活动体验仍按真实事件去重。可选 recall 给出线索，宿主会从记忆层挑几条摘要装成这个任务的记忆包（只是摘要，执行者仍需核对原文）。',{concernId:{type:'integer'},choiceId:{type:'integer'},role:{type:'string',enum:['chat','research','reader','verify','engineer','peer']},goal:{type:'string',maxLength:6000},rationale:{type:'string',maxLength:2000},durationSeconds:{type:'integer',minimum:30,maximum:900},dependsOn:{type:'array',maxItems:3,items:{type:'string',maxLength:60}},maxSteps:{type:'integer',minimum:1,maximum:200},recall:{type:'string',maxLength:300}},['concernId','role','goal','rationale'],async(a,e,k,v)=>{
       const task=this.motivation.delegate({...a,key:k,viewId:v.id,expiresAt:Date.now()+1000*(a.durationSeconds??300)})
       // Transfer this window's main lease to the delegated conversation.
       if(a.role==='chat')this.db.prepare('UPDATE yoyo_team_speakers SET expires_at=0,generation=generation+1 WHERE target=? AND agent_id=?').run(v.focus,this.social.sessionId)
