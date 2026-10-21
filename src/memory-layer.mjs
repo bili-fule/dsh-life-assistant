@@ -6,13 +6,17 @@ import { boundedText,mayRead,sourceScopes } from './scope.mjs'
 // experience can never be re-derived from the same messages, and a forwarded
 // name can never become an identity. Nothing here decides what the subject
 // feels; it only records what happened and where it came from.
-export const MEMORY_TOOLS=['memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments']
+export const MEMORY_TOOLS=['memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments','memory_intent']
 export const MEMORY_POLICY=`你可以用 memory_recall 按线索想起当前范围内相关的经历与主张，用 memory_inspect 核对原始依据，用 memory_propose 提交带来源的经历或主张，用 memory_retract 淡出、归档、撤回或按要求忘记。概括不是新的事实来源：同一条原文反复引用仍然只算一个来源，推断不会被重复回忆升级为观察。转发里的姓名和引自他人的说法不能当作本人身份或本人偏好；同昵称的两个人按平台、账号和真实发送者编号区分。执行者说查过但没有工具依据的，只能记成报告。被撤回或要求忘记的来源不能再重新形成记忆。`
 
 const CLAIM_KINDS=['fact','knowledge','preference','impression','communication','procedure','self','simulation']
 const CONFIDENCE=['observed','told','worker_report','inference','self_report']
 const ROLES=['participant','observer','worker_report','told']
 const PERSON_KINDS=['preference','impression','communication']
+const INTENT_KINDS=['commitment','intention','waiting']
+const INTENT_TRIGGERS=['time','window','explicit']
+// Receipts from the agent's own records can never prove that something was done.
+const SELF_TOOLS=new Set(['yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence','yoyo_self','yoyo_sleep','yoyo_wait','yoyo_learning','yoyo_concern','yoyo_feedback','yoyo_plan','yoyo_activity','life_context','self_options','self_choose','self_appraise','self_preferences','memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments','memory_intent'])
 const clamp=(value,min,max)=>Math.max(min,Math.min(max,value))
 const keyOf=text=>text.normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu,'')
 function option(value,list,label,fallback) {
@@ -62,6 +66,10 @@ export class MemoryLayer {
         scopes TEXT NOT NULL,created_at INTEGER NOT NULL,UNIQUE(kind,ref));
       CREATE TABLE IF NOT EXISTS yoyo_memory_uses(
         id INTEGER PRIMARY KEY,kind TEXT NOT NULL,ref_id INTEGER NOT NULL,clue TEXT NOT NULL,created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_memory_intents(
+        id INTEGER PRIMARY KEY,kind TEXT NOT NULL,body TEXT NOT NULL,scopes TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'open',due_at INTEGER,consumed_at INTEGER,consumed_ref INTEGER,
+        created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
     `)
   }
   visible(alias) {return `NOT EXISTS(SELECT 1 FROM json_each(${alias}.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?)))`}
@@ -456,6 +464,93 @@ export class MemoryLayer {
     if(row.status==='retracted')throw Error('这条记忆已撤回，不再参与召回')
     return row
   }
+
+  // ---- prospective memory ------------------------------------------------
+  // A commitment is a host-scheduled reminder, not something the model has to
+  // poll for. Each trigger fires once, and closing it needs real behaviour or an
+  // explicit confirmation, never a summary that claims it was handled.
+  intent(viewId,args={}) {
+    const view=this.data.view(viewId)
+    if(args.id!==undefined)return this.closeIntent(view,args)
+    if(args.statement===undefined)return {intents:this.intents(view)}
+    const kind=option(args.kind,INTENT_KINDS,'前瞻类型',null)
+    const trigger=option(args.trigger,INTENT_TRIGGERS,'触发方式',null)
+    const statement=boundedText(args.statement,500,'打算')
+    const doneWhen=optionalText(args.doneWhen,300,'完成条件')
+    const cancelWhen=optionalText(args.cancelWhen,300,'取消条件')
+    const about=optionalText(args.about,200,'相关对象')
+    const note=optionalText(args.note,300,'补充')
+    const sources=this.evidence(view,args.evidence??{})
+    if(!sources.length)throw Error('前瞻记忆需要依据：哪句原文让你记下这件事')
+    if(kind==='commitment'&&!doneWhen&&args.dueAt===undefined)throw Error('承诺需要完成条件或触发时间')
+    if(trigger==='time'&&args.dueAt===undefined)throw Error('按时间触发需要 dueAt')
+    if(trigger==='window'&&!about)throw Error('按窗口触发需要 about（窗口编号）')
+    if(trigger==='window')this.data.target(about,{approved:true})
+    if(args.dueAt!==undefined&&(!Number.isSafeInteger(args.dueAt)||args.dueAt<=0||args.dueAt>Date.now()+90*86400000))throw Error('触发时间无效')
+    const scopes=sourceScopes([...view.scopes,...sources.flatMap(source=>Array.isArray(source.scope)?source.scope:[source.scope])])
+    const body={statement,kind,trigger,doneWhen,cancelWhen,about,note,viewId,dueAt:args.dueAt??null,
+      sources:sources.map(source=>({type:source.type,id:source.id,key:source.key}))}
+    const now=Date.now()
+    const reference=trigger==='window'?this.latestEvent(about):null
+    const id=Number(this.db.prepare('INSERT INTO yoyo_memory_intents(kind,body,scopes,state,due_at,consumed_ref,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
+      .run(kind,JSON.stringify(body),JSON.stringify(scopes),'open',args.dueAt??null,reference,now,now).lastInsertRowid)
+    return {id,state:'open',kind,trigger,dueAt:args.dueAt??null,about:about||null,
+      message:'记下了。到点或出现真实新消息时宿主会在你的原生边界提醒一次，不会每分钟追问；完成要实际做过或有回执，或者由你明确确认。'}
+  }
+  latestEvent(handle) {return this.db.prepare('SELECT coalesce(max(id),0) id FROM yoyo_events WHERE target=?').get(handle).id}
+  intents(view) {
+    return this.db.prepare(`SELECT i.* FROM yoyo_memory_intents i WHERE ${this.visible('i')} ORDER BY (i.state='open') DESC,coalesce(i.due_at,0),i.id DESC LIMIT 30`)
+      .all(JSON.stringify(view.scopes)).map(row=>{
+        const body=JSON.parse(row.body)
+        return {id:row.id,kind:row.kind,state:row.state,statement:body.statement,trigger:body.trigger,
+          dueAt:row.due_at??null,about:body.about||null,doneWhen:body.doneWhen||'',cancelWhen:body.cancelWhen||'',
+          consumedAt:row.consumed_at??null,completion:body.completion??null,updatedAt:row.updated_at}
+      })
+  }
+  closeIntent(view,args) {
+    const row=this.db.prepare('SELECT * FROM yoyo_memory_intents WHERE id=?').get(args.id)
+    if(!row||!JSON.parse(row.scopes).every(scope=>mayRead(view,scope)))throw Error('前瞻记忆不在当前资料范围')
+    if(row.state!=='open')throw Error('这件事已经处理过')
+    const state=option(args.state,['done','dropped'],'处理结果',null)
+    const reason=optionalText(args.reason,300,'理由')
+    const now=Date.now(),body=JSON.parse(row.body)
+    if(state==='dropped'){
+      if(!reason)throw Error('放弃需要说明理由')
+      body.completion={state:'dropped',reason,at:now}
+    }else if(args.receipt!==undefined){
+      if(typeof args.receipt!=='string'||!args.receipt)throw Error('回执编号无效')
+      const source=this.db.prepare('SELECT name,scopes FROM yoyo_tool_sources WHERE run_key=?').get(args.receipt)
+      if(!source||!JSON.parse(source.scopes).every(scope=>mayRead(view,scope)))throw Error('回执不在当前资料范围')
+      if(SELF_TOOLS.has(source.name))throw Error('自述类工具不能证明这件事已经办完')
+      body.completion={state:'done',evidence:'tool_receipt',receipt:args.receipt,note:reason,at:now}
+    }else if(args.confirmed===true){
+      body.completion={state:'done',evidence:'self_report',note:reason,at:now}
+    }else throw Error('完成需要实际回执，或由你明确 confirmed 确认')
+    this.db.prepare('UPDATE yoyo_memory_intents SET state=?,body=?,updated_at=? WHERE id=?').run(state,JSON.stringify(body),now,row.id)
+    return {id:row.id,state,completion:body.completion,
+      message:state==='done'?'已结束这件事。若只是聊过、没真的做，请如实说明。':'已放弃这件事，理由保留在记录里。'}
+  }
+  dueIntent(now=Date.now()) {
+    for(const row of this.db.prepare("SELECT * FROM yoyo_memory_intents WHERE state='open' ORDER BY coalesce(due_at,0),id LIMIT 20").all()){
+      const body=JSON.parse(row.body)
+      let view
+      try{view=this.data.view(body.viewId)}catch{continue}
+      if(!JSON.parse(row.scopes).every(scope=>mayRead(view,scope)))continue
+      if(body.trigger==='time'){
+        if(Number.isSafeInteger(body.dueAt)&&body.dueAt<=now&&(row.consumed_ref??0)<body.dueAt)
+          return {id:row.id,statement:body.statement,kind:body.kind,about:body.about||null,doneWhen:body.doneWhen,cancelWhen:body.cancelWhen,view,reason:'time',consumedRef:body.dueAt}
+      }else if(body.trigger==='window'&&body.about){
+        const latest=this.latestEvent(body.about)
+        if(latest>(row.consumed_ref??0))return {id:row.id,statement:body.statement,kind:body.kind,about:body.about,doneWhen:body.doneWhen,cancelWhen:body.cancelWhen,view,reason:'event',through:latest,consumedRef:latest}
+      }
+    }
+    return null
+  }
+  consumeIntent(id,reference) {
+    this.db.prepare('UPDATE yoyo_memory_intents SET consumed_at=?,consumed_ref=max(coalesce(consumed_ref,0),?) WHERE id=?')
+      .run(Date.now(),Number.isSafeInteger(reference)?reference:0,id)
+    return {id,consumed:true}
+  }
   summary(view) {
     if(!view)return null
     const scopes=JSON.stringify(view.scopes)
@@ -465,6 +560,7 @@ export class MemoryLayer {
     return {episodes:count('yoyo_memory_episodes',"AND t.status IN ('active','faded')"),
       claims:count('yoyo_memory_claims',"AND t.status IN ('active','faded')"),
       archived:count('yoyo_memory_episodes',"AND t.status='archived'")+count('yoyo_memory_claims',"AND t.status='archived'"),
+      intents:count('yoyo_memory_intents',"AND t.state='open'"),
       unresolved}
   }
 
@@ -499,6 +595,13 @@ export class MemoryLayer {
     define('memory_segments','把一个窗口的新消息按时间间隔、附件和话题变化切成候选分段，返回每段起止、参与者、边界原因和开头预览。分段只是候选，不是记忆：值得记住的要你自己写成经历。',
       {after:{type:'integer',minimum:0},before:{type:'integer',minimum:1},limit:{type:'integer',minimum:1,maximum:12},gapMs:{type:'integer',minimum:60000,maximum:86400000}},
       [],async(args,exec,key,view)=>this.segments(view.id,args))
+    define('memory_intent','前瞻记忆：记下承诺、打算或等待中的事。无参数查看当前范围未结束的事。可按时间或按窗口新消息触发，宿主在原生边界提醒一次，不轮询。完成要有实际回执或你明确确认；放弃要说明理由。',
+      {id:{type:'integer',minimum:1},statement:{type:'string',maxLength:500},kind:{type:'string',enum:INTENT_KINDS},
+        trigger:{type:'string',enum:INTENT_TRIGGERS},about:{type:'string',maxLength:200},dueAt:{type:'integer',minimum:1},
+        doneWhen:{type:'string',maxLength:300},cancelWhen:{type:'string',maxLength:300},note:{type:'string',maxLength:300},
+        evidence:{type:'object',additionalProperties:false,properties:{messages:{type:'array',maxItems:10,items:{type:'integer',minimum:1}}}},
+        state:{type:'string',enum:['done','dropped']},receipt:{type:'string',maxLength:500},confirmed:{type:'boolean'},
+        reason:{type:'string',maxLength:300}},[],async(args,exec,key,view)=>this.intent(view.id,args))
   }
 }
 function hashIdentity(target,sender) {

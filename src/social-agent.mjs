@@ -312,7 +312,7 @@ export class SocialAgent {
     }
   }
   choose(now=Date.now()) {
-    this.readyJob=null;this.duePlan=null;this.dueConcern=null;this.wakeView=null;this.wakeEvent=null
+    this.readyJob=null;this.duePlan=null;this.dueConcern=null;this.dueMemoryIntent=null;this.wakeView=null;this.wakeEvent=null
     const select=(target,event,view=null)=>{this.wakeEvent=event;this.wakeView=view;return target}
     if(this.store.get('yoyo_settings',{}).paused)return null
     const next=this.store.get('yoyo_next_focus');if(next)return select(next,{kind:'focus_selected',target:next})
@@ -325,6 +325,10 @@ export class SocialAgent {
     const a=this.data.activity(),inbox=this.data.attention(now,this.config.quietMs).filter(t=>t.ready&&!this.team?.activeWindow(t.handle))
     const concern=this.data.dueConcern(now)
     if(concern){this.dueConcern=concern;return select(concern.view.focus??(concern.view.scopes.length===1?'public':'overview'),{kind:'concern_review_due',concern:concern.id,scheduledAt:concern.reviewAt},concern.view)}
+    // A commitment or an awaited reply returns at the agent's own action
+    // boundary; the host schedules it, the model never polls for it.
+    const intent=this.memoryLayer?.dueIntent(now)
+    if(intent){this.dueMemoryIntent=intent;return select(intent.view.focus??(intent.view.scopes.length===1?'public':'overview'),{kind:'memory_intent_due',intent:intent.id,trigger:intent.reason,about:intent.about,through:intent.through??null},intent.view)}
     if(a.state==='sleeping'&&(a.wake_at===null||a.wake_at>now)&&!inbox.some(t=>t.mentioned||t.kind==='private'||t.platform==='wechat'||t.policy?.mode==='realtime'))return null
     if(a.wake_at!==null&&a.wake_at<=now){
       try{const v=this.data.view(a.body.viewId);return select(v.focus??(v.scopes.length===1?'public':'overview'),{kind:'self_scheduled_review',activityRevision:a.revision,scheduledAt:a.wake_at},v)}catch{
@@ -393,6 +397,7 @@ export class SocialAgent {
       // The durable turn owns this one-shot review, including on submission failure.
       // Failures stay visible; they must not become a rapid automatic retry loop.
       if(!review&&this.dueConcern)this.data.consumeConcernReview(this.dueConcern.id,this.dueConcern.reviewAt)
+      if(!review&&this.dueMemoryIntent)this.memoryLayer?.consumeIntent(this.dueMemoryIntent.id,this.dueMemoryIntent.consumedRef)
       if(!review&&this.wakeEvent?.kind==='team_finished')this.team.acknowledge(this.wakeEvent.task)
       if(!review&&this.wakeEvent?.kind==='self_scheduled_review')this.data.db.prepare('UPDATE yoyo_activity SET wake_at=NULL WHERE id=1 AND revision=? AND wake_at=?').run(pending.revision,pending.wake_at)
       await this.ctx.sessionController.prompt({sessionId:agent.id,requestId,mode:'queue',clientTimeZone:'Asia/Shanghai',content:[{type:'text',text:prompt}]},this.runtime.abort.signal)

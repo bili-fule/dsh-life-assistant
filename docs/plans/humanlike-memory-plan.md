@@ -1,6 +1,6 @@
 # 适合 Bot 的类人记忆系统 Plan
 
-日期：2026-10-21。状态：阶段 1 已实现，阶段 2 的分段与线索召回已实现（0.18.0，默认关闭）；阶段 2 的语义检索、阶段 3–5 未实现。实现、配置与验证见 [记忆层实现文档](../memory-layer.md)。配套方案：[自主动机](humanlike-motivation-plan.md)、[多 Agent 编排](artex-multi-agent-plan.md)。
+日期：2026-10-21。状态：阶段 1、阶段 2 的分段与线索召回、阶段 4 的前瞻记忆已实现（0.19.0，默认关闭）；语义检索、阶段 3 与阶段 5 未实现。实现、配置与验证见 [记忆层实现文档](../memory-layer.md)。配套方案：[自主动机](humanlike-motivation-plan.md)、[多 Agent 编排](artex-multi-agent-plan.md)。
 
 ## 1. 目标：记住自己的经历，而不只是保存聊天文本
 
@@ -194,6 +194,7 @@ LLM 上下文压缩与长期记忆整理是两件事。压缩负责让原生请�
 - 阶段 1 已建表 `yoyo_memory_episodes`、`yoyo_memory_claims`、`yoyo_memory_links`、`yoyo_memory_revisions`、`yoyo_memory_retractions`、`yoyo_memory_uses`；既有 `yoyo_memories` 保留为文本记忆，尚未迁移，也不借迁移提高可信度。
 - 阶段 1 的工具：`memory_recall`、`memory_inspect`、`memory_propose`、`memory_retract`，全部按视图范围过滤；撤回沿派生关系传播，忘记会登记来源墓碑阻止复活。
 - 阶段 2 已加入 `memory_segments`（按间隔、附件与用词变化切候选分段，不自动写成记忆）与线索排序召回；`memory_propose` 可用 `evidence.range` 引用整段。语义检索与跨窗口联想仍未实现。详细差距见 [记忆层实现文档](../memory-layer.md)。
+- 阶段 4 的前瞻记忆已加入 `memory_intent`：按时间或窗口新消息触发、宿主调度、同一触发幂等消费，完成需要真实回执或明确确认；执行者记忆候选与工作记忆包仍未实现。
 
 | 验收场景 | 必须表现 |
 | --- | --- |

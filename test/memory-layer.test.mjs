@@ -198,3 +198,58 @@ test('a candidate segment range can be cited as evidence and stays bounded',t=>{
   assert.equal(recalled.results.filter(item=>item.kind==='claim').length,1)
   assert.equal(recalled.results.find(item=>item.kind==='claim').support,2)
 })
+
+test('a commitment returns once at its trigger and needs real evidence to close',t=>{
+  const {data,memory,target,say}=fixture(t),a=target('123'),view=data.open(a.handle)
+  const message=say(a.handle,'123','c1','研究结果出来我发你')
+  const intent=memory.intent(view.id,{statement:'等研究结果回来再聊',kind:'commitment',trigger:'window',about:a.handle,doneWhen:'把结果发给他',
+    evidence:{messages:[message]}})
+  assert.equal(intent.state,'open')
+  assert.equal(intent.trigger,'window')
+  // An old message does not trigger it; a real new one does, exactly once.
+  assert.equal(memory.dueIntent(Date.now()),null)
+  say(a.handle,'123','c2','结果出来了')
+  const due=memory.dueIntent(Date.now())
+  assert.equal(due.id,intent.id)
+  assert.equal(due.reason,'event')
+  memory.consumeIntent(due.id,due.consumedRef)
+  assert.equal(memory.dueIntent(Date.now()),null)
+  say(a.handle,'123','c3','你看到了吗')
+  const again=memory.dueIntent(Date.now())
+  assert.equal(again.id,intent.id,'a later reply wakes it again')
+  memory.consumeIntent(again.id,again.consumedRef)
+  // Closing needs a real receipt or an explicit confirmation.
+  assert.throws(()=>memory.intent(view.id,{id:intent.id,state:'done'}),/回执|确认/)
+  assert.throws(()=>memory.intent(view.id,{id:intent.id,state:'dropped'}),/理由/)
+  data.db.prepare('INSERT INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run('self-claim','yoyo_activity',JSON.stringify(view.scopes),'我发过了',Date.now())
+  assert.throws(()=>memory.intent(view.id,{id:intent.id,state:'done',receipt:'self-claim'}),/自述/)
+  data.db.prepare('INSERT INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run('send-1','yoyo_send',JSON.stringify(view.scopes),'{"state":"sent"}',Date.now())
+  const closed=memory.intent(view.id,{id:intent.id,state:'done',receipt:'send-1',reason:'结果已经发给他'})
+  assert.equal(closed.state,'done')
+  assert.equal(closed.completion.evidence,'tool_receipt')
+  assert.equal(memory.intents(view).find(item=>item.id===intent.id).state,'done')
+  assert.equal(memory.dueIntent(Date.now()),null)
+})
+
+test('time-triggered intents fire after their due time only, and stay inside their scope',t=>{
+  const {data,memory,target,say}=fixture(t),a=target('123'),b=target('456','另一个群','group'),view=data.open(a.handle),other=data.open(b.handle)
+  const message=say(a.handle,'123','t1','下周记得问那份资料')
+  const due=Date.now()+3600000
+  const intent=memory.intent(view.id,{statement:'问那份资料',kind:'intention',trigger:'time',dueAt:due,evidence:{messages:[message]}})
+  assert.equal(memory.dueIntent(due-1),null)
+  // A private commitment is invisible from another window.
+  assert.deepEqual(memory.intents(data.view(other.id)),[])
+  assert.equal(memory.dueIntent(due+1).id,intent.id)
+  memory.consumeIntent(intent.id,due)
+  assert.equal(memory.dueIntent(due+2),null,'the same due time fires once')
+  // A time-triggered intent needs a due time, and a commitment needs a condition.
+  assert.throws(()=>memory.intent(view.id,{statement:'x',kind:'intention',trigger:'time',evidence:{messages:[message]}}),/dueAt/)
+  assert.throws(()=>memory.intent(view.id,{statement:'y',kind:'commitment',trigger:'explicit',evidence:{messages:[message]}}),/完成条件/)
+  assert.throws(()=>memory.intent(view.id,{statement:'z',kind:'intention',trigger:'explicit'}),/依据/)
+  // Revoking the window means a pending reminder no longer surfaces anywhere.
+  const pending=memory.intent(view.id,{statement:'问另一份资料',kind:'intention',trigger:'time',dueAt:Date.now()+1000,evidence:{messages:[message]}})
+  data.approve(a.handle,false)
+  assert.equal(memory.dueIntent(Date.now()+5000),null,'a revoked window cannot surface a reminder')
+  assert.equal(memory.intents(data.view(other.id)).length,0)
+  assert.ok(pending.id)
+})

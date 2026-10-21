@@ -292,3 +292,21 @@ test('memory tools follow their own switch and keep retraction out of maintenanc
   await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name:'yoyo_send'},async()=>{throw Error('must not execute')}),/未获/)
   assert.equal(agent.maintenanceJob&&agent.toolsAllowed().has('self_options'),false)
 })
+
+test('a due commitment wakes the agent at its own boundary and is consumed once',async t=>{
+  const {agent,store,target}=fixture(t,{memory:{enabled:true}}),a=target('123'),view=agent.data.open(a.handle)
+  agent.activeView=view
+  const message=agent.data.ingest({target:a.handle,sender:'123',externalId:'promise',text:'结果出来我发你',receivedAt:Date.now()-60000})
+  const due=Date.now()+1000
+  const intent=agent.memoryLayer.intent(view.id,{statement:'把结果发给他',kind:'commitment',trigger:'time',dueAt:due,evidence:{messages:[message.id]}})
+  store.set('yoyo_started',true);store.set('yoyo_last_wake',Date.now())
+  agent.data.acknowledgeAttention(agent.data.attention(Date.now(),5000))
+  assert.equal(agent.choose(due-1),null)
+  assert.equal(agent.choose(due+1),a.handle)
+  assert.equal(agent.wakeEvent.kind,'memory_intent_due')
+  assert.equal(agent.wakeEvent.intent,intent.id)
+  assert.equal(agent.state().memoryLayer.intents,1)
+  // The trigger is consumed once; the same due time does not nag again.
+  agent.memoryLayer.consumeIntent(intent.id,agent.dueMemoryIntent.consumedRef)
+  assert.equal(agent.choose(due+2),null)
+})
