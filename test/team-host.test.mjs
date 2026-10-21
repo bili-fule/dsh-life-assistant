@@ -152,3 +152,16 @@ test('a failed task is retried only when enabled, bounded, and never after an un
   started.length=0;host.tick()
   assert.deepEqual(started,[])
 })
+test('the cross-task evidence search tool answers inside the window only',async t=>{
+  const {host,view,task}=fixture(t),tools={}
+  host.register((name,description,properties,required,execute)=>{tools[name]={description,properties,required,execute}})
+  assert.ok(tools.team_search,'the host exposes the search tool')
+  host.tasks.claim(task.id,'worker')
+  host.tasks.evidence('worker',{kind:'source',source:'https://example.com/a',body:'公开材料里提到长镜头'})
+  const found=await tools.team_search.execute({query:'长镜头'},{},null,view)
+  assert.equal(found.results.length,1)
+  assert.equal(found.results[0].taskId,task.id)
+  assert.match(found.results[0].body,/长镜头/)
+  // Nothing is returned for a clue that no evidence mentions.
+  assert.deepEqual((await tools.team_search.execute({query:'不存在的词'},{},null,view)).results,[])
+})

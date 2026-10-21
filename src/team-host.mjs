@@ -8,8 +8,8 @@ import { readPublicPage } from './public-web.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { localParts } from './time.mjs'
 
-export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_inspect','team_cancel','team_takeover','team_review','team_steer']
-export const TEAM_POLICY=`你可以用 team_deliberate 查看关切和团队进展，用 team_delegate 分派聊天或公开研究，自己继续其他活动或一起研究。分派前创建真实的 yoyo_concern，说明为何关心、下一步、完成和停止条件。聊天执行者会在当前窗口直接交流；主 Agent 需要发言前用 team_takeover 接管。研究只能从 public 视图分派，不能把私聊问题洗成公开输入。执行中可用 team_steer 追加一条有界提示，它在执行者下一个原生边界送达一次。执行者可以把自己真正读到的证据放到任务证据板，证据沿用任务来源范围，team_inspect 可查看；执行结果是证据材料，不等于动机已满足。用 team_review 判断继续、调整、等待或放弃。无事可做允许休息，不高频轮询、不制造任务。`
+export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_inspect','team_cancel','team_takeover','team_review','team_steer','team_search']
+export const TEAM_POLICY=`你可以用 team_deliberate 查看关切和团队进展，用 team_delegate 分派聊天或公开研究，自己继续其他活动或一起研究。分派前创建真实的 yoyo_concern，说明为何关心、下一步、完成和停止条件。聊天执行者会在当前窗口直接交流；主 Agent 需要发言前用 team_takeover 接管。研究只能从 public 视图分派，不能把私聊问题洗成公开输入。执行中可用 team_steer 追加一条有界提示，它在执行者下一个原生边界送达一次。执行者可以把自己真正读到的证据放到任务证据板，证据沿用任务来源范围，team_inspect 可查看，team_search 可按线索跨任务检索本窗口可见的证据；重复的同一条来源只算一条，同一来源的不同说法会被标出冲突。执行结果是证据材料，不等于动机已满足。用 team_review 判断继续、调整、等待或放弃。无事可做允许休息，不高频轮询、不制造任务。`
 
 export class TeamHost {
   constructor(social,config) {
@@ -78,6 +78,7 @@ export class TeamHost {
     define('team_cancel','取消当前范围内任务并撤销其后续发言权。',{id:{type:'string'}},['id'],async(a,e,k,v)=>{this.coordinator.cancel(a.id,v.id);return {cancelled:true}})
     define('team_takeover','接管当前窗口的发言权，使旧执行者后续发送失效。',{},[],async(a,e,k,v)=>({generation:this.tasks.takeover(v.id,this.social.sessionId,Date.now()+900000)}))
     define('team_review','依据报告复查动机；不会自动重启任务或认定关切已完成。',{taskId:{type:'string'},decision:{type:'string',enum:['continue','revise','wait','done','abandon']},reason:{type:'string',maxLength:2000},reportId:{type:'integer'}},['taskId','decision','reason'],async(a,e,k,v)=>this.motivation.review(v.id,a))
+    define('team_search','按线索在当前资料范围内检索所有任务证据板里真正读到过的材料，返回任务编号、类型、来源与摘录。只能看到本窗口可见范围，摘录不代表结论已被验证。',{query:{type:'string',minLength:1,maxLength:300},kind:{type:'string',enum:['finding','source','excerpt']},limit:{type:'integer',minimum:1,maximum:20}},['query'],async(a,e,k,v)=>({results:this.tasks.searchEvidence(v.id,{query:a.query,kind:a.kind,limit:a.limit??10})}))
   }
   async send({args,view,agentId,taskId,authorize,signal}) {
     const settings=this.social.store.get('yoyo_settings',{})

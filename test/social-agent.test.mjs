@@ -308,5 +308,6 @@ test('a due commitment wakes the agent at its own boundary and is consumed once'
   assert.equal(agent.state().memoryLayer.intents,1)
   // The trigger is consumed once; the same due time does not nag again.
   agent.memoryLayer.consumeIntent(intent.id,agent.dueMemoryIntent.consumedRef)
+  assert.equal(agent.state().memoryLayer.wakes.delivered,1,'the delivered wake is counted')
   assert.equal(agent.choose(due+2),null)
 })

@@ -322,3 +322,38 @@ test('legacy memories arrive as unverified claims and migrate only once',t=>{
   assert.equal(recalled.results[0].confidence,'inference')
   assert.match(memory.inspect(view.id,{kind:'claim',id:recalled.results[0].id}).body.note,/旧记忆迁移/)
 })
+
+test('wakes are counted and a reminder that keeps being ignored goes quiet',t=>{
+  const {data,memory,target,say}=fixture(t),a=target('123'),b=target('456','另一个群','group'),view=data.open(a.handle),other=data.open(b.handle)
+  const message=say(a.handle,'123','w1','周五之前给你答复')
+  const intent=memory.intent(view.id,{statement:'周五前答复他',kind:'commitment',trigger:'window',about:a.handle,
+    doneWhen:'把答复发出来',evidence:{messages:[message]}})
+  assert.deepEqual(memory.summary(view).wakes,{delivered:0,done:0,dropped:0,ignored:0,open:0})
+  // Each real wake is recorded; a later wake before closing means the earlier
+  // reminder achieved nothing, so only the newest one stays open.
+  for(const [index,text] of ['在吗','答复呢','你还没回我','最后一次问'].entries()){
+    say(a.handle,'123','wake-'+index,text)
+    const due=memory.dueIntent(Date.now())
+    assert.equal(due.id,intent.id)
+    memory.consumeIntent(due.id,due.consumedRef)
+    const stats=memory.summary(view).wakes
+    assert.equal(stats.delivered,index+1)
+    assert.equal(stats.ignored,index)
+    assert.equal(stats.open,1)
+  }
+  const listed=memory.intents(view).find(item=>item.id===intent.id)
+  assert.equal(listed.wakes.ignored,3)
+  assert.equal(listed.nagMuted,true,'three ignored reminders silence the window trigger')
+  say(a.handle,'123','wake-late','忙完了吗')
+  assert.equal(memory.dueIntent(Date.now()),null,'a muted reminder stops nagging')
+  // Closing it resolves the outstanding wake as a real outcome, not a success story.
+  data.db.prepare('INSERT INTO yoyo_tool_sources VALUES(?,?,?,?,?)').run('send-w','yoyo_send',JSON.stringify(view.scopes),'{"state":"sent"}',Date.now())
+  memory.intent(view.id,{id:intent.id,state:'done',receipt:'send-w',reason:'答复已经发过去了'})
+  const closed=memory.summary(view).wakes
+  assert.equal(closed.done,1)
+  assert.equal(closed.ignored,3)
+  assert.equal(closed.open,0)
+  assert.equal(memory.intents(view).find(item=>item.id===intent.id).nagMuted,false)
+  // Wake counts stay inside their scope.
+  assert.deepEqual(memory.summary(data.view(other.id)).wakes,{delivered:0,done:0,dropped:0,ignored:0,open:0})
+})

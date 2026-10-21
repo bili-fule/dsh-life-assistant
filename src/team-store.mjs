@@ -175,9 +175,15 @@ export class TeamStore {
     if(!['finding','source','excerpt'].includes(kind))throw Error('证据类型无效')
     body=boundedText(body,4000,'证据')
     source=source===undefined||source===null||source===''?'':boundedText(String(source),500,'来源标注')
+    // The same finding repeated is still one piece of evidence, never two votes.
+    const same=this.db.prepare('SELECT id,kind FROM yoyo_team_evidence WHERE task_id=? AND source=? AND body=?').get(task.id,source,body)
+    if(same)return {id:same.id,taskId:task.id,kind:same.kind,shared:true,duplicate:true}
+    // A different finding from an already cited source is kept, but flagged, so
+    // a disagreement between pages cannot quietly turn into agreement.
+    const conflict=source!==''&&!!this.db.prepare('SELECT 1 FROM yoyo_team_evidence WHERE task_id=? AND source=? AND body<>?').get(task.id,source,body)
     const id=Number(this.db.prepare('INSERT INTO yoyo_team_evidence(task_id,attempt,scopes,kind,source,body,created_at) VALUES(?,?,?,?,?,?,?)')
       .run(task.id,task.attempt,JSON.stringify(sourceScopes(view.scopes)),kind,source,body,this.clock()).lastInsertRowid)
-    return {id,taskId:task.id,kind,shared:true}
+    return {id,taskId:task.id,kind,shared:true,conflict}
   }
   board(viewId,{taskId,limit=20}={}) {
     const view=this.social.view(viewId)
@@ -188,6 +194,25 @@ export class TeamStore {
       WHERE ${filter}${taskId!==undefined?' AND e.task_id=?':''} ORDER BY e.id DESC LIMIT ?`)
       .all(...(taskId!==undefined?[JSON.stringify(view.scopes),taskId,limit]:[JSON.stringify(view.scopes),limit]))
     return rows
+  }
+  // A later task often needs what an earlier task really read. Retrieval answers
+  // from the same visible-scope rule as the board, so it can never reach another
+  // window's material, and it returns excerpts rather than promising conclusions.
+  searchEvidence(viewId,{query,kind,limit=10}={}) {
+    const view=this.social.view(viewId)
+    if(!Number.isInteger(limit)||limit<1||limit>20)throw Error('证据条数无效')
+    if(kind!==undefined&&!['finding','source','excerpt'].includes(kind))throw Error('证据类型无效')
+    const wanted=String(query??'').toLowerCase().split(/[\s\p{P}\p{S}]+/u).filter(word=>word.length>1).slice(0,8)
+    if(!wanted.length)throw Error('需要检索线索')
+    const filter="NOT EXISTS(SELECT 1 FROM json_each(e.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?)))"
+    const rows=this.db.prepare(`SELECT e.id,e.task_id,e.kind,e.source,e.body,e.created_at FROM yoyo_team_evidence e
+      WHERE ${filter}${kind!==undefined?' AND e.kind=?':''} ORDER BY e.id DESC LIMIT 300`)
+      .all(...(kind!==undefined?[JSON.stringify(view.scopes),kind]:[JSON.stringify(view.scopes)]))
+    return rows.map(row=>{
+      const text=(row.source+' '+row.body).toLowerCase()
+      const score=wanted.filter(term=>text.includes(term)).length
+      return {id:row.id,taskId:row.task_id,kind:row.kind,source:row.source,body:row.body.slice(0,400),createdAt:row.created_at,score}
+    }).filter(row=>row.score>0).sort((left,right)=>right.score-left.score||right.id-left.id).slice(0,limit)
   }
   // A steering note belongs to one task and is consumed once at a native step
   // boundary; a cancelled or finished task cannot receive another.

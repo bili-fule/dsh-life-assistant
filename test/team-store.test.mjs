@@ -146,6 +146,32 @@ test('a task evidence board stays inside the task view and steering is consumed 
   assert.throws(()=>team.steer(b.id,{taskId:x.id,message:'越范围'}),/范围/)
 })
 
+test('evidence is one row per real source and cross-task search stays inside the window',t=>{
+  const {team,a,b,create}=fixture(t),x=create('x'),reader=create('reader',a,'reader')
+  team.claim(x.id,'worker-x');team.claim(reader.id,'worker-r')
+  const first=team.evidence('worker-x',{kind:'source',source:'https://example.com/film',body:'长镜头在结尾出现两次'})
+  assert.equal(first.duplicate,undefined)
+  // The same page and the same words are one piece of evidence, not two votes.
+  const again=team.evidence('worker-x',{kind:'source',source:'https://example.com/film',body:'长镜头在结尾出现两次'})
+  assert.equal(again.id,first.id)
+  assert.equal(again.duplicate,true)
+  assert.equal(team.board(a.id,{taskId:x.id}).length,1)
+  // A different reading of the same source is kept, but flagged as a disagreement.
+  const differing=team.evidence('worker-x',{kind:'excerpt',source:'https://example.com/film',body:'长镜头只在开头出现一次'})
+  assert.equal(differing.conflict,true)
+  assert.equal(team.board(a.id,{taskId:x.id}).length,2)
+  const other=team.evidence('worker-r',{kind:'finding',body:'评论区也在讨论长镜头的剪辑',source:'event:88'})
+  // A later task reaches what an earlier task really read, in the same window only.
+  const found=team.searchEvidence(a.id,{query:'长镜头'})
+  assert.deepEqual(found.map(row=>row.id).sort(),[first.id,differing.id,other.id].sort())
+  assert.equal(found[0].score>=found[found.length-1].score,true)
+  assert.deepEqual(team.searchEvidence(b.id,{query:'长镜头'}),[],'another window sees nothing')
+  assert.deepEqual(team.searchEvidence(a.id,{query:'长镜头',kind:'finding'}).map(row=>row.id),[other.id])
+  assert.throws(()=>team.searchEvidence(a.id,{query:'   '}),/线索/)
+  assert.throws(()=>team.searchEvidence(a.id,{query:'长镜头',limit:99}),/条数/)
+  assert.throws(()=>team.searchEvidence(a.id,{query:'长镜头',kind:'rumour'}),/类型/)
+})
+
 test('task budgets are counted per attempt in the database, not in memory',t=>{
   const {team,a,create}=fixture(t),x=create('x')
   team.claim(x.id,'worker-x')

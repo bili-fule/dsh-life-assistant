@@ -7,7 +7,7 @@ import { boundedText,mayRead,sourceScopes } from './scope.mjs'
 // name can never become an identity. Nothing here decides what the subject
 // feels; it only records what happened and where it came from.
 export const MEMORY_TOOLS=['memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments','memory_intent','memory_generalize']
-export const MEMORY_POLICY=`你可以用 memory_recall 按线索想起当前范围内相关的经历与主张，用 memory_inspect 核对原始依据，用 memory_propose 提交带来源的经历或主张，用 memory_retract 淡出、归档、撤回或按要求忘记。概括不是新的事实来源：同一条原文反复引用仍然只算一个来源，推断不会被重复回忆升级为观察。转发里的姓名和引自他人的说法不能当作本人身份或本人偏好；同昵称的两个人按平台、账号和真实发送者编号区分。执行者说查过但没有工具依据的，只能记成报告。被撤回或要求忘记的来源不能再重新形成记忆。`
+export const MEMORY_POLICY=`你可以用 memory_recall 按线索想起当前范围内相关的经历与主张，用 memory_inspect 核对原始依据，用 memory_propose 提交带来源的经历或主张，用 memory_retract 淡出、归档、撤回或按要求忘记。概括不是新的事实来源：同一条原文反复引用仍然只算一个来源，推断不会被重复回忆升级为观察。转发里的姓名和引自他人的说法不能当作本人身份或本人偏好；同昵称的两个人按平台、账号和真实发送者编号区分。执行者说查过但没有工具依据的，只能记成报告。被撤回或要求忘记的来源不能再重新形成记忆。记下的承诺与等待由宿主在真实触发时提醒一次；连续多次没有被理会的事项会安静下来，不要靠反复提醒撑住注意力。`
 
 const CLAIM_KINDS=['fact','knowledge','preference','impression','communication','procedure','self','simulation']
 const CONFIDENCE=['observed','told','worker_report','inference','self_report']
@@ -18,6 +18,10 @@ const PERSON_KINDS=['preference','impression','communication']
 const PERSON_REQUIRED=['impression','communication']
 const INTENT_KINDS=['commitment','intention','waiting']
 const INTENT_TRIGGERS=['time','window','explicit']
+// A reminder that keeps firing without ever being acted on or dropped is noise.
+// After this many ignored wakes the window trigger stays quiet until the subject
+// closes, rewrites or explicitly asks for it again.
+const NAG_LIMIT=3
 const IMPRESSION_DIMENSIONS=['familiarity','trust','liking','admiration','imitation']
 // Receipts from the agent's own records can never prove that something was done.
 const SELF_TOOLS=new Set(['yoyo_memory','yoyo_forget','yoyo_recall','yoyo_evidence','yoyo_self','yoyo_sleep','yoyo_wait','yoyo_learning','yoyo_concern','yoyo_feedback','yoyo_plan','yoyo_activity','life_context','self_options','self_choose','self_appraise','self_preferences','memory_recall','memory_inspect','memory_propose','memory_retract','memory_segments','memory_intent','memory_generalize'])
@@ -76,6 +80,9 @@ export class MemoryLayer {
         created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS yoyo_memory_migrations(
         legacy_id INTEGER PRIMARY KEY,claim_id INTEGER NOT NULL,created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_memory_wakes(
+        id INTEGER PRIMARY KEY,intent_id INTEGER NOT NULL,view_id TEXT NOT NULL,reason TEXT NOT NULL,
+        outcome TEXT,created_at INTEGER NOT NULL,resolved_at INTEGER);
     `)
     // Off by default: importing old notes is a deliberate operation.
     if(config.migrateLegacy===true)this.legacyMigration=this.migrateLegacy()
@@ -567,12 +574,18 @@ export class MemoryLayer {
   }
   latestEvent(handle) {return this.db.prepare('SELECT coalesce(max(id),0) id FROM yoyo_events WHERE target=?').get(handle).id}
   intents(view) {
+    const wakes=new Map(this.db.prepare(`SELECT intent_id,outcome,count(*) n FROM yoyo_memory_wakes
+      GROUP BY intent_id,outcome`).all().map(row=>[row.intent_id+':'+(row.outcome??'open'),row.n]))
+    const count=(id,outcome)=>wakes.get(id+':'+outcome)??0
     return this.db.prepare(`SELECT i.* FROM yoyo_memory_intents i WHERE ${this.visible('i')} ORDER BY (i.state='open') DESC,coalesce(i.due_at,0),i.id DESC LIMIT 30`)
       .all(JSON.stringify(view.scopes)).map(row=>{
         const body=JSON.parse(row.body)
         return {id:row.id,kind:row.kind,state:row.state,statement:body.statement,trigger:body.trigger,
           dueAt:row.due_at??null,about:body.about||null,doneWhen:body.doneWhen||'',cancelWhen:body.cancelWhen||'',
-          consumedAt:row.consumed_at??null,completion:body.completion??null,updatedAt:row.updated_at}
+          consumedAt:row.consumed_at??null,completion:body.completion??null,updatedAt:row.updated_at,
+          wakes:{delivered:count(row.id,'done')+count(row.id,'dropped')+count(row.id,'ignored')+count(row.id,'open'),
+            done:count(row.id,'done'),dropped:count(row.id,'dropped'),ignored:count(row.id,'ignored')},
+          nagMuted:row.state==='open'&&count(row.id,'ignored')>=NAG_LIMIT}
       })
   }
   closeIntent(view,args) {
@@ -595,6 +608,9 @@ export class MemoryLayer {
       body.completion={state:'done',evidence:'self_report',note:reason,at:now}
     }else throw Error('完成需要实际回执，或由你明确 confirmed 确认')
     this.db.prepare('UPDATE yoyo_memory_intents SET state=?,body=?,updated_at=? WHERE id=?').run(state,JSON.stringify(body),now,row.id)
+    // Closing an intention is the only real evidence that the reminder worked.
+    this.db.prepare('UPDATE yoyo_memory_wakes SET outcome=?,resolved_at=? WHERE intent_id=? AND outcome IS NULL')
+      .run(state==='done'?'done':'dropped',now,row.id)
     return {id:row.id,state,completion:body.completion,
       message:state==='done'?'已结束这件事。若只是聊过、没真的做，请如实说明。':'已放弃这件事，理由保留在记录里。'}
   }
@@ -609,15 +625,41 @@ export class MemoryLayer {
           return {id:row.id,statement:body.statement,kind:body.kind,about:body.about||null,doneWhen:body.doneWhen,cancelWhen:body.cancelWhen,view,reason:'time',consumedRef:body.dueAt}
       }else if(body.trigger==='window'&&body.about){
         const latest=this.latestEvent(body.about)
-        if(latest>(row.consumed_ref??0))return {id:row.id,statement:body.statement,kind:body.kind,about:body.about,doneWhen:body.doneWhen,cancelWhen:body.cancelWhen,view,reason:'event',through:latest,consumedRef:latest}
+        if(latest>(row.consumed_ref??0)&&this.ignoredWakes(row.id)<NAG_LIMIT)
+          return {id:row.id,statement:body.statement,kind:body.kind,about:body.about,doneWhen:body.doneWhen,cancelWhen:body.cancelWhen,view,reason:'event',through:latest,consumedRef:latest}
       }
     }
     return null
   }
   consumeIntent(id,reference) {
+    const row=this.db.prepare('SELECT body FROM yoyo_memory_intents WHERE id=?').get(id)
+    const body=row?JSON.parse(row.body):{}
+    const now=Date.now()
+    // Being woken again before closing the previous wake means the earlier
+    // reminder achieved nothing; it is counted as ignored, never as effective.
+    this.db.prepare("UPDATE yoyo_memory_wakes SET outcome='ignored',resolved_at=? WHERE intent_id=? AND outcome IS NULL").run(now,id)
+    this.db.prepare('INSERT INTO yoyo_memory_wakes(intent_id,view_id,reason,outcome,created_at) VALUES(?,?,?,NULL,?)')
+      .run(id,body.viewId??'',body.trigger??'explicit',now)
     this.db.prepare('UPDATE yoyo_memory_intents SET consumed_at=?,consumed_ref=max(coalesce(consumed_ref,0),?) WHERE id=?')
-      .run(Date.now(),Number.isSafeInteger(reference)?reference:0,id)
+      .run(now,Number.isSafeInteger(reference)?reference:0,id)
     return {id,consumed:true}
+  }
+  ignoredWakes(intentId) {
+    return this.db.prepare("SELECT count(*) n FROM yoyo_memory_wakes WHERE intent_id=? AND outcome='ignored'").get(intentId).n
+  }
+  // Only counts are exposed: what was remembered and why stays inside its scope.
+  wakeStats(view) {
+    const stats={delivered:0,done:0,dropped:0,ignored:0,open:0}
+    const rows=this.db.prepare(`SELECT w.outcome,count(*) n FROM yoyo_memory_wakes w
+      JOIN yoyo_memory_intents i ON i.id=w.intent_id WHERE ${this.visible('i')} GROUP BY w.outcome`).all(JSON.stringify(view.scopes))
+    for(const row of rows){
+      stats.delivered+=row.n
+      if(row.outcome==='done')stats.done+=row.n
+      else if(row.outcome==='dropped')stats.dropped+=row.n
+      else if(row.outcome==='ignored')stats.ignored+=row.n
+      else stats.open+=row.n
+    }
+    return stats
   }
 
   // ---- legacy migration --------------------------------------------------
@@ -656,6 +698,7 @@ export class MemoryLayer {
       claims:count('yoyo_memory_claims',"AND t.status IN ('active','faded')"),
       archived:count('yoyo_memory_episodes',"AND t.status='archived'")+count('yoyo_memory_claims',"AND t.status='archived'"),
       intents:count('yoyo_memory_intents',"AND t.state='open'"),
+      wakes:this.wakeStats(view),
       unresolved}
   }
 
@@ -691,7 +734,7 @@ export class MemoryLayer {
     define('memory_segments','把一个窗口的新消息按时间间隔、附件和话题变化切成候选分段，返回每段起止、参与者、边界原因和开头预览。分段只是候选，不是记忆：值得记住的要你自己写成经历。',
       {after:{type:'integer',minimum:0},before:{type:'integer',minimum:1},limit:{type:'integer',minimum:1,maximum:12},gapMs:{type:'integer',minimum:60000,maximum:86400000}},
       [],async(args,exec,key,view)=>this.segments(view.id,args))
-    define('memory_intent','前瞻记忆：记下承诺、打算或等待中的事。无参数查看当前范围未结束的事。可按时间或按窗口新消息触发，宿主在原生边界提醒一次，不轮询。完成要有实际回执或你明确确认；放弃要说明理由。',
+    define('memory_intent','前瞻记忆：记下承诺、打算或等待中的事。无参数查看当前范围未结束的事（含已提醒次数：完成、放弃与未被理会的次数）。可按时间或按窗口新消息触发，宿主在原生边界提醒一次，不轮询；连续多次没被理会的事项会安静下来（nagMuted），要么办完、要么说明理由放弃。完成要有实际回执或你明确确认；放弃要说明理由。',
       {id:{type:'integer',minimum:1},statement:{type:'string',maxLength:500},kind:{type:'string',enum:INTENT_KINDS},
         trigger:{type:'string',enum:INTENT_TRIGGERS},about:{type:'string',maxLength:200},dueAt:{type:'integer',minimum:1},
         doneWhen:{type:'string',maxLength:300},cancelWhen:{type:'string',maxLength:300},note:{type:'string',maxLength:300},
