@@ -223,6 +223,20 @@ export class TeamStore {
       return {id:row.id,taskId:row.task_id,kind:row.kind,source:row.source,body:row.body.slice(0,400),createdAt:row.created_at,score}
     }).filter(row=>row.score>0).sort((left,right)=>right.score-left.score||right.id-left.id).slice(0,limit)
   }
+  // The same page read by two tasks can end up described differently. The
+  // registry is computed from the evidence rows themselves, so it cannot drift
+  // from what was actually recorded, and it stays inside the visible scopes.
+  sourceRegistry(viewId,{limit=20}={}) {
+    const view=this.social.view(viewId)
+    if(!Number.isInteger(limit)||limit<1||limit>50)throw Error('来源条数无效')
+    const filter="NOT EXISTS(SELECT 1 FROM json_each(e.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?)))"
+    return this.db.prepare(`SELECT e.source source,count(*) readings,count(DISTINCT e.body) variants,
+      group_concat(DISTINCT e.task_id) tasks,max(e.created_at) lastAt
+      FROM yoyo_team_evidence e WHERE ${filter} AND e.source<>''
+      GROUP BY e.source,e.scopes ORDER BY variants DESC,readings DESC,lastAt DESC LIMIT ?`)
+      .all(JSON.stringify(view.scopes),limit).map(row=>({source:row.source,readings:row.readings,
+        distinct:row.variants,conflict:row.variants>1,tasks:String(row.tasks??'').split(',').filter(Boolean),lastAt:row.lastAt}))
+  }
   // ---- memory candidates -------------------------------------------------
   // A worker may hand over what it thinks is worth remembering. This is a
   // candidate, never a memory: it stays pending until the subject, back in its

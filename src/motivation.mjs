@@ -125,6 +125,7 @@ export class Motivation {
       open,
       preferences,
       proposals:this.proposals(view),
+      activities:this.activitySummary(view,{limit:6}).filter(entry=>!filter||keyOf(entry.activity)===filter||entry.activity.includes(String(activity))),
       recent:this.recentExperiences(view),
       repeat,
       stateNote:this.mode==='record'?'当前是记录阶段：这些记录不自动改变权限、提醒或发信。':null,
@@ -433,6 +434,28 @@ export class Motivation {
       message:'偏好按一次有界的手动修订更新；依据是已记录的经历，仍属于主体自己的判断，单次幅度有限。'}
   }
 
+  // Activity-level rollup computed from the appraisal rows themselves. It answers
+  // "how did this actually go" without inventing a happiness score: disliking and
+  // "not worth it" stay visible next to the times it went well.
+  activitySummary(view,{limit=6}={}) {
+    const rows=this.db.prepare(`SELECT e.activity_key key,e.body body,e.created_at at FROM yoyo_motivation_experiences e WHERE ${this.visible('e')} ORDER BY e.id DESC LIMIT 200`).all(JSON.stringify(view.scopes))
+    const map=new Map()
+    for(const row of rows){
+      const body=JSON.parse(row.body)
+      const entry=map.get(row.key)??{activity:body.activity,encounters:0,liked:0,neutral:0,disliked:0,worth:0,unsure:0,notWorth:0,progressYes:0,lastAt:0}
+      entry.encounters++
+      if(body.liked==='liked')entry.liked++
+      else if(body.liked==='disliked')entry.disliked++
+      else entry.neutral++
+      if(body.worth==='worth')entry.worth++
+      else if(body.worth==='not_worth')entry.notWorth++
+      else entry.unsure++
+      if(body.progress==='yes')entry.progressYes++
+      entry.lastAt=Math.max(entry.lastAt,row.at)
+      map.set(row.key,entry)
+    }
+    return [...map.values()].filter(entry=>entry.activity).sort((left,right)=>right.lastAt-left.lastAt).slice(0,limit)
+  }
   // Compact view for the native dynamic state. It survives compaction as a
   // short summary instead of replaying the full history.
   summary(view) {
@@ -441,12 +464,13 @@ export class Motivation {
     return {mode:this.mode,mood:affect.mood,load:affect.load,
       current:open[0]?{activity:open[0].activity,chosen:open[0].chosen,kind:open[0].kind,returnWhen:open[0].returnWhen}:null,
       preferences:preferences.slice(0,5).map(p=>({activity:p.activity,context:p.context,liking:p.liking,wanting:p.wanting,stable:p.stable})),
+      activities:this.activitySummary(view,{limit:4}).map(entry=>({activity:entry.activity,encounters:entry.encounters,liked:entry.liked,disliked:entry.disliked,worth:entry.worth,notWorth:entry.notWorth})),
       recent:this.recentExperiences(view,3).map(e=>({activity:e.activity,liked:e.liked,worth:e.worth,credit:e.credit})),
       proposals:this.proposals(view).length}
   }
 
   register(define) {
-    define('self_options','查看当前情绪基调、模拟负荷、重复饱和、相关偏好、待定修订和未完成的选择。此处不生成任务，也不改变权限、提醒或发信。',
+    define('self_options','查看当前情绪基调、模拟负荷、重复饱和、相关偏好、待定修订、各活动实际经历的汇总与未完成的选择。此处不生成任务，也不改变权限、提醒或发信。',
       {activity:{type:'string',maxLength:120}},[],async(args,exec,key,view)=>this.options(view.id,args))
     define('self_choose','记录少量候选和你的选择、理由、期待、投入预算与继续/退出条件。可以只是轻量记录，也可以选择休息；普通小决定不必填满每一项。',
       {activity:{type:'string',maxLength:120},context:{type:'string',maxLength:120},concern:{type:'integer',minimum:1},

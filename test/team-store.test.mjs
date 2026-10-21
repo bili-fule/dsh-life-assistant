@@ -221,6 +221,28 @@ test('a memory pack belongs to one task and one window',t=>{
   assert.throws(()=>team.writeMemoryPack(x.id,a.id,{clue:'聊过的电影',items:new Array(9).fill({})}),/条数/)
 })
 
+test('the source registry shows repeated readings and cross-task disagreements',t=>{
+  const {team,a,b,create}=fixture(t),x=create('x'),reader=create('reader',a,'reader'),other=create('other',b)
+  team.claim(x.id,'worker-x');team.claim(reader.id,'worker-r');team.claim(other.id,'worker-o')
+  team.evidence('worker-x',{kind:'source',source:'https://example.com/a',body:'文章说长镜头出现在结尾'})
+  team.evidence('worker-r',{kind:'excerpt',source:'https://example.com/a',body:'文章说长镜头出现在开头'})
+  team.evidence('worker-r',{kind:'finding',body:'没有来源标注的发现'})
+  team.evidence('worker-o',{kind:'source',source:'https://example.com/a',body:'另一个窗口读到的内容'})
+  const registry=team.sourceRegistry(a.id)
+  assert.equal(registry.length,1,'an unlabelled finding is not a source')
+  assert.equal(registry[0].source,'https://example.com/a')
+  assert.equal(registry[0].readings,2)
+  assert.equal(registry[0].distinct,2)
+  assert.equal(registry[0].conflict,true)
+  assert.deepEqual(registry[0].tasks.sort(),[x.id,reader.id].sort())
+  // The same URL read in another window stays in that window's registry.
+  assert.deepEqual(team.sourceRegistry(b.id).map(row=>row.tasks),[ [other.id] ])
+  // Re-reading the same words is not a second reading of a different kind.
+  team.evidence('worker-x',{kind:'source',source:'https://example.com/a',body:'文章说长镜头出现在结尾'})
+  assert.equal(team.sourceRegistry(a.id)[0].readings,2)
+  assert.throws(()=>team.sourceRegistry(a.id,{limit:99}),/条数/)
+})
+
 test('task budgets are counted per attempt in the database, not in memory',t=>{
   const {team,a,create}=fixture(t),x=create('x')
   team.claim(x.id,'worker-x')

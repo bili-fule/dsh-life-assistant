@@ -74,6 +74,32 @@ test('one unpleasant experience cannot make an activity permanently disliked',t=
   assert.ok(third.preference.liking<=-0.4)
 })
 
+test('activities keep their own record of how they went, without one happiness score',t=>{
+  const {data,motivation,target,message}=fixture(t),a=target('123'),b=target('456'),view=data.open(a.handle),other=data.open(b.handle)
+  const run=(activity,liked,worth,msg,extra={})=>motivation.appraise(view.id,{choice:motivation.choose(view.id,{activity,chosen:activity}).id,
+    outcome:activity+' 的一次',liked,worthAfter:worth,progress:'unknown',evidence:{messages:[msg]},confidence:'medium',...extra})
+  const talk=message(a.handle,'123','act-1','聊得挺开心').id
+  const read=message(a.handle,'123','act-2','这篇文章不错').id
+  run('和他闲聊','liked','worth',talk)
+  run('和他闲聊','neutral','unsure',talk)
+  run('读技术文章','disliked','not_worth',read)
+  const summary=motivation.activitySummary(data.view(view.id))
+  const chat=summary.find(entry=>entry.activity==='和他闲聊')
+  assert.equal(chat.encounters,2)
+  assert.equal(chat.liked,1)
+  assert.equal(chat.neutral,1)
+  assert.equal(chat.worth,1)
+  assert.equal(chat.unsure,1)
+  const reading=summary.find(entry=>entry.activity==='读技术文章')
+  assert.equal(reading.disliked,1)
+  assert.equal(reading.notWorth,1)
+  // The compact dynamic state carries the same counts, and nothing is merged
+  // into a single writable happiness number.
+  assert.equal(motivation.summary(data.view(view.id)).activities.length,2)
+  assert.deepEqual(motivation.activitySummary(data.view(other.id)),[],'counts never leak into another window')
+  assert.equal(typeof motivation.happiness,'undefined')
+})
+
 test('private experience never changes public or other-window affect and preferences',t=>{
   const {data,motivation,target,message}=fixture(t),a=target('123'),b=target('456'),privateView=data.open(a.handle),other=data.open(b.handle),publicView=data.publicView(),msg=message(a.handle,'123','priv','只对你说的')
   const choice=motivation.choose(privateView.id,{activity:'听他说烦心事',chosen:'听他说'})
