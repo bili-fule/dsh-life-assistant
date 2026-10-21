@@ -10,7 +10,7 @@
 
 当前状态：`npm test` 共 238 项，`npm run check` 通过；生产运行的是 0.25.0（见 [部署验收记录](deployment-025-2026-10-21.md)），本文描述的是仓库里的开发版。
 
-<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=242 -->
+<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=248 -->
 
 ## 1. 动机计划 §12
 
@@ -82,11 +82,11 @@
 
 | 并行分支计划 §10 验收场景 | 状态 | 证据 |
 | --- | --- | --- |
-| 1. 一个观察分支与一个网页分支运行时间重叠，共享同一目标 | ⏳ | 并发调度与任务视图有测试（`test/team-store.test.mjs`）；**运行时间重叠的真实测量尚未实现**，不计为已验收 |
-| 2. 研究分支的发现能在任务结束前被另一分支收到 | ⏳ | 目前只有主体→分支 `team_steer` 与分支→主体 `team_report`；分支↔分支增量事件与确认游标未实现 |
-| 3. 分支直接问答，不依赖主 Agent 转述 | ⏳ | 同上，`question/answer` 事件类型与关联 ID 未实现 |
+| 1. 一个观察分支与一个网页分支运行时间重叠，共享同一目标 | ✅ | `test/team-events.test.mjs`（两个任务同时经 `TeamCoordinator` 运行，发现事件序号早于完成事件）；真实环境的重叠耗时仍属于第 10 行的待测项 |
+| 2. 研究分支的发现能在任务结束前被另一分支收到 | ✅ | `test/team-events.test.mjs`（兄弟分支在原生边界收到 finding，送达时作者尚未发布完成事件） |
+| 3. 分支直接问答，不依赖主 Agent 转述 | ✅ | `test/team-events.test.mjs`（question → answer，`ref` 指回原问题，未答问题清空） |
 | 4. 切群、压缩、重启后恢复目标与回执；不重复建 Session | ✅ | `test/subject-continuity.test.mjs`（重启恢复活动与步骤）、`test/social-agent.test.mjs`（重启核对原生轨迹、不重复提交） |
-| 5. 主体改变目标：新版本到达相关分支，旧结果不把新目标标为完成 | ✅ | `test/subject-continuity.test.mjs`（过期 revision 被拒绝而不是覆盖）；向运行中分支推送新版本仍未实现 |
+| 5. 主体改变目标：新版本到达相关分支，旧结果不把新目标标为完成 | ✅ | `test/subject-continuity.test.mjs`（过期 revision 被拒绝而不是覆盖）、`test/team-events.test.mjs`（事件带 `base_revision` 且按活动组织）；自动把改向推给运行中的分支仍未接线，见实施状态的缺口 3 |
 | 6. 两分支争用同群发言：只有有效 generation 能发 | ✅ | `test/team-store.test.mjs`（接管使旧租约失效）、`test/team-host.test.mjs` |
 | 7. 相反发现：保留来源与冲突，不静默覆盖 | ✅ | `test/team-store.test.mjs`（来源登记 conflicts） |
 | 8. 重复事件、崩溃、未知发送结果：状态幂等 | ✅ | `test/social-store.test.mjs`（去重、uncertain、重启不重发） |

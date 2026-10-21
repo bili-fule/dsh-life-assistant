@@ -278,4 +278,6 @@ QQ 新增 `yoyo_debug` / `yoyo_debug_status` / `yoyo_debug_patch`，通过宿主
 
 分支侧：`research` / `engineer` 从任意窗口分派时由宿主**自建 public 视图**（不再要求主体先切到 public 窗口），这两个角色仍拿不到私有材料；`chat` / `reader` / `peer` 与主体共享读取权；任务幂等比较改为窗口句柄（新增列 `focus_key`、`activity_id`，旧库按 `yoyo_views.focus` 回填）。
 
-插件测试见 `npm test`（`test/subject-continuity.test.mjs` 4 项：切窗后仍知道目标/起因/步骤、重启恢复同一活动、过期 revision 被拒、打开窗口不写完成且未知活动被拒）。逐项证据与仍未实现的缺口（分支增量事件与确认游标、同级问答、运行重叠实测、冲突合并、真实模型回放与部署）见 [实施状态与证据](../docs/subject-continuity.md)。未部署。
+分支之间新增持久事件总线（`yoyo_team_events` + `yoyo_team_cursors`）：`finding / question / answer / progress / direction_changed / blocked / completed / cancel` 八种类型，带 `dedupe_key`、`expires_at`、`base_revision` 与投递计数；report 写 `progress`、证据 `finding` 写 `finding`、结束与取消分别写 `completed` / `cancel`。分支在原生 `step` 边界取一次事件并推进游标（`TeamCoordinator` 的 step 返回 `events`），重启从游标续接不重放；去重按 `dedupe_key`，过期提问不再投递。`team_ask` / `team_answer` 让主体与 `peer`/`chat`/`reader` 分支**直接问答**，答复的 `ref` 指回原问题，不经主 Agent 转述；`team_events` 查事件流与未答问题，`state().team` 只给并发数、分支状态、等待原因、未答问题数与最近事件元数据（不含正文）。网页与隔离浏览器也不再要求先切 public：网页自带 public 来源，浏览器在任意窗口可用但后台整理仍拿不到。
+
+插件测试 248 项全通过，新增 `test/team-events.test.mjs` 6 项（发现送达兄弟分支时作者尚未发布完成、直接问答、去重与过期、结束/取消事件、两个分支真实重叠并共享发现、重启从游标续接）与 `test/subject-continuity.test.mjs` 4 项。逐项证据与仍未实现的缺口（真实模型回放、串行/并行真实计量、主体改向推送、冲突合并、部署）见 [实施状态与证据](../docs/subject-continuity.md)。未部署。

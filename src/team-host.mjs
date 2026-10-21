@@ -8,7 +8,7 @@ import { readPublicPage } from './public-web.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { localParts } from './time.mjs'
 
-export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_inspect','team_cancel','team_takeover','team_review','team_steer','team_search','team_memory','team_sources']
+export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_inspect','team_cancel','team_takeover','team_review','team_steer','team_search','team_ask','team_answer','team_events','team_memory','team_sources']
 export const TEAM_POLICY=`你可以用 team_deliberate 查看关切和团队进展，用 team_delegate 分派聊天或公开研究，自己继续其他活动或一起研究。分派前创建真实的 yoyo_concern，说明为何关心、下一步、完成和停止条件。聊天执行者会在当前窗口直接交流；主 Agent 需要发言前用 team_takeover 接管。研究只能从 public 视图分派，不能把私聊问题洗成公开输入。执行中可用 team_steer 追加一条有界提示，它在执行者下一个原生边界送达一次。执行者可以把自己真正读到的证据放到任务证据板，证据沿用任务来源范围，team_inspect 可查看，team_search 可按线索跨任务检索本窗口可见的证据；重复的同一条来源只算一条，同一来源的不同说法会被标出冲突，team_sources 列出这些来源被读过几次、有几个说法。执行者也能提交记忆候选（team_remember），候选不是记忆：team_memory 列出待决定的候选，采纳时在你自己的视图里重新核对原文，并且只记成执行者报告，不会变成观察。执行结果是证据材料，不等于动机已满足。用 team_review 判断继续、调整、等待或放弃。无事可做允许休息，不高频轮询、不制造任务。`
 
 export class TeamHost {
@@ -117,6 +117,11 @@ export class TeamHost {
     define('team_takeover','接管当前窗口的发言权，使旧执行者后续发送失效。',{},[],async(a,e,k,v)=>({generation:this.tasks.takeover(v.id,this.social.sessionId,Date.now()+900000)}))
     define('team_review','依据报告复查动机；不会自动重启任务或认定关切已完成。',{taskId:{type:'string'},decision:{type:'string',enum:['continue','revise','wait','done','abandon']},reason:{type:'string',maxLength:2000},reportId:{type:'integer'}},['taskId','decision','reason'],async(a,e,k,v)=>this.motivation.review(v.id,a))
     define('team_search','按线索在当前资料范围内检索所有任务证据板里真正读到过的材料，返回任务编号、类型、来源与摘录。只能看到本窗口可见范围，摘录不代表结论已被验证。',{query:{type:'string',minLength:1,maxLength:300},kind:{type:'string',enum:['finding','source','excerpt']},limit:{type:'integer',minimum:1,maximum:20}},['query'],async(a,e,k,v)=>({results:this.tasks.searchEvidence(v.id,{query:a.query,kind:a.kind,limit:a.limit??10})}))
+    // Branches already talk to each other through the event bus; the subject can
+    // use the same bus to ask one of them directly instead of relaying reports.
+    define('team_ask','直接问一个进行中的任务一个问题。问题作为事件立即写入，执行者在下一个原生安全边界收到并可以 team_answer 回答；不需要你转述，也不扩大它的权限。',{id:{type:'string'},question:{type:'string',minLength:1,maxLength:2000}},['id','question'],async(a,e,k,v)=>({...this.tasks.ask(null,{toTask:a.id,question:a.question,viewId:v.id}),note:'问题已写入事件；执行者在下一个原生边界收到。等待期间可以做别的事。'}))
+    define('team_answer','回答执行者或另一个分支提出的问题；引用原问题编号，答复作为事件回到提问方。',{question:{type:'string',minLength:1,maxLength:80},answer:{type:'string',minLength:1,maxLength:2000}},['question','answer'],async(a,e,k,v)=>this.tasks.answer(null,{questionEventId:a.question,answer:a.answer,viewId:v.id}))
+    define('team_events','查看当前资料范围内同一活动/任务的事件流（发现、提问、答复、进展、方向变化、受阻、完成、取消）与仍未回答的问题，用于判断分支之间是否真的在交换进展。',{taskId:{type:'string'},activityId:{type:'string'},after:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:50}},[],async(a,e,k,v)=>({events:this.tasks.activityEvents(v.id,{taskId:a.taskId??null,activityId:a.activityId??null,after:a.after??0,limit:a.limit??20}),openQuestions:this.tasks.openQuestions(v.id,{activityId:a.activityId??null})}))
     define('team_sources','查看当前范围内被引用过的来源：被读过几次、有几个不同说法、分别是哪个任务读的。同一来源出现不同说法说明材料互相矛盾，需要自己判断，不能当成已核实。',{limit:{type:'integer',minimum:1,maximum:50}},[],async(a,e,k,v)=>({sources:this.tasks.sourceRegistry(v.id,{limit:a.limit??20})}))
     define('team_memory','查看执行者提交的记忆候选，并决定采纳或不采纳。候选不是记忆：无参数时列出待决定的候选；采纳时由记忆层在你自己的视图里重新核对原文，并且只记成执行者报告，不会变成观察。',{id:{type:'integer',minimum:1},decision:{type:'string',enum:['accept','reject']},reason:{type:'string',maxLength:500},state:{type:'string',enum:['pending','accepted','rejected']},limit:{type:'integer',minimum:1,maximum:50}},[],async(a,e,k,v)=>{
       if(a.id===undefined)return {candidates:this.tasks.memoryCandidates(v.id,{state:a.state??'pending',limit:a.limit??20})}
@@ -257,6 +262,19 @@ export class TeamHost {
       const task={...row,tokensReported:row.tokensReported===1,dependsOn:depends?JSON.parse(depends).length:0}
       return {...task,waitReason:this.waitReason(task)}
     })}
+  }
+  // A small, content-free digest for the subject's dynamic state: enough to know
+  // that branches are alive and that someone is waiting for an answer, without
+  // pasting goals or report bodies into every turn. Details stay behind
+  // team_inspect / team_events, which check the current view.
+  digest(viewId) {
+    try{
+      const view=this.social.data.view(viewId)
+      const tasks=this.db.prepare("SELECT id,role,state,expires_at,failures,retry_at FROM yoyo_team_tasks WHERE state IN ('ready','running','waiting','blocked') ORDER BY created_at DESC LIMIT 8").all()
+        .map(row=>({id:row.id,role:row.role,state:row.state,waitReason:this.waitReason(row)}))
+      const events=this.tasks.activityEvents(view.id,{limit:5}).map(({eventId,kind,from,to,at})=>({eventId,kind,from,to,at}))
+      return {running:this.coordinator.running.size,max:this.coordinator.maxConcurrent,tasks,openQuestions:this.tasks.openQuestions(view.id).length,recentEvents:events}
+    }catch{return null}
   }
   waitReason(row) {
     if(row.state==='blocked')return row.retry_at?'等待重试':row.failures?'失败，等待复查':'已阻塞'

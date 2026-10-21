@@ -1,24 +1,29 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { boundedText, mayRead, sourceScopes } from './scope.mjs'
 
 // Each role is a fixed set of host methods. A task may narrow its role, never
 // widen it; the model cannot name a tool outside its role.
 export const ROLE_TOOLS={
-  chat:['read','wait','recall','send','report','evidence','board','remember','pack','usage','step'],
-  research:['web','report','evidence','board','remember','pack','usage','step'],
-  reader:['read','recall','report','evidence','board','remember','pack','usage','step'],
-  verify:['board','recall','report','evidence','pack','usage','step'],
+  chat:['read','wait','recall','send','report','evidence','board','remember','pack','usage','step','ask','answer','events'],
+  research:['web','report','evidence','board','remember','pack','usage','step','events'],
+  reader:['read','recall','report','evidence','board','remember','pack','usage','step','events'],
+  verify:['board','recall','report','evidence','pack','usage','step','events'],
   // Engineering runs code in the isolated runner and reports back; it cannot talk
   // to anyone, cannot read a private window and cannot reach the debug container.
-  engineer:['execute','job','report','evidence','board','remember','pack','usage','step'],
+  engineer:['execute','job','report','evidence','board','remember','pack','usage','step','events'],
   // A peer works with nearly the subject's own reach (same reads, searches, files,
   // public browsing, memory tools and code runner). It still has no control plane:
   // no orchestration of other executors, no attention/focus, no own-state or
   // settings tools, and no debug container. The subject keeps cancelling, steering,
   // taking over and bounding it.
   peer:['read','wait','search','message','file','attachment','forward','recall','web','execute','job','send',
-    'report','evidence','board','remember','pack','memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize','usage','step'],
+    'report','evidence','board','remember','pack','memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize','usage','step','ask','answer','events'],
 }
+
+// A branch talks to its siblings and to the subject through durable events, not
+// through a second message system: reports, findings and steers are recorded as
+// events so the same rows answer "what did the other branch learn, when".
+export const EVENT_KINDS=['finding','question','answer','progress','direction_changed','blocked','completed','cancel']
 
 const WORKER_CLAIM_TYPES=['fact','knowledge','preference','procedure','self']
 
@@ -56,6 +61,15 @@ export class TeamStore {
       CREATE TABLE IF NOT EXISTS yoyo_team_memory_packs(
         task_id TEXT PRIMARY KEY, attempt INTEGER NOT NULL, clue TEXT NOT NULL,
         scopes TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS yoyo_team_events(
+        id INTEGER PRIMARY KEY, event_id TEXT NOT NULL UNIQUE, topic TEXT NOT NULL,
+        task_id TEXT, from_task TEXT, to_task TEXT, activity_id TEXT, kind TEXT NOT NULL,
+        body TEXT NOT NULL, ref TEXT NOT NULL DEFAULT '', base_revision INTEGER,
+        scopes TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL,
+        expires_at INTEGER, delivered_count INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS yoyo_team_cursors(
+        task_id TEXT NOT NULL, topic TEXT NOT NULL, cursor INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL, PRIMARY KEY(task_id,topic));
     `)
     const columns=this.db.prepare('PRAGMA table_info(yoyo_team_tasks)').all().map(column=>column.name)
     for(const [name,type] of [['failures','INTEGER NOT NULL DEFAULT 0'],['retry_at','INTEGER'],['renewed_at','INTEGER'],
@@ -196,13 +210,99 @@ export class TeamStore {
     return true
   }
   report(agentId,body) {
-    const {task}=this.authority(agentId)
+    const {task,view}=this.authority(agentId)
     body=boundedText(body,12000,'进展')
     this.db.prepare('INSERT INTO yoyo_team_reports(task_id,attempt,body,created_at) VALUES(?,?,?,?)').run(task.id,task.attempt,body,this.clock())
+    // Progress is shared while the task is still running, not saved for the end.
+    this.publishEvent({fromTask:task.id,activityId:task.activity_id??null,kind:'progress',body:body.slice(0,4000),viewId:view.id})
+    return {recorded:true}
   }
   reports(id,viewId) {
     this.inspect(id,viewId)
     return this.db.prepare('SELECT id,body,created_at FROM yoyo_team_reports WHERE task_id=? ORDER BY id DESC LIMIT 50').all(id)
+  }
+  // ---------------------------------------------------------------- events
+  // Durable, at-least-once, deduplicated. The database is the authority and the
+  // per-task cursor is what makes "already delivered" different from "written".
+  publishEvent({fromTask=null,toTask=null,activityId=null,kind,body,ref='',baseRevision=null,dedupeKey=null,expiresAt=null,viewId,now=this.clock()}) {
+    if(!EVENT_KINDS.includes(kind))throw Error('事件类型无效')
+    body=boundedText(body,4000,'事件内容')
+    if(typeof ref!=='string'||ref.length>200)throw Error('事件引用无效')
+    if(expiresAt!==null&&(!Number.isSafeInteger(expiresAt)||expiresAt<=now))throw Error('事件期限无效')
+    const view=this.social.view(viewId)
+    // A branch may only address a task it could inspect, and the subject only
+    // addresses tasks it can see. The topic is host-decided, never model-decided.
+    if(toTask)this.inspect(toTask,viewId)
+    const topic=toTask?'task:'+toTask:activityId?'activity:'+activityId:'subject'
+    const key=dedupeKey??('evt-'+createHash('sha256').update(JSON.stringify([fromTask,toTask,activityId,kind,ref,body])).digest('hex').slice(0,32))
+    const eventId=randomUUID()
+    const result=this.db.prepare('INSERT OR IGNORE INTO yoyo_team_events(event_id,topic,task_id,from_task,to_task,activity_id,kind,body,ref,base_revision,scopes,dedupe_key,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(eventId,topic,fromTask,fromTask,toTask,activityId,kind,body,ref,baseRevision,JSON.stringify(this.social.recordScopes(view)),String(key),now,expiresAt)
+    if(!result.changes)return {duplicate:true,eventId:this.db.prepare('SELECT event_id FROM yoyo_team_events WHERE dedupe_key=?').get(String(key)).event_id}
+    return {eventId,id:Number(result.lastInsertRowid),topic,kind,at:now}
+  }
+  // Which topics a branch listens to: its own mailbox, the activity it belongs
+  // to, and the subject-wide channel.
+  subscriptions(taskId) {
+    const row=this.db.prepare('SELECT id,activity_id FROM yoyo_team_tasks WHERE id=?').get(taskId)
+    const topics=['task:'+taskId,'subject']
+    if(row?.activity_id)topics.push('activity:'+row.activity_id)
+    return topics
+  }
+  pendingEvents(taskId,{limit=8,now=this.clock()}={}) {
+    if(!Number.isInteger(limit)||limit<1||limit>20)throw Error('事件条数无效')
+    const rows=[]
+    for(const topic of this.subscriptions(taskId)){
+      const cursor=this.db.prepare('SELECT cursor FROM yoyo_team_cursors WHERE task_id=? AND topic=?').get(taskId,topic)?.cursor??0
+      for(const row of this.db.prepare("SELECT * FROM yoyo_team_events WHERE topic=? AND id>? AND (from_task IS NULL OR from_task<>?) AND (expires_at IS NULL OR expires_at>?) ORDER BY id LIMIT ?").all(topic,cursor,taskId,now,limit)){
+        rows.push({...row,cursor})
+      }
+    }
+    return rows.sort((a,b)=>a.id-b.id).slice(0,limit)
+  }
+  // Delivery is a cursor move, so the same event is never handed over twice and a
+  // restart resumes from the last acknowledged position.
+  acknowledgeEvents(taskId,events,now=this.clock()) {
+    for(const event of events){
+      const through=event.id
+      this.db.prepare('INSERT INTO yoyo_team_cursors(task_id,topic,cursor,updated_at) VALUES(?,?,?,?) ON CONFLICT(task_id,topic) DO UPDATE SET cursor=max(cursor,excluded.cursor),updated_at=excluded.updated_at').run(taskId,event.topic,through,now)
+      this.db.prepare('UPDATE yoyo_team_events SET delivered_count=delivered_count+1 WHERE id=?').run(through)
+    }
+    return events.length
+  }
+  drainEvents(taskId,{limit=8,now=this.clock()}={}) {
+    const events=this.pendingEvents(taskId,{limit,now})
+    if(events.length)this.acknowledgeEvents(taskId,events,now)
+    return events.map(({event_id,kind,body,ref,base_revision,from_task,to_task,created_at})=>({eventId:event_id,kind,body,ref,baseRevision:base_revision,from:from_task,to:to_task,at:created_at}))
+  }
+  // Branch-to-branch question and answer, with the correlation kept in `ref` so an
+  // answer can be matched to its question without a relay through the subject.
+  ask(fromTask,{toTask,question,baseRevision=null,expiresAt=null,viewId}) {
+    const asked=this.publishEvent({fromTask,toTask,kind:'question',body:question,baseRevision,expiresAt,viewId})
+    if(asked.duplicate)return {...asked,question:this.db.prepare('SELECT body FROM yoyo_team_events WHERE event_id=?').get(asked.eventId).body}
+    return {...asked,question}
+  }
+  answer(fromTask,{questionEventId,answer,viewId}) {
+    if(typeof questionEventId!=='string'||!questionEventId)throw Error('问题编号无效')
+    const question=this.db.prepare("SELECT * FROM yoyo_team_events WHERE event_id=? AND kind='question'").get(questionEventId)
+    if(!question)throw Error('问题不存在')
+    if(question.to_task&&question.to_task!==fromTask)throw Error('这个问题不是发给你的')
+    return this.publishEvent({fromTask,toTask:question.from_task??null,kind:'answer',body:answer,ref:questionEventId,viewId})
+  }
+  // Subject-side view: what happened under one activity or task, and which
+  // questions are still open.
+  activityEvents(viewId,{activityId=null,taskId=null,after=0,limit=20}={}) {
+    const view=this.social.view(viewId)
+    if(!Number.isSafeInteger(after)||after<0||!Number.isInteger(limit)||limit<1||limit>50)throw Error('事件范围无效')
+    const rows=this.db.prepare('SELECT * FROM yoyo_team_events e WHERE e.id>? AND (? IS NULL OR e.activity_id=?) AND (? IS NULL OR e.task_id=?) AND NOT EXISTS(SELECT 1 FROM json_each(e.scopes) s WHERE s.value NOT IN(SELECT value FROM json_each(?))) ORDER BY e.id LIMIT ?')
+      .all(after,activityId,activityId,taskId,taskId,JSON.stringify(view.scopes),limit)
+    return rows.map(({event_id,kind,body,ref,base_revision,from_task,to_task,activity_id,created_at,delivered_count})=>({eventId:event_id,kind,body,ref,baseRevision:base_revision,from:from_task,to:to_task,activityId:activity_id,at:created_at,delivered:delivered_count}))
+  }
+  openQuestions(viewId,{activityId=null}={}) {
+    const view=this.social.view(viewId)
+    return this.db.prepare("SELECT q.event_id,q.body,q.from_task,q.to_task,q.created_at FROM yoyo_team_events q WHERE q.kind='question' AND NOT EXISTS(SELECT 1 FROM yoyo_team_events a WHERE a.kind='answer' AND a.ref=q.event_id) AND (? IS NULL OR q.activity_id=?) AND NOT EXISTS(SELECT 1 FROM json_each(q.scopes) s WHERE s.value NOT IN(SELECT value FROM json_each(?))) ORDER BY q.id DESC LIMIT 20")
+      .all(activityId,activityId,JSON.stringify(view.scopes))
+      .map(r=>({eventId:r.event_id,question:r.body,from:r.from_task,to:r.to_task,at:r.created_at}))
   }
   // A worker may publish what it actually found to a task-scoped board. The
   // board inherits the task's source scopes, so a private window's evidence can
@@ -220,6 +320,9 @@ export class TeamStore {
     const conflict=source!==''&&!!this.db.prepare('SELECT 1 FROM yoyo_team_evidence WHERE task_id=? AND source=? AND body<>?').get(task.id,source,body)
     const id=Number(this.db.prepare('INSERT INTO yoyo_team_evidence(task_id,attempt,scopes,kind,source,body,created_at) VALUES(?,?,?,?,?,?,?)')
       .run(task.id,task.attempt,JSON.stringify(sourceScopes(view.scopes)),kind,source,body,this.clock()).lastInsertRowid)
+    // A finding becomes an event its siblings can act on before the task ends;
+    // an excerpt stays on the board until someone asks for it.
+    if(kind==='finding')this.publishEvent({fromTask:task.id,activityId:task.activity_id??null,kind:'finding',body,ref:source,viewId:view.id})
     return {id,taskId:task.id,kind,shared:true,conflict}
   }
   board(viewId,{taskId,limit=20}={}) {
@@ -442,10 +545,12 @@ export class TeamStore {
   }
   finish(agentId,state='completed') {
     if(!['completed','cancelled','blocked'].includes(state))throw Error('结束状态无效')
-    return this.transaction(()=>{
-      const {task}=this.authority(agentId)
+    const {task,view}=this.authority(agentId)
+    this.transaction(()=>{
       this.db.prepare('UPDATE yoyo_team_tasks SET state=? WHERE id=?').run(state,task.id)
       this.db.prepare('UPDATE yoyo_team_speakers SET generation=generation+1,expires_at=0 WHERE task_id=?').run(task.id)
     })
+    // The end of a branch is an event too, so a sibling can stop waiting for it.
+    this.publishEvent({fromTask:task.id,activityId:task.activity_id??null,kind:state==='completed'?'completed':'blocked',body:state==='completed'?'任务已完成':state==='cancelled'?'任务已取消':'任务受阻',viewId:view.id})
   }
 }

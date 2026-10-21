@@ -27,13 +27,19 @@ export class TeamCoordinator {
       if(name==='usage')return this.tasks.recordTokens(agentId,Number(args?.tokens??0),args?.reported!==false)
       if(name==='step'){
         const result=await this.tools.step({agentId})
-        // Steering arrives at a native boundary, after the budget gate.
-        return {...result,steers:this.tasks.takeSteers(agentId)}
+        // Steering and sibling events arrive at a native boundary, after the
+        // budget gate, and the cursor moves only when they are handed over.
+        return {...result,steers:this.tasks.takeSteers(agentId),events:this.tasks.drainEvents(id)}
       }
-      if(name==='report'){this.tasks.report(agentId,args.body);return {recorded:true}}
+      if(name==='report')return this.tasks.report(agentId,args.body)
       if(name==='evidence')return this.tasks.evidence(agentId,args)
       if(name==='remember')return this.tasks.memoryCandidate(agentId,args)
       if(name==='board')return {evidence:this.tasks.board(current.view.id,{limit:args?.limit})}
+      // A branch asks and answers its siblings directly; the host decides who it
+      // is, so a task cannot impersonate another one or the subject.
+      if(name==='ask')return this.tasks.ask(id,{toTask:args.toTask,question:args.question,baseRevision:args.baseRevision??null,viewId:current.view.id})
+      if(name==='answer')return this.tasks.answer(id,{questionEventId:args.question,answer:args.answer,viewId:current.view.id})
+      if(name==='events')return {events:this.tasks.activityEvents(current.view.id,{taskId:args?.taskId??null,after:args?.after??0,limit:args?.limit??20}),openQuestions:this.tasks.openQuestions(current.view.id)}
       const authorize=()=>{
         if(controller.signal.aborted)throw Error('执行已取消')
         this.tasks.authority(agentId)
@@ -83,5 +89,7 @@ export class TeamCoordinator {
       this.tasks.db.prepare('UPDATE yoyo_team_speakers SET generation=generation+1,expires_at=0 WHERE task_id=?').run(id)
     })
     slot?.controller.abort(Error('任务取消'))
+    // Tell the siblings, but never let a notification failure block the fence.
+    try{this.tasks.publishEvent({fromTask:id,activityId:this.tasks.db.prepare('SELECT activity_id FROM yoyo_team_tasks WHERE id=?').get(id).activity_id??null,kind:'cancel',body:'任务已被取消',viewId})}catch{/* Revoked or expired work stays cancelled. */}
   }
 }

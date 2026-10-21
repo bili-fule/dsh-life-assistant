@@ -43,17 +43,21 @@ test('social native assembly filters private instructions, contexts and tool sch
   await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name:'shell'},async()=>({})),/未获/)
 })
 
-test('isolated native browser tools are available only in a pure public view and never during memory maintenance',async t=>{
+test('isolated native browser tools follow the subject into any window but never into memory maintenance',async t=>{
  const {agent,hooks,target}=fixture(t),a=target('123'),name='mcp__playwright-mcp__browser_navigate'
  agent.config.publicBrowser=true;agent.activeView=agent.data.publicView()
  assert.equal(agent.toolsAllowed().has(name),true)
  assert.equal(await hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name},async()=>42),42)
+ // Reading a chat window is a position, not a downgrade: the subject may look
+ // something up without first pretending it is somewhere else.
  agent.activeView=agent.data.open(a.handle)
+ assert.equal(agent.toolsAllowed().has(name),true)
+ assert.equal(await hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name},async()=>42),42)
+ agent.activeView=agent.data.planningView();assert.equal(agent.toolsAllowed().has(name),true)
+ // A background memory pass never gets a browser or a way to speak.
+ agent.maintenanceJob={after:0,through:10}
  assert.equal(agent.toolsAllowed().has(name),false)
  await assert.rejects(()=>hooks.get('tools/pre-execute')({agent:{id:'one-agent'},name},async()=>{throw Error('must not execute')}),/未获/)
- agent.activeView=agent.data.planningView();assert.equal(agent.toolsAllowed().has(name),false)
- agent.activeView=agent.data.publicView();agent.maintenanceJob={after:0,through:10}
- assert.equal(agent.toolsAllowed().has(name),false)
 })
 
 test('native browser outcomes enter scoped evidence without image bytes or fabricated success',t=>{

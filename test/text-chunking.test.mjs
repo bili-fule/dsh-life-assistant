@@ -88,7 +88,9 @@ test('a stored public page can be paged again without refetching it',async t=>{
   const all=await readAll(args=>tools.get('yoyo_web').execute({document:id,...args},exec),body)
   assert.equal(all.text,body)
   assert.equal(all.pages,2)
-  // The stored page keeps its own scope: a private window cannot page it.
+  // A public page stays readable from any window: the subject may look something
+  // up while sitting in a private chat, and the page keeps its own public scope.
   agent.activeView=agent.data.open(target('777').handle)
-  await assert.rejects(()=>tools.get('yoyo_web').execute({document:id},exec),/public|范围/)
+  assert.equal((await tools.get('yoyo_web').execute({document:id},exec)).total,20000)
+  assert.equal(agent.data.db.prepare('SELECT scope FROM yoyo_documents WHERE id=?').get(id).scope,'public')
 })

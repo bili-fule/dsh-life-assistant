@@ -44,18 +44,32 @@
 
 **打开窗口不等于完成**：`yoyo_open` 不写任何完成状态，0 未读也不会让活动变成 `done`；完成仍要看 `done_when` 或明确的主观决定。
 
-## 4. 分支与同一主体（已实现，仅连续性部分）
+## 4. 分支与同一主体（已实现：连续性 + 增量事件 + 同级问答）
 
 - `team-store.create()` 现在为 `research` / `engineer` **自建 public 视图**（不再要求主体先切到 public 窗口），这两个角色仍拿不到任何私有材料；`chat` / `reader` / `peer` 沿用调用方视图，因此分支与本主体共享同一套读取权。
 - 幂等比较改为 `role / goal / focus_key / expiresAt`（`focus_key` = 任务窗口句柄），新增列 `focus_key`、`activity_id`，旧库任务按 `yoyo_views.focus` 回填。
 - `create({activityId})` 会把任务挂到活动索引上（`yoyo_activity_links.kind='task'`）。
 - `takeover(viewId,agentId,expiresAt,target)` 与 `TeamHost.mainEnqueue(view,key,target)` 支持显式收件窗口，接管与发言租约仍按 generation 生效。
 
-尚未实现（见第 6 节）：分支之间的增量事件与确认游标、同级问答、运行重叠计时。
+**分支之间的增量事件（`yoyo_team_events` + `yoyo_team_cursors`）**
+
+| 项 | 实现 |
+| --- | --- |
+| 事件类型 | `finding / question / answer / progress / direction_changed / blocked / completed / cancel` |
+| 事件字段 | `event_id`、`topic`、`from_task`、`to_task`、`activity_id`、`kind`、`body`、`ref`、`base_revision`、`dedupe_key`、`expires_at`、`delivered_count` |
+| 订阅 | 分支自动订阅自己的信箱 `task:<id>`、所属活动 `activity:<id>` 与主体频道 `subject` |
+| 投递 | 分支在原生 `step` 边界取一次（`TeamCoordinator` 的 `step` 返回 `events`），随后推进游标；进程重启从游标续接，不重放 |
+| 去重 | `dedupe_key` 唯一；同一 finding/progress 重复写入只留一行 |
+| 过期 | `expires_at` 到期后不再投递（迟到的提问不会被当成新任务） |
+| 同级问答 | `team_ask` / `team_answer`（主体与 `peer`/`chat`/`reader` 分支都可）；答复的 `ref` 指向原问题 `event_id`，不经过主 Agent 转述 |
+| 自动事件 | 报告 → `progress`；证据 `finding` → `finding`；任务结束 → `completed`；取消 → `cancel` |
+| 主体侧可观察 | `team_events`（事件流 + 仍未回答的问题）、`state().team`（并发数、分支状态与等待原因、未答问题数、最近 5 条事件元数据，不含正文） |
+
+**三个不同状态**：事件已写入（行存在）、已送达（游标推进、`delivered_count` 增加）、据此行动（分支自己的下一份 report/evidence）。控制台与状态分别显示，不把「写了」当成「收到」。
 
 ## 5. 测试证据（已验证：确定性）
 
-`npm test` 全绿，其中与本改造直接相关：
+`npm test` 全绿（248 项），其中与本改造直接相关：
 
 | 证据 | 测试文件 |
 | --- | --- |
@@ -63,15 +77,22 @@
 | 重启后恢复同一活动与未完成步骤 | `test/subject-continuity.test.mjs` |
 | 过期 revision 被拒绝而不是覆盖 | `test/subject-continuity.test.mjs` |
 | 打开窗口不写完成、未知活动被拒绝 | `test/subject-continuity.test.mjs` |
+| 两个分支同时运行；发现的投递发生在作者发布完成事件之前 | `test/team-events.test.mjs` |
+| 分支直接问答：问题 → 答复，`ref` 关联，未答问题清空 | `test/team-events.test.mjs` |
+| 事件去重、过期不投递、非法类型被拒 | `test/team-events.test.mjs` |
+| 结束与取消都成为兄弟分支可见的事件 | `test/team-events.test.mjs` |
+| 重启后从已确认游标续接，不重放 | `test/team-events.test.mjs` |
 | 同一主体跨窗口可读可发，另一个主体不可读写 | `test/social-store.test.mjs` |
 | 关切/计划/记忆/学习跟随主体、不进 public 与另一主体 | `test/social-store.test.mjs` |
 | 撤权、去重、uncertain、附件摘要钉住 | `test/social-store.test.mjs` |
 | 分支继承主体视图、public 角色仍只有 public | `test/team-store.test.mjs` |
+| 网页与隔离浏览器不再要求先切 public；后台整理仍无浏览器 | `test/social-agent.test.mjs`、`test/text-chunking.test.mjs` |
 
 ## 6. 还没做的（不要当成已完成）
 
-1. **分支增量事件与确认游标**：`finding / question / answer / progress / direction_changed / blocked / completed / cancel` 的持久事件、`dedupeKey`、订阅与投递游标，原生安全边界投递。当前只有 `team_steer`（主体→分支）与 `team_review`（分支→主体），没有分支↔分支直接问答。
-2. **运行重叠与途中同步的实测**：需要一个阅读分支与一个网页分支同时运行、并在任务结束前互相收到发现的测量记录（提交时间、下一安全边界注入时间、模型响应时间分别统计）。
-3. **冲突合并与主体改向的分支通知**：活动 revision 已有，但还没有把新版本推给运行中的分支，也没有「旧结果不把新目标标成完成」的测试。
-4. **真实模型回放**：本文件第 5 节全部是确定性测试；xmfu 轨迹的真实模型回放、压缩/重启的真实会话验证、串行与并行的耗时/成本对照都还没做。
-5. **部署**：生产是 `16b71e3` 的 0.38.0（见 `deploy/STATUS.md` 头部与 `docs/deployment-038-2026-10-21.md`），本改造在其之后，未上线，不能写成「已部署」。
+1. **真实模型上的分支行为**：本文件第 5 节全部是确定性测试（脚本化 adapter 触发真实 `TeamCoordinator`、真实 SQLite、真实游标）。两个真实 DSH 子进程互相问答、真实模型是否用 `team_ask` 而不是干等，尚未回放。
+2. **真实运行的重叠计量**：需要记录提交事件到投递的 p95、模型响应耗时、串行与并行的总耗时／调用数／Token，并与「无改善」的情形对比。现在只有逻辑顺序证明（事件序号、完成事件晚于投递）。
+3. **主体改向推送到运行中的分支**：`direction_changed` 类型与活动 revision 已在，但还没有「主体改目标 → 自动写入事件给相关分支」的接线，旧分支仍只能靠 revision 冲突被发现。
+4. **冲突合并**：相反发现仍只标 `conflict` 并保留来源，没有让主体或核对分支发布合并版本。
+5. **压缩后的真实会话验证**：重启恢复有测试，263K 压缩后的会话表面恢复没有真实环境验证。
+6. **部署**：生产是 `16b71e3` 的 0.38.0（见 `deploy/STATUS.md` 头部与 `docs/deployment-038-2026-10-21.md`），本改造在其之后，未上线，不能写成「已部署」。
