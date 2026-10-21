@@ -4,7 +4,21 @@ import { mkdtempSync,rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Store } from '../src/store.mjs'
-import { SocialAgent } from '../src/social-agent.mjs'
+import { SocialAgent,scopedSurfaceSeqs } from '../src/social-agent.mjs'
+
+test('scope filtering hides entire tool groups instead of exposing hidden halves or breaking native pairs',()=>{
+ const events=[
+  {seq:1,data:{message:{role:'assistant',content:[{type:'tool-call',id:'a'},{type:'tool-call',id:'b'}]}}},
+  {seq:2,data:{message:{role:'tool',toolCallId:'a'}}},
+  {seq:3,data:{message:{role:'tool',toolCallId:'b'}}},
+  {seq:4,data:{message:{role:'assistant',content:[{type:'text',text:'public'}]}}},
+ ]
+ const session={surface:{nodes:[1,2,3,4]},snapshotEvents:()=>events}
+ assert.deepEqual(scopedSurfaceSeqs(session,seq=>seq!==2),[4])
+ assert.deepEqual(scopedSurfaceSeqs(session,seq=>seq!==1),[4])
+ assert.deepEqual(scopedSurfaceSeqs(session,()=>true),[1,2,3,4])
+ assert.deepEqual(scopedSurfaceSeqs(session,seq=>seq===4),[4])
+})
 
 function fixture(t,extra={}){
   const root=mkdtempSync(join(tmpdir(),'yoyo-agent-')),store=new Store(join(root,'data.sqlite')),hooks=new Map(),tools=new Map(),prompts=[]

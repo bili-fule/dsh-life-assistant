@@ -61,6 +61,9 @@ export class Runtime {
     this.server=createServer((req,res)=>this.http(req,res).catch(()=>{if(!res.headersSent)json(res,{error:'操作未完成，请检查输入或查看状态'},400);else res.end()}))
     await new Promise((yes,no)=>{this.server.once('error',no);this.server.listen(this.config.port,this.config.host,yes)})
     this.timer=setInterval(()=>{if(!this.working)this.working=this.tick().catch(e=>this.log('worker.error',e)).finally(()=>{this.working=null})},500)
+    // An independent QQ subject must keep scheduling even while the private
+    // inbox or its maintenance is awaiting a native turn.
+    this.socialTimer=setInterval(()=>{if(this.running&&this.autonomy.enabled&&this.autonomy.separate)void this.socialTick()},500)
     this.deliveryTimer=setInterval(()=>{void this.deliveryTick().catch(e=>this.log('delivery.error',e))},500)
     this.working=this.tick().catch(e=>this.log('worker.error',e)).finally(()=>{this.working=null})
     this.startPolling()
@@ -131,6 +134,7 @@ export class Runtime {
     const token=String(req.headers.authorization??'').replace(/^Bearer /,'')
     if(!timingSafeEqual(digest(token),digest(this.adminToken)))return json(res,{error:'请输入管理密钥'},401)
     if(req.method==='GET' && url.pathname==='/api/state')return json(res,{...this.status(),...this.store.snapshot()})
+    if(req.method==='GET' && url.pathname==='/api/yoyo/diagnostics')return json(res,{privateWorking:!!this.working,socialWorking:!!this.socialWorking,socialLastTickAt:this.socialLastTickAt??null,socialPhase:this.autonomy.schedulerPhase??null,choice:this.autonomy.schedulerChoice??null,nativeStatus:this.autonomy.boundAgent?.status??null,currentRequest:this.autonomy.currentRequest??null})
     if(req.method==='GET' && url.pathname==='/api/qr.svg') {if(!this.login?.qrUrl)return json(res,{error:'请先发起绑定'},404);res.writeHead(200,{'content-type':'image/svg+xml','cache-control':'no-store'});return res.end(svg(this.login.qrUrl))}
     if(req.method==='GET' && url.pathname==='/api/export') {res.setHeader('content-disposition','attachment; filename="life-assistant-export.json"');return json(res,{exportedAt:new Date().toISOString(),...this.store.snapshot(),settings:{persona:this.store.get('persona'),learnedStyle:this.store.get('learned_style',{})}})}
     if(req.method==='GET' && url.pathname==='/api/asset') {const file=workspacePath(this.workspace,url.searchParams.get('path')??'');if(!statSync(file).isFile())throw Error('路径不是文件');res.writeHead(200,{'content-type':'application/octet-stream','content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(safeFilename(file))});return createReadStream(file).on('error',()=>res.destroy()).pipe(res)}
@@ -292,7 +296,7 @@ export class Runtime {
     const job=this.maintenance.next()
     if(job&&this.model.maintain)await this.maintenance.run(job)
   }
-  async socialTick(){if(this.socialWorking)return;this.socialWorking=true;try{await this.autonomy.tick()}catch(e){this.log('social.tick',e)}finally{this.socialWorking=false}}
+  async socialTick(){if(this.socialWorking)return;this.socialWorking=true;this.socialLastTickAt=Date.now();try{await this.autonomy.tick()}catch(e){this.log('social.tick',e)}finally{this.socialWorking=false}}
   async deliveryTick() {
     if(this.delivering)return this.delivering
     this.delivering=(async()=>{
@@ -372,7 +376,7 @@ export class Runtime {
     this.store.audit('backup.created',{})
   }
   async stop() {
-    this.running=false;this.abort.abort();clearInterval(this.timer);clearInterval(this.deliveryTimer);this.pollGeneration++
+    this.running=false;this.abort.abort();clearInterval(this.timer);clearInterval(this.socialTimer);clearInterval(this.deliveryTimer);this.pollGeneration++
     if(this.server)await new Promise(r=>this.server.close(r))
     await this.working?.catch(()=>{});await this.polling?.catch(()=>{});await this.delivering?.catch(()=>{})
     await this.autonomy.stop()
