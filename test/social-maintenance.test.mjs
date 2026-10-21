@@ -46,3 +46,48 @@ test('operator retry reuses a failed range with a new request and advances the c
  const retry=maintenance.claim(maintenance.next(now+1000),'second',now+1000);assert.equal(retry.id,job.id)
  maintenance.finish(retry,{ok:true},now+2000);assert.equal(maintenance.status().cursors[0].through_id,message.id)
 })
+
+test('a long backlog is consolidated in bounded pages instead of one oversized turn',t=>{
+ const {data,maintenance,target}=fixture(t),now=Date.parse('2026-10-19T15:00:00+08:00'),ids=[]
+ for(let i=0;i<300;i++)ids.push(data.ingest({target:target.handle,sender:'123',externalId:'m'+i,text:'消息'+i,receivedAt:now-300000}).id)
+ data.db.prepare('UPDATE yoyo_events SET read_at=?').run(now-200000)
+ const first=maintenance.plan(now)
+ assert.equal(first.job.kind,'idle')
+ assert.equal(first.job.pageSize,120)
+ assert.equal(first.job.through,ids[119],'one review covers 120 events')
+ maintenance.finish(maintenance.claim(first.job,'page-1',now),{ok:true},now)
+ // Each further run continues from the cursor instead of re-reading the backlog.
+ maintenance.config.cooldownMs=0
+ const second=maintenance.plan(now)
+ assert.equal(second.job.after,ids[119])
+ assert.equal(second.job.through,ids[239])
+ maintenance.finish(maintenance.claim(second.job,'page-2',now),{ok:true},now)
+ const third=maintenance.plan(now)
+ assert.equal(third.job.after,ids[239])
+ assert.equal(third.job.through,ids[299],'the last page stops at the newest event')
+ assert.throws(()=>new SocialMaintenance(data,{pageEvents:0}),/分页条数/)
+})
+
+test('a quiet night is explained instead of calling the model',t=>{
+ const {data,maintenance,target}=fixture(t),now=Date.parse('2026-10-20T03:05:00+08:00')
+ assert.deepEqual(maintenance.plan(now),{job:null,reason:'没有新的可整理原文'})
+ const event=data.ingest({target:target.handle,sender:'123',externalId:'one',text:'睡了',receivedAt:now-300000})
+ data.db.prepare('UPDATE yoyo_events SET read_at=? WHERE id=?').run(now-200000,event.id)
+ const night=maintenance.plan(now)
+ assert.equal(night.job.kind,'night')
+ assert.equal(night.job.through,event.id)
+ assert.equal(night.reason,null)
+ maintenance.finish(maintenance.claim(night.job,'night-1',now),{ok:true},now)
+ // The same night is not re-consolidated: later material in the window is ordinary idle work.
+ const second=data.ingest({target:target.handle,sender:'123',externalId:'two',text:'还没睡',receivedAt:now+100000})
+ data.db.prepare('UPDATE yoyo_events SET read_at=? WHERE id=?').run(now+150000,second.id)
+ maintenance.config.cooldownMs=0
+ const later=maintenance.plan(now+400000)
+ assert.equal(later.job.kind,'idle','after the nightly run the rest of the night is ordinary consolidation')
+ assert.match(maintenance.status().cursors[0].last_night,/2026-10-20/)
+ // Unread material is not consolidated, and the skip says why rather than guessing.
+ data.db.prepare('UPDATE yoyo_events SET read_at=NULL').run()
+ const unread=maintenance.plan(now+500000)
+ assert.equal(unread.job,null)
+ assert.equal(unread.reason,'没有新的可整理原文')
+})
