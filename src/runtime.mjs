@@ -157,6 +157,13 @@ export class Runtime {
     if(url.pathname==='/api/yoyo/qq-check') {if(!this.autonomy.qq)throw Error('QQ 未配置');return json(res,await this.autonomy.qq.health(this.abort.signal))}
     if(url.pathname==='/api/yoyo/memory-retry')return json(res,this.autonomy.memoryMaintenance.retry(data.id))
     if(url.pathname==='/api/yoyo/forget')return json(res,{forgotten:this.autonomy.data.forget(data.id)})
+    if(url.pathname==='/api/yoyo/team') {
+      const team=this.autonomy.team
+      if(!team)throw Error('团队编排未启用')
+      if(typeof data.id!=='string'||!data.id.trim()||data.id.length>80)throw Error('任务编号无效')
+      if(data.message!==undefined&&(typeof data.message!=='string'||!data.message.trim()||data.message.length>2000))throw Error('提示内容无效')
+      return json(res,team.act({id:data.id.trim(),action:data.action,message:data.message===undefined?undefined:data.message.trim()}))
+    }
     if(url.pathname==='/api/upload') {
       if(typeof data.data!=='string'||data.data.length>43*1024*1024)throw Error('文件过大')
       const bytes=Buffer.from(data.data,'base64');if(!bytes.length||bytes.length>32*1024*1024)throw Error('文件大小无效')

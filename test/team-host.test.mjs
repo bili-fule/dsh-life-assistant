@@ -113,6 +113,28 @@ test('the operational status exposes executors, leases and usage without task co
   assert.equal(silentStatus.tokensReported,false)
   assert.match(host.tasks.usage(silent.id).note,/未测量/)
 })
+test('the owner console can cancel, take over or steer without borrowing another scope',t=>{
+  const {host,view,task,data}=fixture(t)
+  host.tasks.claim(task.id,'worker')
+  // A steering note is queued for the running worker and delivered once.
+  assert.equal(host.act({id:task.id,action:'steer',message:'顺带看一下评论区'}).delivered,false)
+  assert.deepEqual(host.tasks.takeSteers('worker'),['顺带看一下评论区'])
+  // Takeover moves the window's speaking right to the main session.
+  assert.equal(host.act({id:task.id,action:'takeover'}).generation,2)
+  assert.throws(()=>host.tasks.authorizeSend('worker',view.focus,1),/失效/)
+  // Cancel fences later sends and steering.
+  assert.equal(host.act({id:task.id,action:'cancel'}).state,'cancelled')
+  assert.throws(()=>host.act({id:task.id,action:'steer',message:'太晚了'}),/进行中/)
+  assert.throws(()=>host.act({id:task.id,action:'delete'}),/操作无效/)
+  assert.throws(()=>host.act({id:'no-such-task',action:'cancel'}),/不存在/)
+  // The console resolves the task's own view, never the caller's ambient one.
+  const other=data.discover({platform:'qq',account:'1',kind:'private',peer:'7'})
+  data.approve(other.handle,true)
+  const foreign=data.open(other.handle)
+  const second=host.tasks.create({key:'second',role:'chat',goal:'g',viewId:foreign.id,expiresAt:Date.now()+60000})
+  assert.equal(host.act({id:second.id,action:'cancel'}).cancelled,true)
+  assert.equal(host.tasks.inspect(second.id,foreign.id).state,'cancelled')
+})
 test('the admin page renders the team panel from the operational status only',t=>{
   const page=readFileSync(new URL('../public/index.html',import.meta.url),'utf8')
   const script=readFileSync(new URL('../public/app.js',import.meta.url),'utf8')
@@ -123,6 +145,9 @@ test('the admin page renders the team panel from the operational status only',t=
   assert.match(page,/任务目的与报告正文留在各自的资料范围/)
   assert.match(script,/任务目的与报告正文不在本页展示/)
   assert.match(script,/Token 未上报/,'an unreported token count is not rendered as zero')
+  // The panel offers the three owner actions through one admin endpoint.
+  for(const action of ['steer','takeover','cancel'])assert.match(script,new RegExp("action:'"+action+"'"))
+  assert.match(script,/\/api\/yoyo\/team/)
   assert.equal(/goal|PRIVATE|报告正文.*innerHTML/.test(script.split('function renderTeam')[1].split('function renderYoyo')[0].replace(/任务目的与报告正文不在本页展示/,'')),false,'the panel never renders task text')
 })
 test('cancellation stops steering and a foreign window cannot steer or read the board',t=>{

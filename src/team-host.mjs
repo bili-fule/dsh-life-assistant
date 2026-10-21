@@ -98,6 +98,26 @@ export class TeamHost {
       return {candidate:a.id,memory:created,...this.tasks.decideMemory(v.id,{id:a.id,decision:'accept',claimId:created.id})}
     })
   }
+  // Owner console actions. The admin page carries a task id only; the task's own
+  // view is used here, so the console never borrows another window's authority
+  // and can act on exactly the rows the operations status already lists.
+  act({id,action,message}) {
+    if(!['cancel','takeover','steer'].includes(action))throw Error('操作无效')
+    const row=this.db.prepare('SELECT id,view_id,state FROM yoyo_team_tasks WHERE id=?').get(id)
+    if(!row)throw Error('任务不存在')
+    const view=this.social.data.view(row.view_id)
+    if(action==='cancel'){
+      this.coordinator.cancel(row.id,row.view_id)
+      return {id:row.id,action,cancelled:true,state:'cancelled'}
+    }
+    if(action==='takeover'){
+      if(!view.focus)throw Error('这个任务没有可接管的窗口')
+      const generation=this.tasks.takeover(row.view_id,this.social.sessionId,Date.now()+900000)
+      return {id:row.id,action,generation}
+    }
+    const steered=this.tasks.steer(row.view_id,{taskId:row.id,message})
+    return {id:row.id,action,...steered}
+  }
   // The subject decides what a task may start with: a few scoped summaries, not
   // a memory dump and never the originals. A pack that cannot be built is
   // reported instead of silently pretending the task was briefed.

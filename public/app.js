@@ -56,7 +56,13 @@ function renderTeam(team){
    (t.steps??0)+' 步 · '+(t.tokensReported?(t.tokens??0)+' Token':'Token 未上报（0 表示未测量，不代表没有消耗）')+' · 报告 '+(t.reports??0)+' 条 · 证据 '+(t.evidence??0)+' 条',
    t.leaseExpires?'发言租约到 '+format(t.leaseExpires):'当前没有发言租约',
    t.dependsOn?'依赖 '+t.dependsOn+' 个任务':'无依赖']
-  root.append(el('div',facts.join('\n'),'card text-block'))
+  const card=el('div',null,'card'),buttons=el('div',null,'actions')
+  if(['ready','running','waiting'].includes(t.state))buttons.append(button('追加提示',()=>{const message=window.prompt('给这个任务追加一条提示');if(!message)return Promise.resolve();return action('/api/yoyo/team',{id:t.id,action:'steer',message},'提示已排队，在执行者下一个边界送达')}))
+  if(t.role==='chat'&&!['completed','cancelled'].includes(t.state))buttons.append(button('接管发言',()=>action('/api/yoyo/team',{id:t.id,action:'takeover'},'已接管这个窗口的发言权')))
+  if(!['completed','cancelled'].includes(t.state))buttons.append(button('取消任务',()=>action('/api/yoyo/team',{id:t.id,action:'cancel'},'任务已取消'),'danger'))
+  card.append(el('div',facts.join('\n'),'text-block'))
+  if(buttons.children.length)card.append(buttons)
+  root.append(card)
  }
 }
 function renderYoyo(){
