@@ -25,17 +25,18 @@ export class TeamHost {
     this.db.prepare("UPDATE yoyo_team_deliveries SET state='uncertain' WHERE state='sending'").run()
     this.db.prepare("UPDATE yoyo_team_tasks SET state='blocked' WHERE state IN ('running','waiting')").run()
     this.db.prepare('UPDATE yoyo_team_speakers SET expires_at=0,generation=generation+1').run()
-    const steps=new Map()
-    this.steps=steps
     this.coordinator=new TeamCoordinator({tasks:this.tasks,adapter:new TeamNativeAdapter({...config,persona:()=>social.store.get('yoyo_persona','你是 yoyo，说话自然，有自己的兴趣与打算。')}),maxConcurrent:config.maxConcurrent??2,tools:{
       step:async({agentId})=>{
         const settings=social.store.get('yoyo_settings',{}),day=localParts().date
         const used=this.db.prepare('SELECT steps FROM yoyo_usage WHERE day=?').get(day)?.steps??0
-        if(settings.paused||used>=(settings.dailySteps??0)||(steps.get(agentId)??0)>=(config.maxSteps??20))throw Error('执行预算已用尽或主体暂停')
-        steps.set(agentId,(steps.get(agentId)??0)+1)
+        if(settings.paused||used>=(settings.dailySteps??0))throw Error('主体暂停或每日执行预算已用尽')
+        // Per-task counters are durable, so a restart cannot hand out a fresh
+        // budget; the daily budget stays a separate host-wide number.
+        const counter=this.tasks.recordStep(agentId,config.maxSteps??20)
         this.db.prepare('INSERT INTO yoyo_usage(day,steps) VALUES(?,1) ON CONFLICT(day) DO UPDATE SET steps=steps+1').run(day)
-        return {allowed:true}
+        return {allowed:true,step:counter.steps,maxSteps:counter.maxSteps}
       },
+      usage:async({agentId,tokens})=>this.tasks.recordTokens(agentId,tokens),
       read:async({args,view})=>{
         const messages=social.data.read(view.id,{after:args.after,limit:Math.min(30,args.limit??20)})
         social.data.markRead(view.id,messages.map(m=>m.id))
@@ -67,7 +68,7 @@ export class TeamHost {
       const started=this.coordinator.start(task.id)
       return {id:task.id,...started}
     })
-    define('team_inspect','查看当前资料范围内任务的真实状态、增量报告和执行者提交的证据板。',{id:{type:'string'}},['id'],async(a,e,k,v)=>({task:this.tasks.inspect(a.id,v.id),reports:this.tasks.reports(a.id,v.id),evidence:this.tasks.board(v.id,{taskId:a.id})}))
+    define('team_inspect','查看当前资料范围内任务的真实状态、增量报告、执行者提交的证据板与用量汇总。',{id:{type:'string'}},['id'],async(a,e,k,v)=>({task:this.tasks.inspect(a.id,v.id),reports:this.tasks.reports(a.id,v.id),evidence:this.tasks.board(v.id,{taskId:a.id}),usage:this.tasks.usage(a.id)}))
     define('team_steer','给进行中的任务追加一条有界提示，在执行者下一个原生边界送达一次；不能借此扩大任务权限或改变全局人设。',{id:{type:'string'},message:{type:'string',minLength:1,maxLength:2000}},['id','message'],async(a,e,k,v)=>this.tasks.steer(v.id,{taskId:a.id,message:a.message}))
     define('team_cancel','取消当前范围内任务并撤销其后续发言权。',{id:{type:'string'}},['id'],async(a,e,k,v)=>{this.coordinator.cancel(a.id,v.id);return {cancelled:true}})
     define('team_takeover','接管当前窗口的发言权，使旧执行者后续发送失效。',{},[],async(a,e,k,v)=>({generation:this.tasks.takeover(v.id,this.social.sessionId,Date.now()+900000)}))
@@ -121,7 +122,6 @@ export class TeamHost {
   tick() {
     const settings=this.social.store.get('yoyo_settings',{})
     if(settings.paused)return
-    for(const agentId of this.steps.keys())if(![...this.coordinator.running.values()].some(slot=>slot.agentId===agentId))this.steps.delete(agentId)
     for(const task of this.db.prepare("SELECT id,view_id,expires_at FROM yoyo_team_tasks WHERE state='ready' ORDER BY created_at LIMIT 20").all()){
       if(this.coordinator.running.size>=this.coordinator.maxConcurrent)break
       try{

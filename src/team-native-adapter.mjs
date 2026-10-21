@@ -45,6 +45,9 @@ export class TeamNativeAdapter {
       const result=await harness.run(JSON.stringify({role:task.role,goal:task.goal,expiresAt:task.expiresAt,persona:cfg.persona?.()}),{sessionId:agentId})
       signal.throwIfAborted()
       if(result.events.findLast(e=>e.type==='turn/end')?.data.reason?.kind!=='completed')throw Error('Native worker did not complete')
+      // Record real token usage when the runtime reports it; never estimate.
+      const tokens=Number(result.usage?.totalTokens??result.usage?.tokens??0)
+      if(Number.isSafeInteger(tokens)&&tokens>0)await invoke('usage',{tokens})
       if(result.finalResponse?.trim())await invoke('report',{body:result.finalResponse.slice(0,12000)})
     }finally{
       signal.removeEventListener('abort',abort)

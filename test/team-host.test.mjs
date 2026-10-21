@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { Store } from '../src/store.mjs'
 import { SocialStore } from '../src/social-store.mjs'
 import { TeamHost } from '../src/team-host.mjs'
+import { TeamStore } from '../src/team-store.mjs'
 
 function fixture(t){
   const root=mkdtempSync(join(tmpdir(),'team-host-')),store=new Store(join(root,'test.sqlite')),data=new SocialStore(store)
@@ -79,4 +80,20 @@ test('cancellation stops steering and a foreign window cannot steer or read the 
   assert.throws(()=>host.tasks.board(foreign.id,{taskId:task.id}),/范围/)
   host.coordinator.cancel(task.id,view.id)
   assert.throws(()=>host.tasks.steer(view.id,{taskId:task.id,message:'已经取消'}),/进行中/)
+})
+test('worker steps are metered in the database and survive a new host',async t=>{
+  const {host,social,task}=fixture(t)
+  host.tasks.claim(task.id,'worker')
+  const first=await host.coordinator.tools.step({agentId:'worker'})
+  assert.equal(first.allowed,true);assert.equal(first.step,1)
+  assert.equal((await host.coordinator.tools.step({agentId:'worker'})).step,2)
+  await host.coordinator.tools.usage({agentId:'worker',tokens:900})
+  assert.deepEqual(host.tasks.usage(task.id),{steps:2,tokens:900,attempts:1})
+  // A fresh store over the same database still sees the same counters.
+  const reopened=new TeamStore(social.data)
+  assert.deepEqual(reopened.usage(task.id),{steps:2,tokens:900,attempts:1})
+  assert.equal(reopened.overview().find(row=>row.id===task.id).tokens,900)
+  // A paused subject cannot spend more budget.
+  social.store.set('yoyo_settings',{paused:true,observeOnly:false})
+  await assert.rejects(()=>host.coordinator.tools.step({agentId:'worker'}),/暂停|预算/)
 })

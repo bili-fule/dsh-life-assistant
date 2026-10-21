@@ -53,7 +53,7 @@ export class TeamMotivation {
         const intent=this.db.prepare('SELECT * FROM yoyo_team_intents WHERE task_id=?').get(row.id)
         const review=this.db.prepare('SELECT decision,reason,report_id,task_state FROM yoyo_team_reviews WHERE task_id=? ORDER BY id DESC LIMIT 1').get(row.id)??null
         const choice=row.choice_id&&this.motivation?this.motivation.openChoice(view,row.choice_id):null
-        work.push({taskId:task.id,role:task.role,goal:task.goal,state:task.state,concernId:intent.concern_id,rationale:intent.rationale,doneWhen:intent.done_when,stopWhen:intent.stop_when,reports:this.tasks.reports(task.id,viewId),evidence:this.tasks.board(viewId,{taskId:task.id,limit:5}),review,
+        work.push({taskId:task.id,role:task.role,goal:task.goal,state:task.state,concernId:intent.concern_id,rationale:intent.rationale,doneWhen:intent.done_when,stopWhen:intent.stop_when,reports:this.tasks.reports(task.id,viewId),evidence:this.tasks.board(viewId,{taskId:task.id,limit:5}),usage:this.tasks.usage(task.id),review,
           choice:choice?{id:choice.id,activity:choice.activity,chosen:choice.chosen}:row.choice_id?{id:row.choice_id,retired:true}:null})
       }catch{/* Revoked and out-of-scope work never enters deliberation. */}
     }

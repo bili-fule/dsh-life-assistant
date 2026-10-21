@@ -24,6 +24,9 @@ export class TeamStore {
       CREATE TABLE IF NOT EXISTS yoyo_team_steers(
         id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, attempt INTEGER NOT NULL, body TEXT NOT NULL,
         created_at INTEGER NOT NULL, applied_at INTEGER, agent_id TEXT);
+      CREATE TABLE IF NOT EXISTS yoyo_team_usage(
+        task_id TEXT NOT NULL, attempt INTEGER NOT NULL, steps INTEGER NOT NULL DEFAULT 0,
+        tokens INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(task_id,attempt));
     `)
   }
   transaction(fn) {
@@ -59,7 +62,10 @@ export class TeamStore {
   }
   overview() {
     // No goal, sender, window label or private report in the global envelope.
-    return this.db.prepare('SELECT id,role,state,expires_at FROM yoyo_team_tasks ORDER BY created_at DESC LIMIT 100').all()
+    return this.db.prepare(`SELECT t.id,t.role,t.state,t.expires_at,
+      coalesce((SELECT sum(u.steps) FROM yoyo_team_usage u WHERE u.task_id=t.id),0) steps,
+      coalesce((SELECT sum(u.tokens) FROM yoyo_team_usage u WHERE u.task_id=t.id),0) tokens
+      FROM yoyo_team_tasks t ORDER BY t.created_at DESC LIMIT 100`).all()
   }
   claim(id,agentId) {
     boundedText(agentId,160,'执行者')
@@ -156,6 +162,31 @@ export class TeamStore {
     const rows=this.db.prepare('SELECT id,body FROM yoyo_team_steers WHERE task_id=? AND applied_at IS NULL ORDER BY id LIMIT 5').all(task.id)
     for(const row of rows)this.db.prepare('UPDATE yoyo_team_steers SET applied_at=?,agent_id=? WHERE id=? AND applied_at IS NULL').run(this.clock(),agentId,row.id)
     return rows.map(row=>row.body)
+  }
+  // Per-task counters live in the database, so a restart or a new host does not
+  // reset a budget. Attempts are separate rows and never rewritten.
+  recordStep(agentId,maxSteps) {
+    return this.transaction(()=>{
+      const {task}=this.authority(agentId)
+      const row=this.db.prepare('SELECT steps,tokens FROM yoyo_team_usage WHERE task_id=? AND attempt=?').get(task.id,task.attempt)
+      const steps=(row?.steps??0)+1
+      if(Number.isInteger(maxSteps)&&maxSteps>0&&steps>maxSteps)throw Error('任务步骤预算已用尽')
+      if(row)this.db.prepare('UPDATE yoyo_team_usage SET steps=steps+1,updated_at=? WHERE task_id=? AND attempt=?').run(this.clock(),task.id,task.attempt)
+      else this.db.prepare('INSERT INTO yoyo_team_usage(task_id,attempt,steps,tokens,updated_at) VALUES(?,?,1,0,?)').run(task.id,task.attempt,this.clock())
+      return {steps,tokens:row?.tokens??0,maxSteps:maxSteps??null}
+    })
+  }
+  recordTokens(agentId,tokens) {
+    if(!Number.isSafeInteger(tokens)||tokens<0||tokens>10000000)throw Error('用量记录无效')
+    const {task}=this.authority(agentId)
+    const row=this.db.prepare('SELECT steps FROM yoyo_team_usage WHERE task_id=? AND attempt=?').get(task.id,task.attempt)
+    if(row)this.db.prepare('UPDATE yoyo_team_usage SET tokens=tokens+?,updated_at=? WHERE task_id=? AND attempt=?').run(tokens,this.clock(),task.id,task.attempt)
+    else this.db.prepare('INSERT INTO yoyo_team_usage(task_id,attempt,steps,tokens,updated_at) VALUES(?,?,0,?,?)').run(task.id,task.attempt,tokens,this.clock())
+    return {tokens}
+  }
+  usage(taskId) {
+    const row=this.db.prepare('SELECT coalesce(sum(steps),0) steps,coalesce(sum(tokens),0) tokens,count(*) attempts FROM yoyo_team_usage WHERE task_id=?').get(taskId)
+    return {steps:Number(row?.steps??0),tokens:Number(row?.tokens??0),attempts:Number(row?.attempts??0)}
   }
   finish(agentId,state='completed') {
     if(!['completed','cancelled','blocked'].includes(state))throw Error('结束状态无效')

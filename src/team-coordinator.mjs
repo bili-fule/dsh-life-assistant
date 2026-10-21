@@ -15,8 +15,9 @@ export class TeamCoordinator {
     const invoke=async(name,args)=>{
       if(controller.signal.aborted)throw Error('执行已取消')
       const current=this.tasks.authority(agentId)
-      const allowed=task.role==='chat'?['read','recall','send','wait','report','evidence','board','step']:['web','report','evidence','board','step']
+      const allowed=task.role==='chat'?['read','recall','send','wait','report','evidence','board','usage','step']:['web','report','evidence','board','usage','step']
       if(!allowed.includes(name))throw Error('角色没有该工具权限')
+      if(name==='usage')return this.tasks.recordTokens(agentId,Number(args?.tokens??0))
       if(name==='step'){
         const result=await this.tools.step({agentId})
         // Steering arrives at a native boundary, after the budget gate.

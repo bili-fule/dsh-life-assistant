@@ -145,3 +145,27 @@ test('a task evidence board stays inside the task view and steering is consumed 
   assert.throws(()=>team.steer(a.id,{taskId:x.id,message:'太晚了'}),/进行中/)
   assert.throws(()=>team.steer(b.id,{taskId:x.id,message:'越范围'}),/范围/)
 })
+
+test('task budgets are counted per attempt in the database, not in memory',t=>{
+  const {team,a,create}=fixture(t),x=create('x')
+  team.claim(x.id,'worker-x')
+  assert.equal(team.recordStep('worker-x',3).steps,1)
+  assert.equal(team.recordStep('worker-x',3).steps,2)
+  team.recordTokens('worker-x',120)
+  assert.deepEqual(team.usage(x.id),{steps:2,tokens:120,attempts:1})
+  assert.equal(team.recordStep('worker-x',3).steps,3)
+  assert.throws(()=>team.recordStep('worker-x',3),/预算/)
+  assert.throws(()=>team.recordTokens('worker-x',-1),/用量/)
+  assert.throws(()=>team.recordTokens('worker-y',10),/授权/)
+  // The counters are durable: a fresh store over the same database agrees.
+  const reopened=new TeamStore(team.social)
+  assert.deepEqual(reopened.usage(x.id),{steps:3,tokens:120,attempts:1})
+  assert.equal(reopened.overview().find(row=>row.id===x.id).steps,3)
+  assert.equal(JSON.stringify(reopened.overview()).includes('secret'),false)
+  // A second attempt keeps its own row instead of resetting the first.
+  team.finish('worker-x')
+  team.db.prepare("UPDATE yoyo_team_tasks SET state='ready' WHERE id=?").run(x.id)
+  team.claim(x.id,'worker-x2')
+  assert.equal(team.recordStep('worker-x2',3).steps,1)
+  assert.deepEqual(team.usage(x.id),{steps:4,tokens:120,attempts:2})
+})
