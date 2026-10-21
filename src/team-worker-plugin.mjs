@@ -1,7 +1,9 @@
 ﻿// Loaded only in the separate, restricted worker DSH process.
+import { completionGuard } from './explicit-completion.mjs'
 export const name='yoyo-team-worker'
 export const inject=['tools','systemPrompt']
 const schemas={
+  finish:{decision:{type:'string',enum:['completed','abandoned']},reason:{type:'string',minLength:1,maxLength:2000}},
   read:{after:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:30}},
   wait:{after:{type:'integer',minimum:0},seconds:{type:'integer',minimum:1,maximum:60}},
   recall:{query:{type:'string',maxLength:300}},
@@ -53,7 +55,10 @@ export function apply(ctx) {
     // code and memory, but none of the subject's control plane.
     peer:['read','wait','search','message','file','attachment','forward','recall','web','execute','job','send',
       'report','evidence','board','remember','memory_recall','memory_inspect','memory_propose','memory_segments','memory_generalize','ask','answer','events','wait_event']})[role]??[]
+  if(methods.length)methods.push('finish')
+  let finished=false
   const names=new Set(methods.map(n=>'team_'+n))
+  ctx.on('agent/turn-stopping',completionGuard({decided:()=>finished,reminder:'任务尚未明确结束。继续实际工作；只有确认完成或决定不再需要完成时，调用 team_finish(decision: completed 或 abandoned, reason: 实际结果或停止理由)。普通回复和 team_report 不代表完成。等待其他分支请用 team_wait_event。'}))
   // Steering is delivered by the host at a native step boundary and then shown
   // once as dynamic state, so the worker never polls for instructions.
   let steering=[],pack=null,packLoaded=false,inbox=[]
@@ -93,10 +98,10 @@ export function apply(ctx) {
   for(const [method,properties] of Object.entries(schemas)){
     if(!methods.includes(method))continue
     ctx.tools.register({
-      name:'team_'+method,description:({read:'Read this task’s chat window.',wait:'Wait for actual new messages after a message id; no polling the model. New messages use a five-second batch.',recall:'Recall scoped memories.',send:'Send a reply to this task’s window.',web:'Read a public HTTPS page.',report:'Report progress to the main Agent.',evidence:'Publish a finding, source or excerpt you actually read to this task’s evidence board.',board:'Read this task’s evidence board.',ask:'Ask another branch of the same subject a direct question; the answer arrives as an event at your next boundary, without the subject relaying it.',answer:'Answer a question another branch or the subject asked you.',events:'Read the events other branches and the subject published under this activity, plus questions still open.',wait_event:'Wait here, in the host, for a sibling event (max 30 s). Use it instead of finishing early or polling: it returns the event that arrived or says nothing came.',remember:'Hand the main Agent a memory candidate with its real sources. It is not saved as a memory: the subject decides later, and a worker report never becomes an observation.',execute:'Run Node, Python or Shell in the isolated, networkless runner. The same code sent twice for this task is one job.',job:'Read a code job’s exit state, output and exported files.',search:'Search this task’s window, like the subject would.',message:'Page through one long original message by offset.',file:'Read a file this task may see; long text comes in pages.',attachment:'Read a QQ attachment this task may see.',forward:'Page through a merged forward of this task’s window.',memory_recall:'Recall memory inside this task’s scope.',memory_inspect:'Check the originals behind one memory.',memory_propose:'Propose an experience or claim with its sources.',memory_segments:'List candidate segments of this window.',memory_generalize:'Generalize one claim from several independent experiences.'})[method],
-      parameters:{type:'object',properties,required:({send:['text','replyId'],web:['url'],report:['body'],evidence:['body'],execute:['code'],job:['id'],ask:['toTask','question'],answer:['question','answer']})[method]??[],additionalProperties:false},
+      name:'team_'+method,description:({finish:'Explicitly end the task only when completed or no longer needed; explain actual results or abandonment. Reporting text alone never completes it.',read:'Read this task’s chat window.',wait:'Wait for actual new messages after a message id; no polling the model. New messages use a five-second batch.',recall:'Recall scoped memories.',send:'Send a reply to this task’s window.',web:'Read a public HTTPS page.',report:'Report progress to the main Agent.',evidence:'Publish a finding, source or excerpt you actually read to this task’s evidence board.',board:'Read this task’s evidence board.',ask:'Ask another branch of the same subject a direct question; the answer arrives as an event at your next boundary, without the subject relaying it.',answer:'Answer a question another branch or the subject asked you.',events:'Read the events other branches and the subject published under this activity, plus questions still open.',wait_event:'Wait here, in the host, for a sibling event (max 30 s). Use it instead of finishing early or polling: it returns the event that arrived or says nothing came.',remember:'Hand the main Agent a memory candidate with its real sources. It is not saved as a memory: the subject decides later, and a worker report never becomes an observation.',execute:'Run Node, Python or Shell in the isolated, networkless runner. The same code sent twice for this task is one job.',job:'Read a code job’s exit state, output and exported files.',search:'Search this task’s window, like the subject would.',message:'Page through one long original message by offset.',file:'Read a file this task may see; long text comes in pages.',attachment:'Read a QQ attachment this task may see.',forward:'Page through a merged forward of this task’s window.',memory_recall:'Recall memory inside this task’s scope.',memory_inspect:'Check the originals behind one memory.',memory_propose:'Propose an experience or claim with its sources.',memory_segments:'List candidate segments of this window.',memory_generalize:'Generalize one claim from several independent experiences.'})[method],
+      parameters:{type:'object',properties,required:({finish:['decision','reason'],send:['text','replyId'],web:['url'],report:['body'],evidence:['body'],execute:['code'],job:['id'],ask:['toTask','question'],answer:['question','answer']})[method]??[],additionalProperties:false},
       output:{schema:{type:'object',additionalProperties:true},render:(_,value)=>[{type:'text',text:JSON.stringify(value)}]},
-      execute:async(args,exec)=>call(method,args,exec.signal),
+      execute:async(args,exec)=>{const result=await call(method,args,exec.signal);if(method==='finish'){finished=true;exec.concludeTurn()}return result},
     })
   }
 }

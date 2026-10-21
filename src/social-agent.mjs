@@ -1,4 +1,5 @@
 import { randomUUID,createHash } from 'node:crypto'
+import { completionGuard } from './explicit-completion.mjs'
 import { mkdirSync,writeFileSync,readFileSync,statSync } from 'node:fs'
 import { join,relative } from 'node:path'
 import { Store } from './store.mjs'
@@ -19,7 +20,7 @@ import { Motivation,MOTIVATION_TOOLS,MOTIVATION_POLICY } from './motivation.mjs'
 import { MemoryLayer,MEMORY_TOOLS,MEMORY_POLICY } from './memory-layer.mjs'
 import { readChunk,CHUNK_DEFAULT,CHUNK_MAX } from './chunk.mjs'
 
-const COMMON_TOOLS=new Set(['yoyo_evidence','yoyo_learning','yoyo_feedback','yoyo_concern','yoyo_inbox','yoyo_mute','yoyo_attention','yoyo_dismiss','yoyo_open','yoyo_read','yoyo_message','yoyo_search','yoyo_send','yoyo_send_file','yoyo_delivery','yoyo_activity','yoyo_plan','yoyo_self','yoyo_sleep','yoyo_wait','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_web','yoyo_forward','yoyo_attachment','yoyo_file','life_context'])
+const COMMON_TOOLS=new Set(['yoyo_finish','yoyo_evidence','yoyo_learning','yoyo_feedback','yoyo_concern','yoyo_inbox','yoyo_mute','yoyo_attention','yoyo_dismiss','yoyo_open','yoyo_read','yoyo_message','yoyo_search','yoyo_send','yoyo_send_file','yoyo_delivery','yoyo_activity','yoyo_plan','yoyo_self','yoyo_sleep','yoyo_wait','yoyo_memory','yoyo_forget','yoyo_recall','yoyo_web','yoyo_forward','yoyo_attachment','yoyo_file','life_context'])
 const PUBLIC_BROWSER_TOOLS=new Set(['close','resize','console_messages','handle_dialog','evaluate','file_upload','drop','find','fill_form','press_key','type','navigate','navigate_back','network_requests','network_request','run_code_unsafe','take_screenshot','snapshot','click','drag','hover','select_option','tabs','wait_for'].map(n=>'mcp__playwright-mcp__browser_'+n))
 const OWNER_TOOLS=new Set(['life_state','life_record','life_history','life_preferences','life_memory','life_recall','life_read_file','life_send_file','life_send_message'])
 // A peer executor works with nearly the subject's own reach: the same reads,
@@ -162,9 +163,13 @@ export class SocialAgent {
       if(!this.enabled||session.id!==this.sessionId||!this.activeView)return
       if(['user/message','system/message','developer/message','assistant/message','tool/result','compaction/summary'].includes(event.type))this.data.labelEvent(session.id,event.seq,this.activeView.scopes)
     }))
+    const stopGuard=completionGuard({decided:()=>!!this.turnDisposition||!!this.maintenanceJob,reminder:'尚未明确结束决定。继续实际工作；确认完成或不再需要完成时调用 yoyo_finish 并说明理由。需要等待或受阻时用 yoyo_sleep 保存原因与恢复时间，这只是暂停，不能声称完成。'})
+    this.disposers.push(ctx.on('agent/turn-stopping',payload=>{
+      if(this.enabled&&payload.agent.id===this.sessionId)return stopGuard(payload)
+    }))
     this.disposers.push(ctx.on('agent/pre-step',async(payload,next)=>{
       if(!this.enabled||payload.agent.id!==this.sessionId)return next()
-      if(this.lastTurn!==payload.turn){this.lastTurn=payload.turn;this.steps=0;this.ownerSources=[]}
+      if(this.lastTurn!==payload.turn){this.lastTurn=payload.turn;this.steps=0;this.ownerSources=[];this.turnDisposition=null}
       this.boundAgent=payload.agent
       if(!this.nativeReady)throw Error('自主模式需要配套的原生请求视图、计量与压缩扩展')
       const direct=payload.messages.some(m=>m.source?.kind==='user'&&m.source?.rpcId!==this.currentRequest)
@@ -207,6 +212,14 @@ export class SocialAgent {
       define('yoyo_debug_patch','分页读取同一资料范围内的修复补丁；供评审，不能直接当作生产已修复。',{id:{type:'string'},offset:{type:'integer',minimum:0}},['id'],(args,exec,key,view)=>this.debugHelper.patch(args,view,exec.signal))
     }
     define('yoyo_evidence','查看当前资料范围内实际工具结果的 receipt 和原文预览。原生浏览器回执也在这里；保存经验前核对真实结果，不用自己写的活动/关切当执行证据。',{limit:{type:'integer',minimum:1,maximum:20}},[],async(args,exec,key,view)=>({sources:this.data.evidence(view.id,args)}))
+    define('yoyo_finish','明确结束当前任务：completed 表示完成，abandoned 表示决定不再完成；必须写明实际结果或理由。等待不是完成，请用 yoyo_sleep。',{decision:{type:'string',enum:['completed','abandoned']},reason:{type:'string',minLength:1,maxLength:2000},activityId:{type:'string'}},['decision','reason'],async(args,exec,key,view)=>{
+      if(!['completed','abandoned'].includes(args.decision)||typeof args.reason!=='string'||!args.reason.trim()||args.reason.length>2000)throw Error('需要明确结束决定与理由')
+      const id=args.activityId??this.store.get('yoyo_current_activity')
+      if(id)this.data.updateActivity(view.id,{activityId:id,state:args.decision==='completed'?'done':'abandoned',step:args.reason})
+      this.turnDisposition=args.decision
+      exec.concludeTurn()
+      return {decision:args.decision,reason:args.reason,activityId:id??null}
+    })
     define('yoyo_inbox','List metadata for all authorized groups and private chats, without message contents. Check this list before choosing a window. muted means no incoming-message wakeups.',{},[],async(args,exec,key,view)=>{
       const windows=this.data.inbox()
       this.store.set('yoyo_listed_handles',windows.map(w=>w.handle))
@@ -218,7 +231,7 @@ export class SocialAgent {
     define('yoyo_open','选择接下来要关注的窗口，或 overview 总览。本回合结束后由同一个你继续，不是新 Agent；焦点只是位置，已经知道的目标、承诺与进度不会因为换窗口而清空。',{target:{type:'string'},activityId:{type:'string',maxLength:80}},['target'],async(args,exec,key,view)=>{
       if(!['overview','public'].includes(args.target)){this.data.target(args.target,{approved:true});if(!this.store.get('yoyo_listed_handles',[]).includes(args.target))throw Error('Call yoyo_inbox before selecting a chat window')}
       if(args.activityId){const row=this.data.activities(view.id).find(a=>a.activityId===args.activityId);if(!row)throw Error('活动不存在或不在当前资料范围');this.store.set('yoyo_current_activity',args.activityId)}
-      this.store.set('yoyo_next_focus',args.target);exec.concludeTurn();return {scheduled:true,target:args.target,currentFocus:view.focus,activityId:this.store.get('yoyo_current_activity')??null,transition:'after_turn',message:'This turn retains its current window. The next native turn applies the selected focus; use currentWindow.handle to verify before reading. Your activities and commitments carry over.'}
+      this.store.set('yoyo_next_focus',args.target);this.turnDisposition="transition";exec.concludeTurn();return {scheduled:true,target:args.target,currentFocus:view.focus,activityId:this.store.get('yoyo_current_activity')??null,transition:'after_turn',message:'This turn retains its current window. The next native turn applies the selected focus; use currentWindow.handle to verify before reading. Your activities and commitments carry over.'}
     })
     define('yoyo_read','阅读当前窗口的文字、图片/文件索引和稳定发送者身份，after 翻页。',{after:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:50},query:{type:'string',maxLength:300}},[],async(args,exec,key,view)=>{
       const messages=this.data.read(view.id,{...args,...(this.maintenanceJob?{before:this.maintenanceJob.through,after:args.after??this.maintenanceJob.after}:{})});if(messages.length)this.data.markRead(view.id,messages.map(m=>m.id))
@@ -336,9 +349,9 @@ export class SocialAgent {
       this.store.set('yoyo_self',self);return self
     })
     define('yoyo_sleep','本轮先休息、等待或结束，按指定时间继续；null 表示等待外部提醒。',{until:{type:['integer','null']},reason:{type:'string',maxLength:1000}},['until','reason'],async(args,exec,key,view)=>{
-      this.data.saveActivity(view.id,{state:'sleeping',description:args.reason,wakeAt:args.until});exec.concludeTurn();return {sleeping:true,wakeAt:args.until}
+      this.data.saveActivity(view.id,{state:'sleeping',description:args.reason,wakeAt:args.until});this.turnDisposition="paused";exec.concludeTurn();return {sleeping:true,wakeAt:args.until}
     })
-    define('yoyo_wait','判断对方还在补充时再等 5 秒，然后继续当前活动；不必急着回答。',{reason:{type:'string',maxLength:500}},['reason'],async(args,exec,key,view)=>{const until=Date.now()+5000;this.data.saveActivity(view.id,{state:'waiting',description:args.reason,wakeAt:until});exec.concludeTurn();return {waiting:true,until}})
+    define('yoyo_wait','判断对方还在补充时再等 5 秒，然后继续当前活动；不必急着回答。',{reason:{type:'string',maxLength:500}},['reason'],async(args,exec,key,view)=>{const until=Date.now()+5000;this.data.saveActivity(view.id,{state:'waiting',description:args.reason,wakeAt:until});this.turnDisposition="waiting";exec.concludeTurn();return {waiting:true,until}})
     define('yoyo_memory','主动保存带逐字原文依据的知识、经历、关系或语言观察。原因推断使用 hypothesis。来源填写消息 id、网页 document 或工具返回的 receipt，三选一。执行经验应引用实际工具回执，不要借无关聊天原句证明执行结果。',{kind:{type:'string',enum:['episodes','profile','relations','knowledge','procedures','intention','communication']},body:{type:'string',maxLength:2000},sources:{type:'array',maxItems:10,items:{type:'object',properties:{id:{type:'integer'},document:{type:'integer'},receipt:{type:'string',maxLength:500},quote:{type:'string'}},required:['quote']}},confidence:{type:'string',enum:['observed','hypothesis','self_report']},expiresAt:{type:['integer','null']}},['body','sources'],async(args,exec,key,view)=>{if(this.maintenanceJob&&args.sources.some(s=>s.document!==undefined||s.id!==undefined&&s.id>this.maintenanceJob.through))throw Error('来源不在本次整理范围');return this.data.remember(view.id,args)})
     define('yoyo_forget','退役重复、过时或错误的当前可见记忆；原文保留，忘记记录防止原样重新学习。',{id:{type:'integer',minimum:1},reason:{type:'string',maxLength:300}},['id','reason'],async(args,exec,key,view)=>{const row=this.data.db.prepare('SELECT scopes FROM yoyo_memories WHERE id=? AND active=1').get(args.id);if(!row||!JSON.parse(row.scopes).every(s=>mayRead(view,s)))throw Error('记忆不在当前范围');return {forgotten:this.data.forget(args.id)}})
     define('yoyo_execute','在无网络的独立任务环境运行 Node、Python 或 Shell；可使用你获准的项目，输出文件需明确列出。',{code:{type:'string',maxLength:50000},language:{type:'string',enum:['node','python','shell']},project:{type:['string','null']},outputs:{type:'array',maxItems:8,items:{type:'string',maxLength:160}}},['code'],async(args,exec,key,view)=>{

@@ -34,6 +34,22 @@ function fixture(t,extra={}){
   return {agent,store,ctx,hooks,tools,target,wechat,exec,prompts,runtime}
 }
 
+test('subject explicitly finishes an activity while sleeping only pauses the turn',async t=>{
+  const {agent,hooks,tools,target,exec}=fixture(t)
+  agent.activeView=agent.data.open(target('123').handle)
+  const activity=agent.data.startActivity(agent.activeView.id,{goal:'read the group'})
+  const messages=[],native={id:'one-agent',steer:m=>messages.push(m)}
+  hooks.get('agent/turn-stopping')({agent:native,turn:1})
+  assert.equal(messages.length,1)
+  await tools.get('yoyo_sleep').execute({until:null,reason:'waiting for a reply'},exec)
+  assert.equal(agent.data.activities(agent.activeView.id)[0].state,'active')
+  hooks.get('agent/turn-stopping')({agent:native,turn:1})
+  assert.equal(messages.length,1)
+  exec.callId='2'
+  await tools.get('yoyo_finish').execute({decision:'completed',reason:'Read the messages',activityId:activity.activityId},exec)
+  assert.equal(agent.data.activities(agent.activeView.id)[0].state,'done')
+})
+
 test('social native assembly filters private instructions, contexts and tool schemas',async t=>{
   const {agent,hooks,target}=fixture(t);agent.activeView=agent.data.open(target('123').handle)
   const assembly={sections:[{name:'harness:identity',text:'DSH'},{name:'yoyo:agency',text:'agency'},{name:'owner:instructions',text:'PRIVATE_CANARY'}],contexts:[{name:'life-assistant:state',text:'{{life_assistant_state}}'},{name:'private-files',text:'PRIVATE_CANARY'}],variables:{ownerSecret:'PRIVATE_CANARY'},tools:[{name:'yoyo_read'},{name:'shell'},{name:'life_send_file'}]}

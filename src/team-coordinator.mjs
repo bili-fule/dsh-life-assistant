@@ -17,9 +17,18 @@ export class TeamCoordinator {
     const agentId='worker-'+createHash('sha256').update(id).digest('hex').slice(0,20)
     const {task,view}=this.tasks.claim(id,agentId),controller=new AbortController()
     const generation=['chat','peer'].includes(task.role)?this.tasks.db.prepare('SELECT generation FROM yoyo_team_speakers WHERE target=?').get(view.focus).generation:null
+    let conclusion=null
     const invoke=async(name,args)=>{
       if(controller.signal.aborted)throw Error('执行已取消')
       const current=this.tasks.authority(agentId)
+      if(name==='finish'){
+        if(conclusion)throw Error('任务已经明确结束')
+        if(!['completed','abandoned'].includes(args?.decision)||typeof args.reason!=='string'||!args.reason.trim()||args.reason.length>2000)throw Error('需要明确结束决定与理由')
+        this.tasks.report(agentId,JSON.stringify({decision:args.decision,reason:args.reason}))
+        conclusion=args.decision
+        return {decision:conclusion,recorded:true}
+      }
+      if(conclusion&&!['usage','report'].includes(name))throw Error('任务已经明确结束')
       const roleTools=ROLE_TOOLS[task.role]??[]
       // A task may narrow the role's toolset, never widen it.
       const allowed=task.toolset?roleTools.filter(name=>JSON.parse(task.toolset).includes(name)):roleTools
@@ -70,8 +79,10 @@ export class TeamCoordinator {
       agentId,task:{id,role:task.role,goal:task.goal,expiresAt:task.expires_at},
       invoke,signal:controller.signal,
     })).then(()=>{
-      this.tasks.finish(agentId)
-      return {state:'completed'}
+      if(!conclusion)throw Error('原生轮次结束但任务没有明确结束决定')
+      const state=conclusion==='completed'?'completed':'cancelled'
+      this.tasks.finish(agentId,state)
+      return {state}
     }).catch(()=>{
       // Raw runtime errors may contain infrastructure paths or credentials.
       // Keep them out of reports and cross-scope orchestration envelopes.

@@ -123,6 +123,7 @@ test('two branches really overlap and the find is shared before either ends',asy
       await invoke('evidence',{kind:'finding',body:'群里说新玩法今晚开',source:'群消息 3'})
       await waitGate()
       await invoke('report',{body:'读完群，等研究结论'})
+      await invoke('finish',{decision:'completed',reason:'reading complete'})
       log.push(['reader-ends',Date.now()])
       return {ok:true}
     }
@@ -139,6 +140,7 @@ test('two branches really overlap and the find is shared before either ends',asy
     const completedYet=!!tasks.db.prepare("SELECT 1 FROM yoyo_team_events WHERE kind='completed' AND from_task=?").get(reader.id)
     log.push(['research-received',Date.now(),completedYet])
     await invoke('report',{body:'据此改了搜索方向'})
+    await invoke('finish',{decision:'completed',reason:'research complete'})
     log.push(['research-ends',Date.now()])
     return {ok:true}
     }catch(error){log.push(['error',String(error.message)]);throw error}

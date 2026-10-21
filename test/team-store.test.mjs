@@ -22,6 +22,20 @@ function fixture(t){
   const wc=()=>social.open(wechat().handle)
   return {team,social,store,a,b,create,wechat,wc}
 }
+
+test('plain native completion cannot finish a task; explicit abandonment is distinct',async t=>{
+  const {team,a,create}=fixture(t)
+  const plain=create('plain'),abandoned=create('abandoned')
+  const coordinator=new TeamCoordinator({tasks:team,tools:{},adapter:{async run({task,invoke}){
+    if(task.id===abandoned.id)await invoke('finish',{decision:'abandoned',reason:'No longer needed'})
+    else await invoke('report',{body:'I will take a look'})
+  }}})
+  coordinator.start(plain.id);await coordinator.settle(plain.id)
+  assert.equal(team.inspect(plain.id,a.id).state,'blocked')
+  coordinator.start(abandoned.id);await coordinator.settle(abandoned.id)
+  assert.equal(team.inspect(abandoned.id,a.id).state,'cancelled')
+  assert.match(team.reports(abandoned.id,a.id)[0].body,/abandoned/)
+})
 test('parallel task authorities never inherit the current window, reports stay scoped',t=>{  const {team,a,b,create,wc}=fixture(t),x=create('x'),y=create('y',b)
   team.claim(x.id,'worker-x');team.claim(y.id,'worker-y')
   assert.equal(team.authority('worker-x').view.id,a.id)
@@ -99,6 +113,7 @@ test('coordinator runs chat and research concurrently and enforces role tools',a
       await invoke('web',{url:'https://example.com'})
     }
     await invoke('report',{body:'done'})
+    await invoke('finish',{decision:'completed',reason:'done'})
   }},tools:{send:async({authorize})=>{authorize();return {queued:true}},web:async()=>({text:'public'})}})
   coordinator.start(chat.id);coordinator.start(research.id)
   await Promise.resolve()
@@ -387,7 +402,7 @@ test('a lease heartbeat renews within a ceiling and retries stay bounded',t=>{
 
 test('a retried task keeps the same executor identity so its native session can resume',async t=>{
   const {team,a,create}=fixture(t),x=create('x')
-  const coordinator=new TeamCoordinator({tasks:team,adapter:{async run(){}},tools:{step:async()=>({allowed:true})}})
+  const coordinator=new TeamCoordinator({tasks:team,adapter:{async run({invoke}){await invoke('finish',{decision:'completed',reason:'done'})}},tools:{step:async()=>({allowed:true})}})
   const first=coordinator.start(x.id)
   assert.match(first.agentId,/^worker-[a-f0-9]{20}$/)
   await coordinator.settle(x.id)
