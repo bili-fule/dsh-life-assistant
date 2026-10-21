@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { Store } from '../src/store.mjs'
 import { SocialStore } from '../src/social-store.mjs'
 import { TeamStore } from '../src/team-store.mjs'
+import { TeamHost } from '../src/team-host.mjs'
 import { TeamCoordinator } from '../src/team-coordinator.mjs'
 
 // Branches of one subject talk through durable events with per-branch cursors.
@@ -163,6 +164,29 @@ test('two branches really overlap and the find is shared before either ends',asy
   assert.equal(tasks.db.prepare("SELECT state FROM yoyo_team_tasks WHERE id=?").get(researcher.id).state,'completed')
   assert.equal(social.sessionId,'main')
   assert.ok(view.focus)
+})
+
+test('a changed direction reaches the branches already working on the activity',t=>{
+  const {tasks,view,create,activity,social}=fixture(t)
+  const host=new TeamHost(social,{})
+  t.after(()=>host.stop())
+  const reader=create('读群'),researcher=create('查资料')
+  tasks.claim(reader.id,'worker-reader');tasks.claim(researcher.id,'worker-research')
+  // The subject narrows the goal while both branches are still running.
+  const updated=host.social.data.updateActivity(view.id,{activityId:activity.activityId,revision:1,goal:'只确认今晚是否开服'})
+  const announced=host.announceDirection(view.id,{activityId:activity.activityId,goal:'只确认今晚是否开服',state:updated.state,revision:updated.revision})
+  assert.ok(announced.eventId)
+  // Re-announcing the same revision is not a second instruction.
+  assert.equal(host.announceDirection(view.id,{activityId:activity.activityId,goal:'只确认今晚是否开服',state:updated.state,revision:updated.revision}).duplicate,true)
+  for(const task of [reader,researcher]){
+    const events=tasks.drainEvents(task.id)
+    assert.equal(events[0].kind,'direction_changed')
+    assert.equal(events[0].baseRevision,2)
+    assert.match(events[0].body,/只确认今晚是否开服/)
+  }
+  // A result written against the old revision cannot complete the new goal.
+  assert.throws(()=>host.social.data.updateActivity(view.id,{activityId:activity.activityId,revision:1,state:'done'}),/第 2 版/)
+  assert.equal(host.social.data.activities(view.id)[0].state,'active')
 })
 
 test('a restart resumes from the acknowledged position instead of replaying',t=>{

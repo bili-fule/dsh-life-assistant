@@ -276,6 +276,16 @@ export class TeamHost {
       return {running:this.coordinator.running.size,max:this.coordinator.maxConcurrent,tasks,openQuestions:this.tasks.openQuestions(view.id).length,recentEvents:events}
     }catch{return null}
   }
+  // When the subject changes what an activity is for, the branches working on it
+  // hear about it at their next boundary instead of finishing the old goal.
+  announceDirection(viewId,{activityId,goal,state,revision,previousGoal=null,previousState=null}) {
+    if(!activityId)return null
+    try{
+      return this.tasks.publishEvent({fromTask:null,activityId,kind:'direction_changed',
+        body:'主体把活动目标改为：'+goal+'（状态 '+state+'）',
+        baseRevision:revision,dedupeKey:'direction:'+activityId+':'+revision,viewId})
+    }catch{return null}
+  }
   waitReason(row) {
     if(row.state==='blocked')return row.retry_at?'等待重试':row.failures?'失败，等待复查':'已阻塞'
     if(row.state==='ready')return row.dependsOn?'等待依赖任务':'等待调度'
