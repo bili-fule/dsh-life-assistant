@@ -63,7 +63,8 @@
 | 过期 | `expires_at` 到期后不再投递（迟到的提问不会被当成新任务） |
 | 同级问答 | `team_ask` / `team_answer`（主体与 `peer`/`chat`/`reader` 分支都可）；答复的 `ref` 指向原问题 `event_id`，不经过主 Agent 转述 |
 | 自动事件 | 报告 → `progress`；证据 `finding` → `finding`；任务结束 → `completed`；取消 → `cancel`；主体改目标 → `direction_changed`（`announceDirection`，按 revision 去重，运行中的分支在下一个边界收到） |
-| 主体侧可观察 | `team_events`（事件流 + 仍未回答的问题）、`state().team`（并发数、分支状态与等待原因、未答问题数、最近 5 条事件元数据，不含正文） |
+| 主体侧可观察 | `team_events`（事件流 + 仍未回答的问题）、`team_sources`（含裁定）、`state().team`（并发数、分支状态与等待原因、未答问题数、最近 5 条事件元数据，不含正文） |
+| 冲突裁定 | `team_source_decide` 追加 `verified / refuted / unresolved` 与理由，原始说法全部保留，裁定写成 `finding` 事件送到运行中的分支；只有能看见该来源的视图才能裁 |
 
 **三个不同状态**：事件已写入（行存在）、已送达（游标推进、`delivered_count` 增加）、据此行动（分支自己的下一份 report/evidence）。控制台与状态分别显示，不把「写了」当成「收到」。
 
@@ -87,6 +88,7 @@
 | 分支继承主体视图、public 角色仍只有 public | `test/team-store.test.mjs` |
 | 网页与隔离浏览器不再要求先切 public；后台整理仍无浏览器 | `test/social-agent.test.mjs`、`test/text-chunking.test.mjs` |
 | 主体改目标 → `direction_changed` 送到运行中的分支，同版本只写一次 | `test/team-events.test.mjs` |
+| 相反发现保留并标冲突，主体裁定追加不覆盖、理由进事件 | `test/team-events.test.mjs` |
 
 ## 6. 已验证：两个真实 DSH 子进程直接问答
 
@@ -108,7 +110,6 @@ PASS: two real DSH worker processes exchanged a question and an answer through t
 ## 7. 还没做的（不要当成已完成）
 
 1. **真实模型上的分支行为**：本文件第 5 节的确定性测试与第 6 节的双进程验证都用了脚本模型。真实模型是否愿意用 `team_ask`（而不是干等或自己猜）、是否会误把兄弟分支的话当成指令，尚未回放。
-2. **真实运行的重叠计量**：需要记录提交事件到投递的 p95、模型响应耗时、串行与并行的总耗时／调用数／Token，并与「无改善」的情形对比。现在只有逻辑顺序证明（事件序号、完成事件晚于投递）。
-3. **冲突合并**：相反发现仍只标 `conflict` 并保留来源，没有让主体或核对分支发布合并版本。
-5. **压缩后的真实会话验证**：重启恢复有测试，263K 压缩后的会话表面恢复没有真实环境验证。
-6. **部署**：生产是 `16b71e3` 的 0.38.0（见 `deploy/STATUS.md` 头部与 `docs/deployment-038-2026-10-21.md`），本改造在其之后，未上线，不能写成「已部署」。
+2. **真实运行的重叠计量**：需要记录提交事件到投递的 p95、模型响应耗时、串行与并行的总耗时／调用数／Token，并与「无改善」的情形对比。现在只有逻辑顺序证明（事件序号、完成事件晚于投递）与双进程功能验证，没有计时对照。
+3. **压缩后的真实会话验证**：重启恢复与续接有测试，263K 压缩后的会话表面恢复没有真实环境验证。
+4. **部署**：生产是 `16b71e3` 的 0.38.0（见 `deploy/STATUS.md` 头部与 `docs/deployment-038-2026-10-21.md`），本改造在其之后，未上线，不能写成「已部署」。

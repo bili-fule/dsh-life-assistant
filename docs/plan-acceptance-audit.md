@@ -10,7 +10,7 @@
 
 当前状态：`npm test` 共 238 项，`npm run check` 通过；生产运行的是 0.25.0（见 [部署验收记录](deployment-025-2026-10-21.md)），本文描述的是仓库里的开发版。
 
-<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=249 -->
+<!-- acceptance-audit: motivation=12 memory=12 multiagent=11 tests=250 -->
 
 ## 1. 动机计划 §12
 
@@ -88,7 +88,7 @@
 | 4. 切群、压缩、重启后恢复目标与回执；不重复建 Session | ✅ | `test/subject-continuity.test.mjs`（重启恢复活动与步骤）、`test/social-agent.test.mjs`（重启核对原生轨迹、不重复提交） |
 | 5. 主体改变目标：新版本到达相关分支，旧结果不把新目标标为完成 | ✅ | `test/team-events.test.mjs`（`announceDirection` 写入 `direction_changed`，带 `base_revision`、同版本只写一次，运行中的分支下次边界收到）、`test/subject-continuity.test.mjs`（过期 revision 被拒绝而不是覆盖） |
 | 6. 两分支争用同群发言：只有有效 generation 能发 | ✅ | `test/team-store.test.mjs`（接管使旧租约失效）、`test/team-host.test.mjs` |
-| 7. 相反发现：保留来源与冲突，不静默覆盖 | ✅ | `test/team-store.test.mjs`（来源登记 conflicts） |
+| 7. 相反发现：保留来源与冲突，不静默覆盖 | ✅ | `test/team-events.test.mjs`（两种说法并存、`conflict:true`、主体裁定追加而不删除原说法、裁定理由与新说法进事件） |
 | 8. 重复事件、崩溃、未知发送结果：状态幂等 | ✅ | `test/social-store.test.mjs`（去重、uncertain、重启不重发） |
 | 9. 微信边界：QQ 分支读不到微信数据库、凭据、Session | ✅ | `test/team-store.test.mjs`、`test/social-store.test.mjs` |
 | 10. 同任务串行与并行对照：耗时、调用数、Token、质量 | ⏳ | 尚无真实运行对照；计量缺失仍会显示「未上报」，不记为 0 |

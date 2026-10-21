@@ -8,7 +8,7 @@ import { readPublicPage } from './public-web.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { localParts } from './time.mjs'
 
-export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_inspect','team_cancel','team_takeover','team_review','team_steer','team_search','team_ask','team_answer','team_events','team_memory','team_sources']
+export const TEAM_TOOLS=['team_overview','team_deliberate','team_delegate','team_inspect','team_cancel','team_takeover','team_review','team_steer','team_search','team_ask','team_answer','team_events','team_memory','team_sources','team_source_decide']
 export const TEAM_POLICY=`你可以用 team_deliberate 查看关切和团队进展，用 team_delegate 分派聊天或公开研究，自己继续其他活动或一起研究。分派前创建真实的 yoyo_concern，说明为何关心、下一步、完成和停止条件。聊天执行者会在当前窗口直接交流；主 Agent 需要发言前用 team_takeover 接管。研究只能从 public 视图分派，不能把私聊问题洗成公开输入。执行中可用 team_steer 追加一条有界提示，它在执行者下一个原生边界送达一次。执行者可以把自己真正读到的证据放到任务证据板，证据沿用任务来源范围，team_inspect 可查看，team_search 可按线索跨任务检索本窗口可见的证据；重复的同一条来源只算一条，同一来源的不同说法会被标出冲突，team_sources 列出这些来源被读过几次、有几个说法。执行者也能提交记忆候选（team_remember），候选不是记忆：team_memory 列出待决定的候选，采纳时在你自己的视图里重新核对原文，并且只记成执行者报告，不会变成观察。执行结果是证据材料，不等于动机已满足。用 team_review 判断继续、调整、等待或放弃。无事可做允许休息，不高频轮询、不制造任务。`
 
 export class TeamHost {
@@ -123,6 +123,9 @@ export class TeamHost {
     define('team_answer','回答执行者或另一个分支提出的问题；引用原问题编号，答复作为事件回到提问方。',{question:{type:'string',minLength:1,maxLength:80},answer:{type:'string',minLength:1,maxLength:2000}},['question','answer'],async(a,e,k,v)=>this.tasks.answer(null,{questionEventId:a.question,answer:a.answer,viewId:v.id}))
     define('team_events','查看当前资料范围内同一活动/任务的事件流（发现、提问、答复、进展、方向变化、受阻、完成、取消）与仍未回答的问题，用于判断分支之间是否真的在交换进展。',{taskId:{type:'string'},activityId:{type:'string'},after:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:50}},[],async(a,e,k,v)=>({events:this.tasks.activityEvents(v.id,{taskId:a.taskId??null,activityId:a.activityId??null,after:a.after??0,limit:a.limit??20}),openQuestions:this.tasks.openQuestions(v.id,{activityId:a.activityId??null})}))
     define('team_sources','查看当前范围内被引用过的来源：被读过几次、有几个不同说法、分别是哪个任务读的。同一来源出现不同说法说明材料互相矛盾，需要自己判断，不能当成已核实。',{limit:{type:'integer',minimum:1,maximum:50}},[],async(a,e,k,v)=>({sources:this.tasks.sourceRegistry(v.id,{limit:a.limit??20})}))
+    // Resolving a contradiction stays a subject decision: both readings are kept
+    // as history and the ruling is appended with its reason and shared as event.
+    define('team_source_decide','对互相矛盾的来源做一次明确裁定：verified 需要写明采纳哪一种说法，refuted 表示认定不可信，unresolved 表示暂时不裁定。原始说法都保留，裁定只追加并说明理由，同时写入事件让正在工作的分支知道。',{source:{type:'string',minLength:1,maxLength:500},decision:{type:'string',enum:['verified','refuted','unresolved']},chosenBody:{type:'string',maxLength:2000},reason:{type:'string',minLength:1,maxLength:1000}},['source','decision','reason'],async(a,e,k,v)=>this.tasks.decideSource(v.id,a))
     define('team_memory','查看执行者提交的记忆候选，并决定采纳或不采纳。候选不是记忆：无参数时列出待决定的候选；采纳时由记忆层在你自己的视图里重新核对原文，并且只记成执行者报告，不会变成观察。',{id:{type:'integer',minimum:1},decision:{type:'string',enum:['accept','reject']},reason:{type:'string',maxLength:500},state:{type:'string',enum:['pending','accepted','rejected']},limit:{type:'integer',minimum:1,maximum:50}},[],async(a,e,k,v)=>{
       if(a.id===undefined)return {candidates:this.tasks.memoryCandidates(v.id,{state:a.state??'pending',limit:a.limit??20})}
       const candidate=this.tasks.candidate(v.id,a.id)

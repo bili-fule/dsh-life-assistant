@@ -189,6 +189,38 @@ test('a changed direction reaches the branches already working on the activity',
   assert.equal(host.social.data.activities(view.id)[0].state,'active')
 })
 
+test('a contradiction gets a recorded ruling instead of a silent overwrite',t=>{
+  const {tasks,view,create,wechat}=fixture(t)
+  const reader=create('读群'),researcher=create('查资料')
+  tasks.claim(reader.id,'worker-reader');tasks.claim(researcher.id,'worker-research')
+  // Two branches describe the same page differently.
+  tasks.evidence('worker-reader',{kind:'finding',body:'页面写着今晚开服',source:'https://example.com/a'})
+  tasks.evidence('worker-research',{kind:'finding',body:'页面写着明天开服',source:'https://example.com/a'})
+  let registry=tasks.sourceRegistry(view.id)
+  assert.equal(registry[0].conflict,true)
+  assert.equal(registry[0].distinct,2)
+  assert.equal(registry[0].decision,null)
+  // Both readings survive the ruling; the ruling is appended with its reason.
+  const ruling=tasks.decideSource(view.id,{source:'https://example.com/a',decision:'verified',chosenBody:'今晚开服',reason:'逐字复核了页面时间戳'})
+  assert.ok(ruling.id)
+  registry=tasks.sourceRegistry(view.id)
+  assert.equal(registry[0].decision,'verified')
+  assert.equal(registry[0].chosenBody,'今晚开服')
+  assert.equal(registry[0].conflict,true,'the disagreement stays visible as history')
+  assert.equal(tasks.board(view.id,{taskId:reader.id}).length,1)
+  // A branch working on the activity hears the ruling at its next boundary.
+  const heard=tasks.drainEvents(researcher.id).filter(event=>String(event.ref)==='https://example.com/a')
+  assert.ok(heard.some(event=>/认定采纳/.test(event.body)))
+  // A later ruling supersedes without deleting the earlier one.
+  tasks.decideSource(view.id,{source:'https://example.com/a',decision:'unresolved',reason:'再核对发现时区不明'})
+  assert.equal(tasks.sourceRegistry(view.id)[0].decision,'unresolved')
+  assert.equal(tasks.db.prepare('SELECT count(*) n FROM yoyo_team_source_decisions WHERE source=?').get('https://example.com/a').n,2)
+  // Only a view that can see the source may rule on it, and verified needs a body.
+  assert.throws(()=>tasks.decideSource(wechat().id,{source:'https://example.com/a',decision:'refuted',reason:'x'}),/范围/)
+  assert.throws(()=>tasks.decideSource(view.id,{source:'https://example.com/a',decision:'verified',reason:'x'}),/采纳/)
+  assert.throws(()=>tasks.decideSource(view.id,{source:'https://example.com/a',decision:'refuted',chosenBody:'x',reason:'y'}),/采纳内容/)
+})
+
 test('a restart resumes from the acknowledged position instead of replaying',t=>{
   const {tasks,view,create,data}=fixture(t)
   const reader=create('读群'),researcher=create('查资料')

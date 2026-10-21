@@ -70,6 +70,10 @@ export class TeamStore {
       CREATE TABLE IF NOT EXISTS yoyo_team_cursors(
         task_id TEXT NOT NULL, topic TEXT NOT NULL, cursor INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL, PRIMARY KEY(task_id,topic));
+      CREATE TABLE IF NOT EXISTS yoyo_team_source_decisions(
+        id INTEGER PRIMARY KEY, source TEXT NOT NULL, decision TEXT NOT NULL,
+        chosen_body TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL, view_id TEXT NOT NULL,
+        scopes TEXT NOT NULL, created_at INTEGER NOT NULL);
     `)
     const columns=this.db.prepare('PRAGMA table_info(yoyo_team_tasks)').all().map(column=>column.name)
     for(const [name,type] of [['failures','INTEGER NOT NULL DEFAULT 0'],['retry_at','INTEGER'],['renewed_at','INTEGER'],
@@ -357,16 +361,44 @@ export class TeamStore {
   // The same page read by two tasks can end up described differently. The
   // registry is computed from the evidence rows themselves, so it cannot drift
   // from what was actually recorded, and it stays inside the visible scopes.
+  // A contradiction is never averaged away: it stays visible until someone with
+  // the right scope records a decision, and even then both readings remain.
   sourceRegistry(viewId,{limit=20}={}) {
     const view=this.social.view(viewId)
     if(!Number.isInteger(limit)||limit<1||limit>50)throw Error('来源条数无效')
     const filter="NOT EXISTS(SELECT 1 FROM json_each(e.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?)))"
     return this.db.prepare(`SELECT e.source source,count(*) readings,count(DISTINCT e.body) variants,
-      group_concat(DISTINCT e.task_id) tasks,max(e.created_at) lastAt
+      group_concat(DISTINCT e.task_id) tasks,max(e.created_at) lastAt,
+      (SELECT d.decision FROM yoyo_team_source_decisions d WHERE d.source=e.source AND d.scopes=e.scopes ORDER BY d.id DESC LIMIT 1) decision,
+      (SELECT d.chosen_body FROM yoyo_team_source_decisions d WHERE d.source=e.source AND d.scopes=e.scopes ORDER BY d.id DESC LIMIT 1) chosenBody,
+      (SELECT d.reason FROM yoyo_team_source_decisions d WHERE d.source=e.source AND d.scopes=e.scopes ORDER BY d.id DESC LIMIT 1) decisionReason,
+      (SELECT d.created_at FROM yoyo_team_source_decisions d WHERE d.source=e.source AND d.scopes=e.scopes ORDER BY d.id DESC LIMIT 1) decidedAt
       FROM yoyo_team_evidence e WHERE ${filter} AND e.source<>''
       GROUP BY e.source,e.scopes ORDER BY variants DESC,readings DESC,lastAt DESC LIMIT ?`)
       .all(JSON.stringify(view.scopes),limit).map(row=>({source:row.source,readings:row.readings,
-        distinct:row.variants,conflict:row.variants>1,tasks:String(row.tasks??'').split(',').filter(Boolean),lastAt:row.lastAt}))
+        distinct:row.variants,conflict:row.variants>1,tasks:String(row.tasks??'').split(',').filter(Boolean),lastAt:row.lastAt,
+        decision:row.decision??null,chosenBody:row.chosenBody??null,decisionReason:row.decisionReason??null,decidedAt:row.decidedAt??null}))
+  }
+  // Resolving a contradiction is a subject decision, not a branch vote: the
+  // readings stay as history, the decision is appended with its reason, and the
+  // branches working on the activity hear about it at their next boundary.
+  decideSource(viewId,{source,decision,chosenBody='',reason}) {
+    const view=this.social.view(viewId)
+    source=boundedText(source,500,'来源标注')
+    reason=boundedText(reason,1000,'裁定理由')
+    if(!['verified','refuted','unresolved'].includes(decision))throw Error('裁定类型无效')
+    if(typeof chosenBody!=='string'||chosenBody.length>2000)throw Error('采纳内容无效')
+    if(decision==='verified'&&!chosenBody.trim())throw Error('认定正确需要写明采纳哪一种说法')
+    if(decision!=='verified'&&chosenBody.trim())throw Error('只有认定正确时才能指定采纳内容')
+    const visible=this.db.prepare("SELECT count(*) n FROM yoyo_team_evidence e WHERE e.source=? AND NOT EXISTS(SELECT 1 FROM json_each(e.scopes) s WHERE s.value NOT IN (SELECT value FROM json_each(?)))").get(source,JSON.stringify(view.scopes)).n
+    if(!visible)throw Error('来源不在当前资料范围')
+    const scopes=this.social.recordScopes(view)
+    const id=Number(this.db.prepare('INSERT INTO yoyo_team_source_decisions(source,decision,chosen_body,reason,view_id,scopes,created_at) VALUES(?,?,?,?,?,?,?)')
+      .run(source,decision,chosenBody.trim(),reason,view.id,JSON.stringify(scopes),this.clock()).lastInsertRowid)
+    const published=this.publishEvent({fromTask:null,kind:'finding',ref:source,
+      body:'关于来源「'+source+'」的裁定：'+({verified:'认定采纳',refuted:'认定不可信',unresolved:'暂不裁定'})[decision]+(reason?'（'+reason+'）':''),
+      dedupeKey:'decide:'+source+':'+id,viewId})
+    return {id,source,decision,chosenBody:chosenBody.trim()||null,reason,eventId:published.eventId??null}
   }
   // ---- memory candidates -------------------------------------------------
   // A worker may hand over what it thinks is worth remembering. This is a
