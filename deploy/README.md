@@ -34,6 +34,9 @@ autonomy:
     enabled: false          # 打开后才有 memory_recall / memory_inspect / memory_propose / memory_retract / memory_segments / memory_intent / memory_generalize
     recallLimit: 8          # 每次召回最多返回几条概要
     migrateLegacy: false    # 打开时把旧 yoyo_memories 逐条登记为待核实主张（只跑一次，不改旧记录）
+  memoryMaintenance:
+    pageEvents: 120         # 每次整理最多覆盖多少条原文（1–1000），积压按页整理
+    nightHour: 2            # 夜间整理窗口起点（本地时间，窗口 4 小时，一夜一次）
   qq:
     endpoint: http://127.0.0.1:3000
     account: '替换为实际机器人QQ号'
